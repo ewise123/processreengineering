@@ -1,0 +1,1335 @@
+Process Reengineering Agent (PRA)
+Product Specification v1.1 (Complete)
+1. Executive Summary
+
+The Process Reengineering Agent (PRA) is a web-based AI tool designed for management consultants performing business process analysis and improvement work. It accepts multiple input types (interviews, process documents, process maps, strategy documents, event logs), creates a unified BPMN process model (current state and future state), and generates analysis, redesign recommendations, and client-ready deliverables for various levels of the business (i.e., Leadership, GMs, Management, Process Leads, COEs etc.,).
+
+Deployment: Render (Web Services + PostgreSQL + Redis)
+Target Users: Process consultants, business analysts, operations consultants
+
+1.1 Primary Deliverables (Updated)
+
+PRA must generate role-tailored deliverables as first-class outputs:
+
+For GMs / Middle Management
+
+Process Executive Overview Document
+
+Process Context & Architecture Document
+
+For Process Leads / COEs
+
+Detailed BPMN Process Maps (L1–L6) — Current State + Future State
+
+Activity Level Documentation
+
+RACI Matrix
+
+Controls & Risk Framework
+
+Exception & Escalation Handling
+
+Process Governance
+
+Future State Improvement & Automation Opportunities Document (LEAN-based)
+
+2. System Architecture
+2.1 High-Level Architecture
+┌─────────────────────────────────────────────────────────────────┐
+│                        FRONTEND                                 │
+│              React + TypeScript + TailwindCSS                   │
+│                    (Render Static Site)                         │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │ REST API / WebSocket
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     BACKEND API                                 │
+│                 Python FastAPI Server                           │
+│                  (Render Web Service)                           │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
+│  │ Auth/Users  │  │  Projects   │  │   Workflow Engine       │  │
+│  │  Service    │  │  Service    │  │   (Celery Workers)      │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
+│                                                                 │
+│  ┌───────────────────────┐      ┌───────────────────────────┐  │
+│  │ Deliverable Composer  │      │ BPMN/Export Engine         │  │
+│  │ (DOCX/PPT Templates)  │      │ (BPMN/XML/Visio/PPT/PNG)   │  │
+│  └───────────────────────┘      └───────────────────────────┘  │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+        ┌─────────────────┼─────────────────┐
+        ▼                 ▼                 ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│  PostgreSQL  │  │    Redis     │  │ File Storage │
+│  (Render DB) │  │   (Cache/    │  │ (Render Disk │
+│              │  │    Queue)    │  │  or S3)      │
+└──────────────┘  └──────────────┘  └──────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     AI SERVICES                                 │
+│         Claude API (Analysis, Generation, Insights)             │
+└─────────────────────────────────────────────────────────────────┘
+
+2.2 Tech Stack
+Layer	Technology	Rationale
+Frontend	React 18 + TypeScript	Component reuse, type safety
+Styling	TailwindCSS + shadcn/ui	Rapid UI development
+State	Zustand + React Query	Simple, performant
+Process Editor	ReactFlow	Visual BPMN-style editing
+Charts	Recharts + Plotly	Process mining visualizations
+Backend	FastAPI (Python)	Async, fast, good typing
+Task Queue	Celery + Redis	Long-running AI tasks
+Database	PostgreSQL	Relational data, JSON support
+File Storage	Render Disk (dev) / S3 (prod)	Scalable file handling
+AI	Claude API (Sonnet)	Analysis and generation
+Auth	Auth0 or Clerk	Enterprise SSO support
+Hosting	Render	Simplified deployment
+3. Data Model
+3.1 Core Entities
+┌─────────────────────────────────────────────────────────────────┐
+│                         ORGANIZATION                            │
+│  id, name, subscription_tier, created_at                        │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │ 1:many
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                            USER                                 │
+│  id, org_id, email, name, role, avatar_url, created_at          │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │ many:many (via project_members)
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                          PROJECT                                │
+│  id, org_id, name, client_name, description, status,            │
+│  created_by, created_at, updated_at, settings (JSON)            │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │ 1:many
+          ┌───────────────┼───────────────┬───────────────┐
+          ▼               ▼               ▼               ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│    INPUT     │  │   PROCESS    │  │   ANALYSIS   │  │    OUTPUT    │
+│              │  │    MODEL     │  │              │  │              │
+│ id           │  │ id           │  │ id           │  │ id           │
+│ project_id   │  │ project_id   │  │ project_id   │  │ project_id   │
+│ type (enum)  │  │ name         │  │ type (enum)  │  │ type (enum)  │
+│ name         │  │ version      │  │ model_id     │  │ analysis_id  │
+│ file_path    │  │ status       │  │ results JSON │  │ format       │
+│ raw_content  │  │ bpmn_xml     │  │ created_at   │  │ file_path    │
+│ parsed JSON  │  │ metadata     │  │              │  │ created_at   │
+│ source_info  │  │ created_at   │  │              │  │              │
+│ created_at   │  │              │  │              │  │              │
+└──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
+
+
+INPUT.type ENUM:
+
+interview_transcript
+
+interview_notes
+
+sop_document
+
+operating_manuals/playbook_documents
+
+process_map_upload
+
+event_log
+
+observation_notes
+
+meeting_minutes/transcripts
+
+strategy_document
+
+organizational_charts
+
+role_descriptions
+
+policy_document
+
+SLA_agreements
+
+operational_dashboards
+
+governance_charters
+
+business_requirements_documents
+
+email_threads
+
+transaction_and_event_data
+
+vendor_operating_procedures
+
+audio_files
+
+ANALYSIS.type ENUM:
+
+current_state_analysis
+
+pain_point_analysis
+
+variant_analysis
+
+conformance_check
+
+bottleneck_analysis
+
+automation_assessment
+
+future_state_design
+
+business_case
+
+OUTPUT.type ENUM (Updated):
+
+gm_exec_overview_doc
+
+gm_context_architecture_doc
+
+bpmn_map_package_l1_l6
+
+activity_level_doc
+
+raci_matrix_doc
+
+controls_risk_framework_doc
+
+exception_escalation_doc
+
+process_governance_doc
+
+future_state_lean_opportunities_doc
+
+executive_ppt
+
+detailed_report
+
+visio_export_vsdx
+
+bpmn_export
+
+dashboard_html
+
+data_export
+
+document_pdf_docx
+
+dashboards_xlsx_csv
+
+ppt_export_editable_shapes
+
+png_svg_export
+
+Composite output behavior: bpmn_map_package_l1_l6 is a bundle containing multiple level/state diagrams + a manifest.json.
+
+3.2 Process Model Schema (JSON within bpmn_xml or separate) — Updated
+{
+  "process_id": "uuid",
+  "name": "Order to Cash",
+  "version": "1.2",
+  "type": "current_state | future_state",
+  "levels_supported": ["L1","L2","L3","L4","L5","L6"],
+  "elements": {
+    "activities": [
+      {
+        "id": "act_001",
+        "level": "L3",
+        "name": "Receive Purchase Order",
+        "type": "task | subprocess | gateway | event",
+        "lane": "Sales Team",
+        "system": "SAP ERP",
+        "avg_duration_minutes": 15,
+        "cost_per_execution": 12.50,
+        "automation_potential": "high | medium | low | none",
+        "pain_points": ["Manual data entry", "Duplicate validation"],
+        "inputs": ["PO document"],
+        "outputs": ["Order created"],
+        "sla": "4 business hours",
+        "risks": [{"id":"risk_01"}],
+        "controls": [{"id":"ctrl_01"}],
+        "exceptions": [{"id":"ex_01"}],
+        "data_sources": ["interview_001", "event_log_001"],
+        "position": { "x": 100, "y": 200 }
+      }
+    ],
+    "flows": [
+      {
+        "id": "flow_001",
+        "from": "act_001",
+        "to": "act_002",
+        "condition": null,
+        "frequency_pct": 95
+      }
+    ],
+    "lanes": [
+      { "id": "lane_001", "name": "Sales Team", "type": "role" },
+      { "id": "lane_002", "name": "SAP ERP", "type": "system" }
+    ]
+  },
+  "raci": [
+    {
+      "activity_id": "act_001",
+      "R": ["Sales Ops Analyst"],
+      "A": ["Sales Ops Manager"],
+      "C": ["Finance", "Compliance"],
+      "I": ["Customer Service"]
+    }
+  ],
+  "controls_catalog": [
+    {
+      "id": "ctrl_01",
+      "name": "Dual Approval for Credit Override",
+      "type": "preventive | detective | corrective",
+      "frequency": "per_transaction",
+      "owner_role": "Credit Manager",
+      "evidence": "Approval log"
+    }
+  ],
+  "risk_catalog": [
+    {
+      "id": "risk_01",
+      "name": "Inaccurate Order Data",
+      "severity": "low | medium | high | critical",
+      "description": "Manual entry can lead to incorrect amounts or customer info."
+    }
+  ],
+  "exception_catalog": [
+    {
+      "id": "ex_01",
+      "trigger": "Missing required fields in PO",
+      "handling_steps": ["Request missing data", "Place order on hold"],
+      "escalation_to": "Sales Ops Manager"
+    }
+  ],
+  "governance": {
+    "process_owner": "VP, Order Management",
+    "review_cadence": "Quarterly",
+    "change_control": "COE approval required",
+    "kpi_forum": "Monthly Ops Review"
+  },
+  "lean_opportunities": [
+    {
+      "id": "opp_01",
+      "waste_type": "Waiting | Overprocessing | Motion | Defects | Inventory | Overproduction | Transport | Skills",
+      "description": "Reduce queue time before credit decision through automation.",
+      "related_activity_ids": ["act_004","act_005"],
+      "automation_candidate": true,
+      "effort": "S | M | L",
+      "impact": "S | M | L"
+    }
+  ],
+  "metrics": {
+    "total_cycle_time_hours": 72,
+    "total_cost_per_case": 245.00,
+    "total_steps": 14,
+    "handoffs": 6,
+    "systems_involved": 4,
+    "automation_rate_pct": 23
+  }
+}
+
+4. Project Management Module
+4.1 Features
+Feature	Description
+Create Project	Name, client, description, team members
+Project Dashboard	Overview of all inputs, models, analyses, outputs
+Team Permissions	Owner, Editor, Viewer roles
+Activity Log	Audit trail of all actions
+Project Settings	Default output formats, branding, templates
+Archive/Delete	Soft delete with recovery option
+Duplicate Project	Clone for similar engagements
+Export Project	Full backup as ZIP
+4.2 Project Dashboard UI
+┌─────────────────────────────────────────────────────────────────┐
+│  ← Back to Projects     Acme Corp - Order to Cash Analysis      │
+│                                                      [Settings] │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  INPUTS (7)              PROCESS MODELS (2)    OUTPUTS (3)      │
+│  ┌─────────────────┐     ┌────────────────┐    ┌─────────────┐  │
+│  │ 📝 Interviews   │     │ Current State  │    │ 📄 GM Docs  │  │
+│  │    (4 files)    │     │ v1.2 ✓ Active  │    │ 📐 BPMN Pkg │  │
+│  │ 📄 SOPs         │     │                │    │ 📄 COE Pack │  │
+│  │    (2 files)    │     │ Future State   │    │ [Generate+] │  │
+│  │ 📊 Event Log    │     │ v0.3 Draft     │    │             │  │
+│  │    (1 file)     │     │                │    │             │  │
+│  │                 │     │ [+ New Model]  │    │             │  │
+│  │ [+ Add Input]   │     │                │    │             │  │
+│  └─────────────────┘     └────────────────┘    └─────────────┘  │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│  QUICK INSIGHTS                                                 │
+│  ┌────────────────┬────────────────┬────────────────┐           │
+│  │ Cycle Time     │ Pain Points    │ Automation     │           │
+│  │ 72 hrs avg     │ 12 identified  │ 34% potential  │           │
+│  │ ↓ 23% vs target│ 4 critical     │ 8 RPA candidates│          │
+│  └────────────────┴────────────────┴────────────────┘           │
+│                                                                 │
+│  RECENT ACTIVITY                                                │
+│  • Sarah uploaded "Finance Interview - John.docx" (2h ago)      │
+│  • AI completed pain point analysis (3h ago)                    │
+│  • Mike edited Current State model (yesterday)                  │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+5. Workflow Specifications
+5.1 Workflow 1: Interviews → Process Model
+5.1.1 Input Handling
+
+Accepted Formats: .docx, .pdf, .txt, .md, audio files (.mp3, .m4a, .wav), .vsdx, .html, .xlsx
+
+Pre-processing Pipeline:
+
+File upload → text extraction (or transcription for audio)
+
+Chunking for large documents
+
+Initial parsing to identify: speakers, timestamps, topics mentioned
+
+5.1.2 Interview Guide Generator
+
+Before interviews, user can generate a customized guide:
+
+Inputs:
+
+Process name/scope
+
+Known stakeholders/roles
+
+Key questions/hypotheses
+
+Prior documentation (optional)
+
+Outputs:
+
+Structured interview guide with:
+
+Opening/rapport questions
+
+Process flow questions ("Walk me through...")
+
+Pain point probes ("What frustrates you about...")
+
+Quantification questions ("How long does X take?")
+
+Exception/variant questions ("What happens when...")
+
+Improvement ideas ("If you could change one thing...")
+
+Role-specific variations
+
+Suggested follow-up question bank
+
+5.1.3 Transcript → Process Model Pipeline
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│   Upload     │────▶│   Parse &    │────▶│   Extract    │
+│  Transcript  │     │   Chunk      │     │   Entities   │
+└──────────────┘     └──────────────┘     └──────────────┘
+                                                 │
+                     ┌───────────────────────────┘
+                     ▼
+┌──────────────────────────────────────────────────────────┐
+│                  ENTITY EXTRACTION                       │
+│  • Activities (verbs + objects)                          │
+│  • Actors/Roles                                          │
+│  • Systems/Tools                                         │
+│  • Handoffs                                              │
+│  • Decision points                                       │
+│  • Exceptions/variants                                   │
+│  • Pain points (explicit and implied)                    │
+│  • Metrics mentioned (times, volumes, frequencies)       │
+│  • Documents/artifacts                                   │
+│  • Controls and risks mentions                            │ ✅ NEW emphasis
+└────────────────────────┬─────────────────────────────────┘
+                         │
+                         ▼
+┌──────────────────────────────────────────────────────────┐
+│               CONFLICT DETECTION                         │
+│  Compare across multiple interviews:                     │
+│  • Sequence disagreements                                │
+│  • Role/responsibility conflicts                         │
+│  • Metric inconsistencies                                │
+│  • Missing steps (mentioned by some, not others)         │
+│  • Control inconsistencies                               │ ✅ NEW
+│  Flag for user review with source citations              │
+└────────────────────────┬─────────────────────────────────┘
+                         │
+                         ▼
+┌──────────────────────────────────────────────────────────┐
+│              DRAFT PROCESS MODEL                         │
+│  • Auto-generated BPMN structure                         │
+│  • Confidence scores per element                         │
+│  • Source citations (which interview, which quote)       │
+│  • Gap indicators (steps likely missing)                 │
+│  • Suggested follow-up questions                         │
+│  • Level suggestions (L1–L6)                             │ ✅ NEW
+└──────────────────────────────────────────────────────────┘
+
+5.1.4 Interactive Process Editor
+
+Canvas Features:
+
+Drag-and-drop BPMN elements
+
+Swimlanes (roles, systems)
+
+Auto-layout with manual adjustment
+
+Zoom, pan, minimap
+
+Undo/redo (50 steps)
+
+Version history with diff view
+
+Element Properties Panel:
+
+Name, description
+
+Actor/system assignment
+
+Level (L1–L6) assignment ✅ NEW
+
+Duration (estimate or from data)
+
+Cost per execution
+
+Pain points (linked)
+
+Data sources (linked interviews)
+
+Controls
+
+Risks ✅ NEW
+
+Exception Handling
+
+Notes/comments
+
+AI Assistance in Editor:
+
+"Suggest next step" based on context
+
+"Find similar processes" from template library
+
+"Validate completeness" check
+
+"Generate description" from element name
+
+"Decompose to next level" (Lx → Lx+1) ✅ NEW
+
+"Create RACI draft" ✅ NEW
+
+"Map controls to steps" ✅ NEW
+
+Export Formats:
+
+Visio (.vsdx) - with swimlanes preserved
+
+PowerPoint (.pptx) - as editable shapes
+
+BPMN 2.0 XML
+
+PNG/SVG (high-res)
+
+Lucidchart (via BPMN)
+
+5.2 Workflow 2: Process Maps → Insights
+5.2.1 Input Handling
+
+Accepted Formats:
+
+Visio (.vsdx, .vsd)
+
+BPMN XML
+
+PowerPoint (.pptx) - shape extraction
+
+PDF - OCR + shape detection
+
+Image (.png, .jpg) - OCR + shape detection
+
+Lucidchart (export to BPMN)
+
+Draw.io XML
+
+Parsing Pipeline:
+
+Format detection
+
+Shape/connector extraction
+
+Text extraction from shapes
+
+Relationship inference
+
+Conversion to internal process model
+
+User review/correction of parsed result
+
+5.2.2 Analysis Suite
+
+A. Process Summary
+
+Total steps, decision points, swimlanes
+
+Linear vs. branching complexity score
+
+Systems/tools inventory
+
+Roles/actors inventory
+
+Document/artifact inventory
+
+B. Metrics Estimation
+(If not provided, AI estimates with confidence intervals)
+
+Cycle time (end-to-end, by segment)
+
+Wait time vs. work time
+
+Touches/handoffs count
+
+Rework loops identified
+
+Parallel vs. sequential ratio
+
+C. Pain Point Analysis
+
+Identified from: explicit labels, complexity indicators, handoff points
+
+Categorized by: efficiency, quality, compliance, experience
+
+Severity scoring (Critical / High / Medium / Low)
+
+Root cause hypotheses
+
+D. Opportunity Identification
+
+Automation candidates (rule-based tasks, data entry, validation)
+
+Elimination candidates (redundant steps, unnecessary approvals)
+
+Simplification candidates (parallel execution, batching)
+
+Technology enablement opportunities
+
+Outsourcing/offshoring candidates
+
+E. Benchmark Comparison (if industry data available)
+
+Cycle time vs. benchmark
+
+Cost vs. benchmark
+
+Automation rate vs. benchmark
+
+Complexity score vs. benchmark
+
+5.3 Workflow 3: Event Logs → Process Mining → Insights
+5.3.1 Input Handling
+
+Accepted Formats:
+
+CSV / Excel with required columns
+
+XES (IEEE standard for event logs)
+
+Direct connectors (future): SAP, Salesforce, ServiceNow
+
+Required Fields:
+
+Field	Description	Required
+case_id	Unique process instance	Yes
+activity	Step/task name	Yes
+timestamp	When activity occurred	Yes
+resource	Who/what performed	Optional
+cost	Cost of activity	Optional
+[custom]	Any additional attributes	Optional
+
+Data Validation:
+
+Missing value detection
+
+Timestamp parsing (multiple format support)
+
+Activity name normalization suggestions
+
+Outlier detection (suspiciously fast/slow)
+
+Data quality score
+
+5.3.2 Process Mining Engine
+
+Discovery Algorithms:
+
+Alpha Miner (simple processes)
+
+Heuristics Miner (noisy logs)
+
+Inductive Miner (sound models)
+
+User-selectable with explanations
+
+Core Outputs:
+
+A. Discovered Process Model
+
+Auto-generated BPMN from actual behavior
+
+Frequency annotations on paths
+
+Duration annotations on activities
+
+Directly editable in process editor
+
+B. Variant Analysis
+(unchanged block)
+
+C. Conformance Checking
+
+Compare discovered model vs. reference model
+
+Fitness score (how much behavior fits the model)
+
+Precision score (how much model allows unobserved behavior)
+
+Deviation highlighting on map
+
+Deviation case list with details
+
+D. Performance Analysis
+
+Activity duration distribution (box plots, histograms)
+
+Bottleneck detection (where cases wait longest)
+
+Throughput over time
+
+Case duration distribution
+
+SLA breach analysis
+
+E. Social Network Analysis
+
+Handoff matrix (who passes to whom)
+
+Workload distribution by resource
+
+Collaboration patterns
+
+Potential reassignment recommendations
+
+F. Root Cause Analysis
+
+Correlation of attributes with outcomes (slow cases, rework, etc.)
+
+Decision point analysis (what determines path taken)
+
+Statistical significance indicators
+
+5.4 Workflow 4: Current State → Future State Design
+5.4.1 Redesign Initiation
+
+User selects a current state model and initiates redesign. System asks:
+
+Objectives (select all that apply):
+
+ Reduce cycle time
+
+ Reduce cost
+
+ Improve quality/reduce errors
+
+ Improve customer experience
+
+ Improve compliance
+
+ Enable scale/growth
+
+ Reduce headcount dependency
+
+ Other: ___________
+
+Constraints:
+
+Budget envelope for changes
+
+Timeline for implementation
+
+Systems that cannot change
+
+Roles that must remain
+
+Regulatory requirements
+
+Enablers available:
+
+ RPA/automation tools
+
+ Workflow/BPM system
+
+ New ERP/core system
+
+ AI/ML capabilities
+
+ Outsourcing/offshoring
+
+ Organizational restructure
+
+5.4.2 AI-Generated Recommendations
+
+System generates multiple future state options:
+
+Option Generation:
+
+Quick Wins - Changes achievable in <3 months, minimal investment
+
+Optimized - Best balance of improvement vs. effort
+
+Transformed - Aggressive redesign, maximum improvement
+
+Custom - User-guided parameters
+
+For Each Option:
+
+Future state process map (editable)
+
+Change summary (what's different)
+
+Expected improvements (quantified estimates)
+
+Implementation requirements
+
+Risk assessment
+
+Dependencies
+
+LEAN improvement backlog ✅ NEW
+
+Automation opportunity list (RPA/BPM/AI) ✅ NEW
+
+Redesign Patterns Applied:
+
+Eliminate: Remove non-value-add steps
+
+Simplify: Combine steps, reduce handoffs
+
+Automate: RPA, system integration, AI
+
+Parallelize: Concurrent execution
+
+Standardize: Reduce variants
+
+Outsource: Third-party execution
+
+Self-service: Customer/employee portals
+
+5.4.3 What-If Simulation
+
+(unchanged block)
+
+5.5 Workflow 5: Business Case Generation
+5.5.1 Inputs Required
+
+(unchanged block)
+
+5.5.2 Outputs Generated
+
+(unchanged block)
+
+6. Unified Analysis & Cross-Workflow Integration
+6.1 Data Triangulation Engine
+
+(unchanged block)
+
+6.2 Master Insight Aggregation
+
+(unchanged block, but outputs now feed deliverables B4/B7)
+
+7. Output Generation (Updated)
+7.1 Deliverable Templates (Updated List)
+
+Deliverable Set A — For GMs / Middle Management
+
+A1. Process Executive Overview Document (gm_exec_overview_doc)
+Formats: DOCX (default), optional PPT
+Contents:
+
+Process purpose & business objective
+
+Scope (in/out)
+
+Ownership (process owner + key stakeholders)
+
+High-level L0/L1 view (embedded diagram)
+
+KPI summary (current/target where available)
+
+Top risks & control posture (high-level)
+
+Key pain points + prioritized opportunities (summary)
+
+A2. Process Context & Architecture Document (gm_context_architecture_doc)
+Formats: DOCX (default)
+Contents:
+
+Process hierarchy index (L0–L6)
+
+Interfaces (upstream/downstream)
+
+Systems landscape + integration points
+
+Cross-functional swimlane overview
+
+Variants overview (if event logs exist)
+
+Deliverable Set B — For Process Leads / COEs
+
+B1. Detailed BPMN Process Maps (L1–L6) — Current & Future (bpmn_map_package_l1_l6)
+Formats: BPMN XML (required), Visio VSDX (optional), PPT shapes (optional), PNG/SVG/PDF
+Requirements:
+
+Separate diagrams per level (L1..L6) per state (current/future)
+
+Node cap and decomposition enforcement (default 25 nodes per diagram)
+
+Consistent IDs across current/future for diffing and traceability
+
+B2. Activity Level Documentation (activity_level_doc)
+Formats: DOCX; optional XLSX
+Minimum table fields:
+
+Step ID, Level, Name, Description
+
+Role/Owner, System
+
+Inputs/Outputs
+
+SLA/OLA
+
+Risks/Controls mapping
+
+Exceptions & escalation triggers
+
+Evidence references
+
+B3. RACI Matrix (raci_matrix_doc)
+Formats: XLSX; optional DOCX embed
+Rules:
+
+Cover all L3+ activities (configurable)
+
+Flag ambiguous R/A and require user confirmation
+
+B4. Controls & Risk Framework (controls_risk_framework_doc)
+Formats: DOCX; optional XLSX appendices
+Contents:
+
+Risk register mapped to process areas
+
+Controls mapped to activities (preventive/detective/corrective)
+
+Frequency, evidence, owner, regulatory mapping (optional)
+
+Uncontrolled risks flagged
+
+B5. Exception & Escalation Handling (exception_escalation_doc)
+Formats: DOCX; optional diagram appendix
+Contents:
+
+Exception catalog (trigger, handling steps, owner)
+
+Escalation matrix (condition → escalation target)
+
+Rework loops and impact
+
+B6. Process Governance (process_governance_doc)
+Formats: DOCX
+Contents:
+
+Ownership model (process owner / COE)
+
+Versioning and change control
+
+Review cadence, forums
+
+Audit evidence requirements
+
+KPI reporting cadence
+
+Issue management routine
+
+B7. Future State Improvement & Automation Opportunities (LEAN-based) (future_state_lean_opportunities_doc)
+Formats: DOCX; optional PPT summary
+Contents:
+
+Opportunities categorized by TIMWOODS
+
+Effort/impact scoring + prioritization
+
+Automation candidates (RPA/BPM/AI)
+
+Mapping to affected activity IDs
+
+Assumptions list (when quantitative data missing)
+
+7.2 Deliverable Packaging & Manifest (NEW)
+
+Composite outputs must include manifest.json:
+
+process_name
+
+included_states (current/future)
+
+included_levels (L1–L6)
+
+file list with type/format
+
+generation timestamp
+
+model version hash
+
+traceability summary (coverage + low-confidence items)
+
+7.3 Customization Options
+
+Client logo/branding
+
+Color scheme
+
+Terminology mapping (e.g., "Pain Points" → "Improvement Opportunities")
+
+Section inclusion/exclusion
+
+Detail level (executive vs. working team)
+
+Language (future: multi-language)
+
+8. AI Integration Architecture
+8.1 Claude API Usage
+
+Prompt Templates by Function (Updated):
+
+Function	Model	Typical Tokens
+Interview parsing	Sonnet	4K in, 2K out
+Entity extraction	Sonnet	2K in, 1K out
+Level decomposition (L1–L6)	Sonnet	4K in, 2K out
+Controls/risk extraction + mapping	Sonnet	4K in, 2K out
+Exception/escalation extraction	Sonnet	3K in, 1.5K out
+RACI generation	Sonnet	3K in, 1.5K out
+LEAN opportunity generation	Sonnet	4K in, 2K out
+Pain point analysis	Sonnet	3K in, 1.5K out
+Future state generation	Sonnet	5K in, 3K out
+Report narrative / GM docs	Sonnet	4K in, 2K out
+Quick Q&A / chat	Sonnet	1K in, 500 out
+
+Caching Strategy:
+
+Cache parsed interview entities
+
+Cache analysis results (invalidate on input change)
+
+Cache generated narratives (per version)
+
+Cache deliverables by (model_version_hash + template_version) ✅ NEW
+
+8.2 Structured Output Handling
+
+All AI calls that require structured data use JSON mode with schema validation:
+
+# Example: Pain Point Extraction
+response = claude.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=2000,
+    system="Extract pain points from process documentation. Respond only in JSON.",
+    messages=[{"role": "user", "content": prompt}],
+)
+
+# Parse and validate against schema
+pain_points = PainPointSchema.parse(response.content)
+
+
+Additional Guardrails (NEW)
+
+Evidence-first generation: all controls/risks/exceptions/KPIs must cite source IDs
+
+“No-invention” rule: uncertain info must be marked Unknown/Assumption/Needs validation
+
+Confidence scoring per element and per deliverable section
+
+9. Security & Compliance
+9.1 Data Protection
+
+All data encrypted at rest (AES-256)
+
+All data encrypted in transit (TLS 1.3)
+
+Project data isolation (row-level security)
+
+No cross-organization data access
+
+PII detection and optional redaction
+
+Audit logging of all data access
+
+9.2 Access Control
+Role	Permissions
+Org Admin	All + user management + billing
+Project Owner	Full project access + member management
+Project Editor	Edit inputs, models, run analyses
+Project Viewer	Read-only access to all artifacts
+9.3 Data Retention
+
+Active projects: Retained indefinitely
+
+Archived projects: 2 years, then auto-delete option
+
+Deleted projects: 30-day soft delete, then permanent
+
+Audit logs: 7 years
+
+10. Deployment Architecture (Render)
+10.1 Services
+# render.yaml
+
+services:
+  # Frontend
+  - type: web
+    name: pra-frontend
+    env: static
+    buildCommand: npm run build
+    staticPublishPath: ./dist
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+
+  # Backend API
+  - type: web
+    name: pra-api
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pra-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: pra-redis
+          type: redis
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: AUTH0_DOMAIN
+        sync: false
+      - key: AUTH0_CLIENT_ID
+        sync: false
+
+  # Celery Worker
+  - type: worker
+    name: pra-worker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A tasks worker --loglevel=info
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pra-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: pra-redis
+          type: redis
+          property: connectionString
+
+databases:
+  - name: pra-db
+    plan: standard
+
+redis:
+  - name: pra-redis
+    plan: standard
+
+10.2 Scaling Considerations
+Component	Initial	Scale Trigger
+API	1 instance	CPU > 70%
+Workers	2 instances	Queue depth > 100
+Database	Standard	Connections > 80%
+Redis	Standard	Memory > 70%
+11. Development Phases (Updated)
+Phase 1: Foundation (Weeks 1-6)
+
+ Project/user/org data model and API
+
+ Authentication integration
+
+ File upload infrastructure
+
+ Basic React shell with routing
+
+ Project dashboard UI
+
+Phase 2: Interview Workflow (Weeks 7-10)
+
+ Interview guide generator
+
+ Transcript upload and parsing
+
+ Entity extraction pipeline
+
+ Basic process editor (ReactFlow)
+
+ Export to BPMN XML/PNG
+
+ GM Executive Overview (v0) ✅ NEW
+
+ Activity-level doc (v0) ✅ NEW
+
+Phase 3: Process Mining (Weeks 11-16)
+
+ Event log upload and validation
+
+ Process discovery (integrate PM4Py)
+
+ Variant analysis
+
+ Performance analysis
+
+ Process maps from mining
+
+Phase 4: Analysis & Insights (Weeks 17-20)
+
+ Pain point analysis
+
+ Opportunity identification
+
+ Cross-source triangulation
+
+ Unified insights dashboard
+
+ RACI generation ✅ NEW
+
+ Controls & risk mapping ✅ NEW
+
+ Exception & escalation extraction ✅ NEW
+
+ Process context & architecture doc ✅ NEW
+
+Phase 5: Future State & Business Case (Weeks 21-26)
+
+ Future state generator
+
+ What-if simulation
+
+ Business case calculator
+
+ Report generation (PPT, Word)
+
+ BPMN package L1–L6 current/future ✅ NEW
+
+ Process governance doc ✅ NEW
+
+ LEAN improvement & automation opportunities doc ✅ NEW
+
+Phase 6: Polish & Scale (Weeks 27-30)
+
+ Performance optimization
+
+ Advanced export options (Visio/PPT editable shapes)
+
+ Template library
+
+ Documentation and training
+
+12. Success Metrics (Updated)
+Metric	Target	Measurement
+Time to first process map	< 2 hours	From upload to exportable map
+Analysis accuracy	> 85%	User validation of pain points
+User adoption	> 70%	Active users / total licenses
+Output reuse	> 80%	% of generated content used in client deliverables
+NPS	> 50	Quarterly survey
+Time to generate GM doc set	< 30 minutes	From validated model to A1+A2
+RACI completeness	> 95%	% activities with R/A
+Controls mapping coverage (w/ RCM)	> 90%	% controls mapped to activities
+Exception capture rate	> 80%	Known exceptions captured
+LEAN opportunity usefulness	> 70% useful	User rating
+Appendix A: API Endpoints (Summary)
+# Authentication
+POST   /auth/login
+POST   /auth/logout
+GET    /auth/me
+
+# Organizations
+GET    /orgs/:id
+PUT    /orgs/:id
+
+# Users
+GET    /users
+POST   /users
+GET    /users/:id
+PUT    /users/:id
+
+# Projects
+GET    /projects
+POST   /projects
+GET    /projects/:id
+PUT    /projects/:id
+DELETE /projects/:id
+POST   /projects/:id/duplicate
+POST   /projects/:id/archive
+GET    /projects/:id/activity
+
+# Project Members
+GET    /projects/:id/members
+POST   /projects/:id/members
+DELETE /projects/:id/members/:userId
+
+# Inputs
+GET    /projects/:id/inputs
+POST   /projects/:id/inputs
+GET    /projects/:id/inputs/:inputId
+DELETE /projects/:id/inputs/:inputId
+POST   /projects/:id/inputs/:inputId/parse
+
+# Process Models
+GET    /projects/:id/models
+POST   /projects/:id/models
+GET    /projects/:id/models/:modelId
+PUT    /projects/:id/models/:modelId
+DELETE /projects/:id/models/:modelId
+GET    /projects/:id/models/:modelId/versions
+POST   /projects/:id/models/:modelId/export
+
+# Analyses
+GET    /projects/:id/analyses
+POST   /projects/:id/analyses
+GET    /projects/:id/analyses/:analysisId
+DELETE /projects/:id/analyses/:analysisId
+
+# Outputs
+GET    /projects/:id/outputs
+POST   /projects/:id/outputs/generate
+GET    /projects/:id/outputs/:outputId
+GET    /projects/:id/outputs/:outputId/download
+
+# AI Chat (contextual assistance)
+POST   /projects/:id/chat
+
+Appendix B: Glossary
+Term	Definition
+Activity	A single step or task in a process
+BPMN	Business Process Model and Notation - standard notation
+Case	A single instance of a process (e.g., one order)
+Conformance	How well actual behavior matches documented process
+Event Log	System-generated record of process execution
+Fitness	Process mining metric - % of behavior explained by model
+Handoff	Transfer of work from one actor/system to another
+Swimlane	Visual grouping of activities by role or system
+Variant	A unique path through a process
+XES	IEEE standard format for event logs
