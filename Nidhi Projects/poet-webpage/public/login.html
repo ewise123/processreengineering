@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign In – POET</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+    }
+
+    /* ── Left panel ── */
+    .left {
+      width: 45%;
+      background: #0f172a;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 64px 56px;
+      position: relative;
+      overflow: hidden;
+    }
+    /* Subtle texture overlay */
+    .left::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at 20% 50%, rgba(51,65,85,0.4) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .left-inner { position: relative; z-index: 1; }
+
+    .logo-img {
+      height: 88px;
+      width: auto;
+      object-fit: contain;
+      margin-bottom: 36px;
+      border-radius: 12px;
+    }
+    .badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      color: #475569;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .brand {
+      font-size: 26px;
+      font-weight: 800;
+      color: #f8fafc;
+      line-height: 1.25;
+      margin-bottom: 8px;
+    }
+    .tagline {
+      font-size: 13px;
+      color: #64748b;
+      margin-bottom: 44px;
+      line-height: 1.5;
+    }
+    .divider {
+      width: 36px;
+      height: 3px;
+      background: #1e3a5f;
+      border-radius: 2px;
+      margin-bottom: 32px;
+    }
+    .feat {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .feat-dot {
+      width: 6px;
+      height: 6px;
+      background: #334155;
+      border-radius: 50%;
+      margin-top: 6px;
+      flex-shrink: 0;
+    }
+    .feat-text {
+      font-size: 13px;
+      color: #64748b;
+      line-height: 1.5;
+    }
+    .footer {
+      font-size: 11px;
+      color: #334155;
+      margin-top: 52px;
+    }
+
+    /* ── Right panel ── */
+    .right {
+      width: 55%;
+      background: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 48px;
+    }
+    .card {
+      width: 100%;
+      max-width: 380px;
+    }
+    .card-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 6px;
+    }
+    .card-sub {
+      font-size: 13px;
+      color: #6b7280;
+      margin-bottom: 28px;
+    }
+
+    /* ── Form elements ── */
+    .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+    .field label { font-size: 13px; font-weight: 600; color: #374151; }
+    .field-row { display: flex; align-items: center; justify-content: space-between; }
+    .field-row a { font-size: 11px; color: #9ca3af; text-decoration: none; }
+    .field-row a:hover { color: #374151; }
+    .field input {
+      padding: 9px 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: inherit;
+      color: #111827;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .field input:focus {
+      border-color: #0f172a;
+      box-shadow: 0 0 0 3px rgba(15,23,42,0.08);
+    }
+    .error-msg {
+      display: none;
+      font-size: 12px;
+      color: #ef4444;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+    .submit-btn {
+      width: 100%;
+      padding: 11px;
+      background: #0f172a;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      margin-top: 4px;
+      transition: background 0.15s;
+    }
+    .submit-btn:hover  { background: #1e293b; }
+    .submit-btn:active { background: #0f172a; }
+
+    /* ── Responsive ── */
+    @media (max-width: 700px) {
+      body { flex-direction: column; }
+      .left { width: 100%; padding: 40px 32px 32px; }
+      .right { width: 100%; padding: 40px 24px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Left: Branding panel -->
+  <div class="left">
+    <div class="left-inner">
+      <img src="/ChatGPT Image Feb 23, 2026, 09_07_03 PM.png" alt="POET" class="logo-img" />
+      <div class="badge">SSA &amp; Company</div>
+      <div class="brand">Process Optimization<br/>Engineering Tool</div>
+      <div class="tagline">AI-Enabled Process Re-Engineering Platform</div>
+      <div class="divider"></div>
+      <div class="feat">
+        <div class="feat-dot"></div>
+        <div class="feat-text">Generate BPMN process maps from your documents</div>
+      </div>
+      <div class="feat">
+        <div class="feat-dot"></div>
+        <div class="feat-text">Create professional Standard Operating Procedures</div>
+      </div>
+      <div class="feat">
+        <div class="feat-dot"></div>
+        <div class="feat-text">Assess automation and operational efficiency opportunities</div>
+      </div>
+      <div class="footer">© 2026 SSA &amp; Company. All rights reserved.</div>
+    </div>
+  </div>
+
+  <!-- Right: Sign-in form -->
+  <div class="right">
+    <div class="card">
+      <div class="card-title">Welcome back</div>
+      <div class="card-sub">Sign in to your POET account</div>
+
+      <form id="loginForm" onsubmit="handleLogin(event)">
+        <div class="field">
+          <label for="email">Email</label>
+          <input id="email" type="email" placeholder="you@ssacompany.com" required />
+        </div>
+        <div class="field">
+          <div class="field-row">
+            <label for="password">Password</label>
+            <a href="#">Forgot password?</a>
+          </div>
+          <input id="password" type="password" placeholder="••••••••" required />
+        </div>
+        <p id="errorMsg" class="error-msg"></p>
+        <button type="submit" class="submit-btn">Sign in</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    function handleLogin(e) {
+      e.preventDefault();
+      const email    = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      const errorMsg = document.getElementById('errorMsg');
+      if (email && password.length >= 6) {
+        sessionStorage.setItem('poet_auth', 'true');
+        window.location.href = '/index.html';
+      } else {
+        errorMsg.textContent = 'Invalid credentials. Please try again.';
+        errorMsg.style.display = 'block';
+      }
+    }
+  </script>
+
+</body>
+</html>

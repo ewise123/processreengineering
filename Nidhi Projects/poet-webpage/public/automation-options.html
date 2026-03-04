@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Assess Process Automation Options – POET</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', system-ui, sans-serif; }
+    #drop-zone.dragover { border-color: #475569; background-color: #f1f5f9; }
+    /* Rendered business case typography */
+    .bc-body h1 { font-size: 1.35rem; font-weight: 700; color: #0f172a; margin: 0 0 0.25rem; }
+    .bc-body h2 { font-size: 0.95rem; font-weight: 700; color: #0f172a; text-transform: uppercase; letter-spacing: 0.04em; margin: 1.75rem 0 0.5rem; padding-bottom: 0.3rem; border-bottom: 1px solid #e2e8f0; }
+    .bc-body p  { color: #334155; line-height: 1.75; margin-bottom: 0.6rem; font-size: 0.875rem; }
+    .bc-body ol { list-style: decimal; padding-left: 1.5rem; margin-bottom: 0.75rem; }
+    .bc-body ol li { color: #334155; margin-bottom: 0.4rem; line-height: 1.65; font-size: 0.875rem; }
+    .bc-body ul { list-style: disc; padding-left: 1.5rem; margin-bottom: 0.75rem; }
+    .bc-body ul li { color: #334155; margin-bottom: 0.4rem; line-height: 1.65; font-size: 0.875rem; }
+    .bc-body strong { color: #0f172a; }
+    .bc-body hr { border: none; border-top: 1px solid #e2e8f0; margin: 0.5rem 0 1.25rem; }
+  </style>
+  <script>
+    if (!sessionStorage.getItem('poet_auth')) {
+      window.location.href = '/login.html';
+    }
+  </script>
+</head>
+<body class="min-h-screen bg-slate-50">
+
+  <!-- Header -->
+  <header class="bg-slate-900 text-white px-8 py-0 flex items-center min-h-28 relative shadow-lg">
+    <img src="/ChatGPT Image Feb 23, 2026, 09_07_03 PM.png" alt="POET" class="h-24 w-auto object-contain mr-6" />
+    <div>
+      <div class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-1">SSA & Company</div>
+      <h1 class="text-2xl font-bold tracking-tight">Process Optimization Engineering Tool (POET)</h1>
+      <p class="text-slate-400 text-sm mt-0.5">AI-Enabled Process Re-Engineering Platform</p>
+    </div>
+    <div class="ml-auto flex items-center gap-4">
+      <button onclick="signOut()" class="text-xs text-slate-400 hover:text-white transition">Sign out</button>
+      <div class="h-8 w-8 rounded-full bg-slate-600 flex items-center justify-center text-white font-medium text-sm">U</div>
+    </div>
+  </header>
+
+  <!-- Hero Banner -->
+  <div class="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-8 py-4">
+    <div class="max-w-5xl mx-auto">
+      <p class="text-slate-300 text-sm">Upload process documents and generate a professional Process Optimisation Business Case with targeted improvement recommendations.</p>
+    </div>
+  </div>
+
+  <!-- Page Content -->
+  <main class="max-w-5xl mx-auto px-8 py-8">
+
+    <!-- Breadcrumb -->
+    <div class="flex items-center gap-3 mb-6">
+      <a href="/index.html" class="text-sm text-slate-400 hover:text-slate-700 transition">← Back</a>
+      <span class="text-slate-300">/</span>
+      <span class="text-sm font-semibold text-slate-700">Assess Process Automation Options</span>
+    </div>
+
+    <!-- Error bar -->
+    <div id="error-bar" class="hidden mb-5 flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+      <svg class="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <p id="error-text" class="text-sm text-red-700"></p>
+    </div>
+
+    <!-- Status bar -->
+    <div id="status-bar" class="hidden mb-5 flex items-center gap-3 bg-white border border-slate-200 rounded-lg px-4 py-3 shadow-sm">
+      <svg class="w-5 h-5 text-slate-500 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+      </svg>
+      <div>
+        <p id="status-text" class="text-sm font-medium text-slate-800"></p>
+        <p id="status-sub" class="text-xs text-slate-400"></p>
+      </div>
+    </div>
+
+    <!-- ── Form Section ──────────────────────────────────────────────────── -->
+    <div id="form-section">
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div class="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-200">
+
+          <!-- Left: Configure -->
+          <div class="p-7">
+            <p class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-5">Configure</p>
+
+            <!-- Process Name -->
+            <div class="mb-5">
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5" for="process-name">
+                Process Name <span class="text-red-500">*</span>
+              </label>
+              <input id="process-name" type="text" placeholder="e.g. Invoice Approval Process"
+                oninput="updateGenerateBtn()"
+                class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400" />
+            </div>
+
+            <!-- Department -->
+            <div class="mb-5">
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5" for="bc-department">
+                Department / Owner
+              </label>
+              <input id="bc-department" type="text" placeholder="e.g. Finance Team"
+                class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400" />
+            </div>
+
+            <!-- Improvement Focus -->
+            <div class="mb-5">
+              <div class="flex items-center justify-between mb-2">
+                <label class="text-xs font-semibold text-slate-600">Improvement Focus <span class="text-red-500">*</span></label>
+                <span class="text-xs text-slate-400">select all that apply</span>
+              </div>
+              <div id="focus-list" class="border border-slate-200 rounded-lg divide-y divide-slate-100"></div>
+            </div>
+
+            <!-- Business Case Sections -->
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <label class="text-xs font-semibold text-slate-600">Business Case Sections <span class="text-red-500">*</span></label>
+                <span id="section-count" class="text-xs text-slate-400"></span>
+              </div>
+              <div id="section-list" class="border border-slate-200 rounded-lg overflow-y-auto divide-y divide-slate-100" style="max-height:200px"></div>
+            </div>
+          </div>
+
+          <!-- Right: Upload -->
+          <div class="p-7">
+            <p class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-5">
+              Source Documents <span class="text-red-500">*</span>
+            </p>
+
+            <!-- Drop zone -->
+            <div id="drop-zone"
+              class="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center cursor-pointer transition-all duration-200 hover:border-slate-400 hover:bg-slate-50 mb-4"
+              onclick="document.getElementById('file-input').click()"
+              ondragover="handleDragOver(event)"
+              ondragleave="handleDragLeave(event)"
+              ondrop="handleDrop(event)">
+              <div class="flex flex-col items-center gap-2">
+                <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                  </svg>
+                </div>
+                <div>
+                  <p class="font-semibold text-slate-600 text-sm">Drop files here or <span class="text-slate-900 underline">browse</span></p>
+                  <p class="text-xs text-slate-400 mt-0.5">Process maps, SOPs, PDF, Word, PowerPoint — add as many as needed</p>
+                </div>
+              </div>
+              <input id="file-input" type="file" class="hidden"
+                accept=".pdf,.docx,.doc,.pptx,.ppt,.txt"
+                multiple
+                onchange="handleFileSelect(event)" />
+            </div>
+
+            <!-- File list -->
+            <div id="file-list" class="flex flex-col gap-2 mb-5"></div>
+
+            <!-- Output format -->
+            <div>
+              <p class="text-xs font-semibold text-slate-600 mb-2">Output Format</p>
+              <div class="flex gap-2 flex-wrap">
+                <label class="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="output-format" value="screen" checked class="accent-slate-900" />
+                  <span class="text-xs text-slate-700">View on screen</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="output-format" value="docx" class="accent-slate-900" />
+                  <span class="text-xs text-slate-700">Download Word</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="output-format" value="pptx" class="accent-slate-900" />
+                  <span class="text-xs text-slate-700">Download PowerPoint</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Footer -->
+        <div class="border-t border-slate-200 px-7 py-4 flex justify-end bg-slate-50">
+          <button id="generate-btn"
+            onclick="generateBusinessCase()"
+            disabled
+            class="inline-flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white text-sm font-semibold rounded-lg shadow disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 active:bg-slate-800 transition-colors duration-150">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            Generate Business Case
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Output Section ────────────────────────────────────────────────── -->
+    <div id="output-section" class="hidden">
+
+      <!-- Toolbar -->
+      <div class="flex items-center justify-between mb-5 flex-wrap gap-3">
+        <button onclick="restartBC()"
+          class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-600 border border-slate-300 rounded-lg bg-white hover:bg-slate-50 transition">
+          ↺ Restart
+        </button>
+        <div class="flex gap-2">
+          <button onclick="downloadBC('docx')"
+            class="inline-flex items-center gap-2 px-4 py-2 border border-slate-300 text-slate-700 text-sm font-semibold rounded-lg bg-white hover:bg-slate-50 transition">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            Download Word
+          </button>
+          <button onclick="downloadBC('pptx')"
+            class="inline-flex items-center gap-2 px-5 py-2 bg-slate-900 text-white text-sm font-semibold rounded-lg hover:bg-slate-700 transition">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            Download PowerPoint
+          </button>
+        </div>
+      </div>
+
+      <!-- Business case content -->
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm px-10 py-10">
+        <div id="bc-output" class="bc-body max-w-3xl mx-auto"></div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <script>
+    const API_BASE = 'http://localhost:8000';
+    let selectedFiles     = [];
+    let currentBcMarkdown = null;
+    let currentProcessName = null;
+
+    // ── Data ──────────────────────────────────────────────────────────────────
+    const IMPROVEMENT_OPTIONS = [
+      { id: 'lean',             label: 'LEAN Process Optimisation' },
+      { id: 'rpa',              label: 'Robotic Process Automation (RPA)' },
+      { id: 'ai',               label: 'AI / Intelligent Automation' },
+      { id: 'system_integration', label: 'System Integration' },
+      { id: 'digitisation',     label: 'Workflow Digitisation' },
+      { id: 'offshoring',       label: 'Offshoring / Outsourcing' },
+    ];
+
+    const BC_SECTIONS = [
+      { id: 'executive_summary',       label: 'Executive Summary', required: true },
+      { id: 'current_state',           label: 'Current State' },
+      { id: 'target_state',            label: 'Target State' },
+      { id: 'risk_control',            label: 'Risk & Control Impact' },
+      { id: 'regulatory',              label: 'Regulatory Considerations' },
+      { id: 'financial_impact',        label: 'Financial Impact (ROI, Cost Savings, FTE)' },
+      { id: 'implementation_plan',     label: 'Implementation Plan' },
+      { id: 'technology_requirements', label: 'Technology Requirements' },
+      { id: 'governance',              label: 'Governance & Ownership' },
+      { id: 'risks_mitigations',       label: 'Risks & Mitigations' },
+    ];
+
+    const DEFAULT_BC_SECTIONS = [
+      'executive_summary', 'current_state', 'target_state',
+      'financial_impact', 'implementation_plan', 'risks_mitigations'
+    ];
+
+    // ── Auth ──────────────────────────────────────────────────────────────────
+    function signOut() {
+      sessionStorage.removeItem('poet_auth');
+      window.location.href = '/login.html';
+    }
+
+    // ── Build checklists ──────────────────────────────────────────────────────
+    function buildFocusList() {
+      document.getElementById('focus-list').innerHTML = IMPROVEMENT_OPTIONS.map(o => `
+        <label class="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-slate-50 select-none">
+          <input type="checkbox" id="focus-${o.id}" value="${o.id}"
+            onchange="updateGenerateBtn()"
+            class="w-3.5 h-3.5 flex-shrink-0 accent-slate-900" />
+          <span class="text-xs text-slate-700">${escHtml(o.label)}</span>
+        </label>
+      `).join('');
+    }
+
+    function buildSectionList() {
+      document.getElementById('section-list').innerHTML = BC_SECTIONS.map(s => `
+        <label class="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-slate-50 select-none">
+          <input type="checkbox" id="sec-${s.id}" value="${s.id}"
+            ${s.required ? 'checked disabled' : (DEFAULT_BC_SECTIONS.includes(s.id) ? 'checked' : '')}
+            onchange="updateSectionCount()"
+            class="w-3.5 h-3.5 flex-shrink-0 accent-slate-900" />
+          <span class="text-xs text-slate-700 leading-snug">
+            ${escHtml(s.label)}${s.required ? ' <span class="text-slate-400">(required)</span>' : ''}
+          </span>
+        </label>
+      `).join('');
+      updateSectionCount();
+    }
+
+    function updateSectionCount() {
+      const n = getSelectedSections().length;
+      document.getElementById('section-count').textContent = n + ' selected';
+    }
+
+    function getSelectedSections() {
+      return BC_SECTIONS.filter(s => {
+        const cb = document.getElementById('sec-' + s.id);
+        return cb && cb.checked;
+      }).map(s => s.id);
+    }
+
+    function getSelectedFocuses() {
+      return IMPROVEMENT_OPTIONS.filter(o => {
+        const cb = document.getElementById('focus-' + o.id);
+        return cb && cb.checked;
+      }).map(o => o.id);
+    }
+
+    // ── Generate button state ─────────────────────────────────────────────────
+    function updateGenerateBtn() {
+      const hasName    = document.getElementById('process-name').value.trim().length > 0;
+      const hasFocus   = getSelectedFocuses().length > 0;
+      const hasFiles   = selectedFiles.length > 0;
+      document.getElementById('generate-btn').disabled = !(hasName && hasFocus && hasFiles);
+    }
+
+    // ── Drag & drop ───────────────────────────────────────────────────────────
+    function handleDragOver(e) {
+      e.preventDefault();
+      document.getElementById('drop-zone').classList.add('dragover');
+    }
+    function handleDragLeave() {
+      document.getElementById('drop-zone').classList.remove('dragover');
+    }
+    function handleDrop(e) {
+      e.preventDefault();
+      document.getElementById('drop-zone').classList.remove('dragover');
+      addFiles(e.dataTransfer.files);
+    }
+    function handleFileSelect(e) {
+      addFiles(e.target.files);
+      e.target.value = '';
+    }
+
+    // ── File management ───────────────────────────────────────────────────────
+    function addFiles(fileList) {
+      Array.from(fileList).forEach(f => {
+        if (!selectedFiles.find(x => x.name === f.name && x.size === f.size)) {
+          selectedFiles.push(f);
+        }
+      });
+      renderFileList();
+      updateGenerateBtn();
+    }
+    function removeFile(index) {
+      selectedFiles.splice(index, 1);
+      renderFileList();
+      updateGenerateBtn();
+    }
+    function renderFileList() {
+      document.getElementById('file-list').innerHTML = selectedFiles.map((f, i) => `
+        <div class="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          <svg class="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+          </svg>
+          <span class="flex-1 text-xs font-medium text-slate-700 truncate">${escHtml(f.name)}</span>
+          <span class="text-xs text-slate-400 flex-shrink-0">${formatBytes(f.size)}</span>
+          <button onclick="removeFile(${i})" class="text-xs text-slate-400 hover:text-red-500 transition ml-1 flex-shrink-0">✕</button>
+        </div>
+      `).join('');
+    }
+    function escHtml(s) {
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function formatBytes(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    // ── Status / Error ────────────────────────────────────────────────────────
+    function showStatus(text, sub) {
+      document.getElementById('status-text').textContent = text;
+      document.getElementById('status-sub').textContent  = sub || '';
+      document.getElementById('status-bar').classList.remove('hidden');
+    }
+    function hideStatus() { document.getElementById('status-bar').classList.add('hidden'); }
+    function showError(msg) {
+      document.getElementById('error-text').textContent = msg;
+      document.getElementById('error-bar').classList.remove('hidden');
+    }
+    function hideError() { document.getElementById('error-bar').classList.add('hidden'); }
+
+    // ── Generate ──────────────────────────────────────────────────────────────
+    async function generateBusinessCase() {
+      if (!selectedFiles.length) return;
+
+      const processName  = document.getElementById('process-name').value.trim();
+      const dept         = document.getElementById('bc-department').value.trim();
+      const focuses      = getSelectedFocuses();
+      const sections     = getSelectedSections();
+      const outputFormat = document.querySelector('input[name="output-format"]:checked').value;
+
+      hideError();
+      document.getElementById('generate-btn').disabled = true;
+      showStatus('Reading source documents...', 'Extracting content from your files');
+
+      const formData = new FormData();
+      selectedFiles.forEach(f => formData.append('files', f));
+      formData.append('process_name',   processName);
+      formData.append('department',     dept);
+      formData.append('focuses_json',   JSON.stringify(focuses));
+      formData.append('sections_json',  JSON.stringify(sections));
+
+      try {
+        showStatus('Generating Business Case...', 'Claude is analysing your process and writing the business case');
+        const response = await fetch(`${API_BASE}/api/generate-business-case`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.detail || 'Business case generation failed');
+        }
+
+        const data = await response.json();
+        currentBcMarkdown  = data.bc_markdown;
+        currentProcessName = processName;
+
+        hideStatus();
+
+        if (outputFormat === 'screen') {
+          document.getElementById('form-section').classList.add('hidden');
+          document.getElementById('output-section').classList.remove('hidden');
+          document.getElementById('bc-output').innerHTML = marked.parse(currentBcMarkdown);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        } else {
+          document.getElementById('generate-btn').disabled = false;
+          await downloadBC(outputFormat);
+        }
+
+      } catch (err) {
+        hideStatus();
+        document.getElementById('generate-btn').disabled = false;
+        showError(err.message.includes('fetch')
+          ? 'Cannot reach the backend. Make sure the Python server is running on port 8000.'
+          : err.message);
+      }
+    }
+
+    // ── Restart ───────────────────────────────────────────────────────────────
+    function restartBC() {
+      selectedFiles      = [];
+      currentBcMarkdown  = null;
+      currentProcessName = null;
+      renderFileList();
+      document.getElementById('process-name').value  = '';
+      document.getElementById('bc-department').value = '';
+      IMPROVEMENT_OPTIONS.forEach(o => {
+        const cb = document.getElementById('focus-' + o.id);
+        if (cb) cb.checked = false;
+      });
+      BC_SECTIONS.forEach(s => {
+        const cb = document.getElementById('sec-' + s.id);
+        if (cb && !cb.disabled) cb.checked = DEFAULT_BC_SECTIONS.includes(s.id);
+      });
+      updateSectionCount();
+      updateGenerateBtn();
+      hideError();
+      hideStatus();
+      document.getElementById('output-section').classList.add('hidden');
+      document.getElementById('form-section').classList.remove('hidden');
+      document.getElementById('bc-output').innerHTML = '';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    // ── Download ──────────────────────────────────────────────────────────────
+    async function downloadBC(fmt) {
+      if (!currentBcMarkdown) return;
+      try {
+        const formData = new FormData();
+        formData.append('bc_markdown',   currentBcMarkdown);
+        formData.append('process_name',  currentProcessName || 'Business Case');
+        formData.append('format',        fmt);
+
+        const response = await fetch(`${API_BASE}/api/export-business-case`, {
+          method: 'POST',
+          body: formData
+        });
+        if (!response.ok) throw new Error('Export failed');
+
+        const blob = await response.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        const safe = (currentProcessName || 'Business_Case').replace(/[^a-z0-9]/gi, '_');
+        a.download = safe + (fmt === 'pptx' ? '.pptx' : '.docx');
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        showError('Could not download: ' + err.message);
+      }
+    }
+
+    // ── Init ─────────────────────────────────────────────────────────────────
+    buildFocusList();
+    buildSectionList();
+  </script>
+
+</body>
+</html>

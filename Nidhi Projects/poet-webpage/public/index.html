@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>POET – Process Optimization Engineering Tool</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'Segoe UI', system-ui, sans-serif; }
+  </style>
+  <script>
+    if (!sessionStorage.getItem('poet_auth')) {
+      window.location.href = '/login.html';
+    }
+  </script>
+</head>
+<body class="min-h-screen bg-slate-50">
+
+  <!-- Header -->
+  <header class="bg-slate-900 text-white px-8 py-0 flex items-center min-h-28 relative shadow-lg">
+    <img src="/ChatGPT Image Feb 23, 2026, 09_07_03 PM.png" alt="POET" class="h-24 w-auto object-contain mr-6" />
+    <div>
+      <div class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-1">SSA & Company</div>
+      <h1 class="text-2xl font-bold tracking-tight">Process Optimization Engineering Tool (POET)</h1>
+      <p class="text-slate-400 text-sm mt-0.5">AI-Enabled Process Re-Engineering Platform</p>
+    </div>
+    <div class="ml-auto flex items-center gap-4">
+      <button onclick="signOut()" class="text-xs text-slate-400 hover:text-white transition">Sign out</button>
+      <div class="h-8 w-8 rounded-full bg-slate-600 flex items-center justify-center text-white font-medium text-sm">U</div>
+    </div>
+  </header>
+
+  <!-- Hero Banner -->
+  <div class="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-8 py-6">
+    <div class="max-w-4xl mx-auto">
+      <p class="text-slate-300 text-sm leading-relaxed max-w-2xl">
+        Ingest existing client documentation and generate a standardized suite of process deliverables — accelerating discovery, improving consistency, and embedding governance from the start.
+      </p>
+    </div>
+  </div>
+
+  <!-- Main Actions -->
+  <main class="max-w-5xl mx-auto px-8 py-10">
+    <h2 class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-6">Select a Workflow</h2>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+
+      <button onclick="window.location.href='/process-document.html'"
+        class="group text-left bg-white border border-slate-200 rounded-xl p-6 hover:border-slate-400 hover:shadow-md transition-all duration-200">
+        <div class="w-10 h-10 rounded-lg bg-slate-900 flex items-center justify-center mb-4">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        </div>
+        <h3 class="font-semibold text-slate-900 mb-1">Create a Standard Operating Procedure (SOP)</h3>
+        <p class="text-sm text-slate-500 leading-relaxed">Produce executive overviews, architecture documents, RACI matrices, and activity-level documentation.</p>
+        <span class="mt-4 inline-flex items-center text-xs font-medium text-slate-700 group-hover:underline">Get started →</span>
+      </button>
+
+      <button onclick="window.location.href='/process-map.html'"
+        class="group text-left bg-white border border-slate-200 rounded-xl p-6 hover:border-slate-400 hover:shadow-md transition-all duration-200">
+        <div class="w-10 h-10 rounded-lg bg-slate-900 flex items-center justify-center mb-4">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+        </div>
+        <h3 class="font-semibold text-slate-900 mb-1">Create a BPMN Process Map</h3>
+        <p class="text-sm text-slate-500 leading-relaxed">Generate BPMN process maps (L1–L4) for current and future state with consistent modeling conventions.</p>
+        <span class="mt-4 inline-flex items-center text-xs font-medium text-slate-700 group-hover:underline">Get started →</span>
+      </button>
+
+      <button onclick="window.location.href='/automation-options.html'"
+        class="group text-left bg-white border border-slate-200 rounded-xl p-6 hover:border-slate-400 hover:shadow-md transition-all duration-200">
+        <div class="w-10 h-10 rounded-lg bg-slate-900 flex items-center justify-center mb-4">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+        </div>
+        <h3 class="font-semibold text-slate-900 mb-1">Assess Process Automation Options</h3>
+        <p class="text-sm text-slate-500 leading-relaxed">Identify waste, surface root causes, and prioritize a lean-based opportunity backlog by impact and effort.</p>
+        <span class="mt-4 inline-flex items-center text-xs font-medium text-slate-700 group-hover:underline">Get started →</span>
+      </button>
+
+    </div>
+
+  </main>
+
+  <script>
+    function signOut() {
+      sessionStorage.removeItem('poet_auth');
+      window.location.href = '/login.html';
+    }
+  </script>
+
+</body>
+</html>
