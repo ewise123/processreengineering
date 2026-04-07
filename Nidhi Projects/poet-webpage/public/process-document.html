@@ -29,38 +29,45 @@
 <body class="min-h-screen bg-slate-50">
 
   <!-- Header -->
-  <header class="bg-slate-900 text-white px-8 py-0 flex items-center min-h-28 relative shadow-lg">
-    <img src="/ChatGPT Image Feb 23, 2026, 09_07_03 PM.png" alt="POET" class="h-24 w-auto object-contain mr-6" />
+  <header class="bg-slate-900 text-white px-8 py-0 flex items-center min-h-16 relative shadow-lg">
+    <img src="/ChatGPT Image Feb 23, 2026, 09_07_03 PM.png" alt="POET" class="h-10 w-auto object-contain mr-6" />
     <div>
-      <div class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-1">SSA & Company</div>
-      <h1 class="text-2xl font-bold tracking-tight">Process Optimization Engineering Tool (POET)</h1>
-      <p class="text-slate-400 text-sm mt-0.5">AI-Enabled Process Re-Engineering Platform</p>
+      <div class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-0">SSA & Company</div>
+      <h1 class="text-lg font-bold tracking-tight">Process Optimization Engineering Tool (POET)</h1>
+      <p class="text-slate-400 text-xs mt-0.5">AI-Enabled Process Re-Engineering Platform</p>
     </div>
     <div class="ml-auto flex items-center gap-4">
+      <a href="/index.html" class="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7m-9 10V10m0 0h4m-4 0H7" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 21V10h6v11" />
+        </svg>
+        Home
+      </a>
       <button onclick="signOut()" class="text-xs text-slate-400 hover:text-white transition">Sign out</button>
       <div class="h-8 w-8 rounded-full bg-slate-600 flex items-center justify-center text-white font-medium text-sm">U</div>
     </div>
   </header>
 
   <!-- Hero Banner -->
-  <div class="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-8 py-4">
+  <div class="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-8 py-2">
     <div class="max-w-5xl mx-auto">
-      <p class="text-slate-300 text-sm">Upload one or more source documents to automatically generate a structured Standard Operating Procedure.</p>
+      <p class="text-slate-300 text-xs">Upload one or more source documents to automatically generate a structured Standard Operating Procedure.</p>
     </div>
   </div>
 
   <!-- Page Content -->
-  <main class="max-w-5xl mx-auto px-8 py-8">
+  <main class="max-w-5xl mx-auto px-8 py-4">
 
     <!-- Breadcrumb -->
-    <div class="flex items-center gap-3 mb-6">
+    <div class="flex items-center gap-3 mb-3">
       <a href="/index.html" class="text-sm text-slate-400 hover:text-slate-700 transition">← Back</a>
       <span class="text-slate-300">/</span>
       <span class="text-sm font-semibold text-slate-700">Create a Standard Operating Procedure (SOP)</span>
     </div>
 
     <!-- Error bar -->
-    <div id="error-bar" class="hidden mb-5 flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+    <div id="error-bar" class="hidden mb-3 flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
       <svg class="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
       </svg>
@@ -68,7 +75,7 @@
     </div>
 
     <!-- Status bar -->
-    <div id="status-bar" class="hidden mb-5 flex items-center gap-3 bg-white border border-slate-200 rounded-lg px-4 py-3 shadow-sm">
+    <div id="status-bar" class="hidden mb-3 flex items-center gap-3 bg-white border border-slate-200 rounded-lg px-4 py-3 shadow-sm">
       <svg class="w-5 h-5 text-slate-500 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
@@ -83,14 +90,27 @@
     <div id="form-section">
       <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
 
+        <!-- Header with Generate button -->
+        <div class="border-b border-slate-200 px-7 py-2 flex justify-end bg-slate-50">
+          <button id="generate-btn"
+            onclick="generateSop()"
+            disabled
+            class="inline-flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white text-sm font-semibold rounded-lg shadow disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 active:bg-slate-800 transition-colors duration-150">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            Generate SOP
+          </button>
+        </div>
+
         <div class="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-200">
 
           <!-- Left: Configure -->
-          <div class="p-7">
-            <p class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-5">Configure</p>
+          <div class="p-5">
+            <p class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-2">Configure</p>
 
             <!-- SOP Title -->
-            <div class="mb-5">
+            <div class="mb-3">
               <label class="block text-xs font-semibold text-slate-600 mb-1.5" for="sop-title">
                 SOP Title <span class="text-red-500">*</span>
               </label>
@@ -99,13 +119,18 @@
                 class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400" />
             </div>
 
-            <!-- Department -->
-            <div class="mb-5">
-              <label class="block text-xs font-semibold text-slate-600 mb-1.5" for="department">
-                Department / Owner
-              </label>
-              <input id="department" type="text" placeholder="e.g. Finance Team"
-                class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400" />
+            <!-- Variations -->
+            <div class="mb-3">
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5">Output Variations</label>
+              <div class="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
+                <button type="button" id="var-btn-1" onclick="setVariations(1)"
+                  class="flex-1 px-3 py-2 bg-slate-900 text-white transition">1 — Standard</button>
+                <button type="button" id="var-btn-2" onclick="setVariations(2)"
+                  class="flex-1 px-3 py-2 bg-white text-slate-600 hover:bg-slate-50 border-l border-slate-200 transition">2 — + Concise</button>
+                <button type="button" id="var-btn-3" onclick="setVariations(3)"
+                  class="flex-1 px-3 py-2 bg-white text-slate-600 hover:bg-slate-50 border-l border-slate-200 transition">3 — + Executive</button>
+              </div>
+              <p class="text-xs text-slate-400 mt-1.5">Generate multiple versions and toggle between them to pick your preferred output.</p>
             </div>
 
             <!-- Sections to Include -->
@@ -130,36 +155,36 @@
                 </button>
               </div>
               <!-- Scrollable section checklist -->
-              <div id="section-list" class="border border-slate-200 rounded-lg overflow-y-auto divide-y divide-slate-100" style="max-height:220px"></div>
+              <div id="section-list" class="border border-slate-200 rounded-lg overflow-y-auto divide-y divide-slate-100" style="max-height:160px"></div>
             </div>
           </div>
 
           <!-- Right: Upload -->
-          <div class="p-7">
-            <p class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-5">
+          <div class="p-5">
+            <p class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-2">
               Source Documents <span class="text-red-500">*</span>
             </p>
 
             <!-- Drop zone -->
             <div id="drop-zone"
-              class="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center cursor-pointer transition-all duration-200 hover:border-slate-400 hover:bg-slate-50 mb-4"
+              class="border-2 border-dashed border-slate-300 rounded-xl p-3 text-center cursor-pointer transition-all duration-200 hover:border-slate-400 hover:bg-slate-50 mb-2"
               onclick="document.getElementById('file-input').click()"
               ondragover="handleDragOver(event)"
               ondragleave="handleDragLeave(event)"
               ondrop="handleDrop(event)">
               <div class="flex flex-col items-center gap-2">
-                <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center">
+                <div class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center">
                   <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                   </svg>
                 </div>
                 <div>
                   <p class="font-semibold text-slate-600 text-sm">Drop files here or <span class="text-slate-900 underline">browse</span></p>
-                  <p class="text-xs text-slate-400 mt-0.5">PDF, Word, PowerPoint, TXT — add as many as needed</p>
+                  <p class="text-xs text-slate-400 mt-0.5">PDF, Word, PowerPoint, TXT, Excel, CSV — add as many as needed</p>
                 </div>
               </div>
               <input id="file-input" type="file" class="hidden"
-                accept=".pdf,.docx,.doc,.pptx,.ppt,.txt"
+                accept=".pdf,.docx,.doc,.pptx,.ppt,.txt,.xlsx,.xls,.csv"
                 multiple
                 onchange="handleFileSelect(event)" />
             </div>
@@ -170,18 +195,6 @@
 
         </div>
 
-        <!-- Footer -->
-        <div class="border-t border-slate-200 px-7 py-4 flex justify-end bg-slate-50">
-          <button id="generate-btn"
-            onclick="generateSop()"
-            disabled
-            class="inline-flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white text-sm font-semibold rounded-lg shadow disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 active:bg-slate-800 transition-colors duration-150">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-            </svg>
-            Generate SOP
-          </button>
-        </div>
 
       </div>
     </div>
@@ -190,7 +203,7 @@
     <div id="output-section" class="hidden">
 
       <!-- Toolbar -->
-      <div class="flex items-center justify-between mb-5 flex-wrap gap-3">
+      <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
         <button onclick="restartSop()"
           class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-600 border border-slate-300 rounded-lg bg-white hover:bg-slate-50 transition">
           ↺ Restart
@@ -204,10 +217,11 @@
         </button>
       </div>
 
-      <!-- SOP content -->
-      <div class="bg-white border border-slate-200 rounded-xl shadow-sm px-10 py-10">
-        <div id="sop-output" class="sop-body max-w-3xl mx-auto"></div>
-      </div>
+      <!-- Tab bar (hidden when only 1 variation) -->
+      <div id="sop-tabs" class="hidden flex gap-1 border-b border-slate-200 mb-0 flex-wrap"></div>
+
+      <!-- SOP panels -->
+      <div id="sop-panels"></div>
 
     </div>
 
@@ -215,9 +229,28 @@
 
   <script>
     const API_BASE = 'http://localhost:8000';
-    let selectedFiles      = [];
-    let currentSopMarkdown = null;
-    let currentSopTitle    = null;
+    let selectedFiles   = [];
+    let sopVariations   = [];   // [{label, styleHint, markdown}, ...]
+    let activeVarIdx    = 0;
+    let numVariations   = 1;
+    let currentSopTitle = null;
+
+    const VARIATION_DEFS = [
+      { label: 'Standard',  styleHint: '' },
+      { label: 'Concise',   styleHint: 'Write this SOP in a concise, action-oriented style. Use brief bullet points and keep each section short. Focus on what practitioners need to execute the process efficiently.' },
+      { label: 'Executive', styleHint: 'Write this SOP as an executive-level document for senior management. Use strategic language, focus on governance and oversight, and keep procedural detail high-level.' },
+    ];
+
+    function setVariations(n) {
+      numVariations = n;
+      [1,2,3].forEach(i => {
+        const btn = document.getElementById(`var-btn-${i}`);
+        if (!btn) return;
+        btn.className = i === n
+          ? 'flex-1 px-3 py-2 bg-slate-900 text-white transition'
+          : 'flex-1 px-3 py-2 bg-white text-slate-600 hover:bg-slate-50 border-l border-slate-200 transition';
+      });
+    }
 
     // ── Auth ──────────────────────────────────────────────────────────────────
     function signOut() {
@@ -242,7 +275,7 @@
       { id: 'kpis_monitoring',         label: 'KPIs / Monitoring & Reporting' },
       { id: 'training',                label: 'Training Requirements' },
       { id: 'business_continuity',     label: 'Business Continuity & Contingency' },
-      { id: 'appendices',              label: 'Appendices' },
+      { id: 'sources',                 label: 'Sources and Assumptions', required: true },
     ];
     const PRESETS = {
       minimal:  ['purpose', 'scope', 'procedures'],
@@ -352,6 +385,13 @@
     function escHtml(s) {
       return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
+
+    // Ensure each **Bold label:** appears on its own line within list items
+    function preprocessSopMarkdown(md) {
+      // Insert a line break (two trailing spaces + newline) before any bold label
+      // that follows non-whitespace text on the same line
+      return md.replace(/([^\n])\s+(\*\*[A-Z][^*\n]{1,40}:\*\*)/g, '$1  \n   $2');
+    }
     function formatBytes(bytes) {
       if (bytes < 1024) return bytes + ' B';
       if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
@@ -380,70 +420,134 @@
       document.getElementById('error-bar').classList.add('hidden');
     }
 
-    // ── Generate SOP ──────────────────────────────────────────────────────────
+    // ── Generate SOP (multi-variation) ────────────────────────────────────────
     async function generateSop() {
       if (!selectedFiles.length) return;
 
-      const sopTitle  = document.getElementById('sop-title').value.trim();
-      const dept      = document.getElementById('department').value.trim();
-      const sections  = getSelectedSections();
+      const sopTitle = document.getElementById('sop-title').value.trim();
+      const sections = getSelectedSections();
+      const varDefs  = VARIATION_DEFS.slice(0, numVariations);
 
       hideError();
       document.getElementById('generate-btn').disabled = true;
-      showStatus('Reading source documents...', 'Extracting content from your files');
+      currentSopTitle = sopTitle;
+      sopVariations   = varDefs.map(v => ({ label: v.label, styleHint: v.styleHint, markdown: null }));
+      activeVarIdx    = 0;
 
-      const formData = new FormData();
-      selectedFiles.forEach(f => formData.append('files', f));
-      formData.append('sop_title',     sopTitle);
-      formData.append('department',    dept);
-      formData.append('sections_json', JSON.stringify(sections));
+      // Build output skeleton immediately
+      buildOutputPanels();
+      document.getElementById('form-section').classList.add('hidden');
+      document.getElementById('output-section').classList.remove('hidden');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
 
-      try {
-        showStatus('Generating SOP...', 'Claude is writing your Standard Operating Procedure');
-        const response = await fetch(`${API_BASE}/api/generate-sop`, {
-          method: 'POST',
-          body: formData
-        });
+      for (let i = 0; i < varDefs.length; i++) {
+        const v       = varDefs[i];
+        const panelEl = document.getElementById(`sop-panel-${i}`);
+        panelEl.innerHTML = `<div class="bg-white border border-slate-200 rounded-xl shadow-sm px-10 py-10">
+          <p class="text-slate-400 text-sm animate-pulse">Writing ${escHtml(v.label)} version…</p></div>`;
 
-        if (!response.ok) {
-          const err = await response.json();
-          throw new Error(err.detail || 'SOP generation failed');
+        showStatus(
+          `Generating option ${i + 1} of ${varDefs.length}: ${v.label}`,
+          'Claude is writing your Standard Operating Procedure'
+        );
+
+        const formData = new FormData();
+        selectedFiles.forEach(f => formData.append('files', f));
+        formData.append('sop_title',     sopTitle);
+        formData.append('sections_json', JSON.stringify(sections));
+        formData.append('style_hint',    v.styleHint);
+
+        try {
+          const response = await fetch(`${API_BASE}/api/generate-sop`, { method: 'POST', body: formData });
+          if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Generation failed');
+          }
+
+          const outputEl = panelEl.querySelector('.sop-body') || (() => {
+            panelEl.innerHTML = `<div class="bg-white border border-slate-200 rounded-xl shadow-sm px-10 py-10">
+              <div class="sop-body max-w-3xl mx-auto"></div></div>`;
+            return panelEl.querySelector('.sop-body');
+          })();
+
+          const reader  = response.body.getReader();
+          const decoder = new TextDecoder();
+          let accumulated = '';
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            accumulated += decoder.decode(value, { stream: true });
+          }
+          accumulated = accumulated.replace(/~~(.+?)~~/gs, '$1');
+          sopVariations[i].markdown = accumulated;
+          outputEl.innerHTML = marked.parse(preprocessSopMarkdown(accumulated));
+
+        } catch (err) {
+          sopVariations[i].markdown = null;
+          panelEl.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl px-5 py-4">
+            <p class="text-sm text-red-700">Failed to generate ${escHtml(v.label)} version: ${escHtml(err.message)}</p></div>`;
         }
-
-        const data         = await response.json();
-        currentSopMarkdown = data.sop_markdown;
-        currentSopTitle    = sopTitle;
-
-        hideStatus();
-        document.getElementById('form-section').classList.add('hidden');
-        document.getElementById('output-section').classList.remove('hidden');
-        document.getElementById('sop-output').innerHTML = marked.parse(currentSopMarkdown);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-
-      } catch (err) {
-        hideStatus();
-        document.getElementById('generate-btn').disabled = false;
-        showError(err.message.includes('fetch')
-          ? 'Cannot reach the backend. Make sure the Python server is running on port 8000.'
-          : err.message);
       }
+
+      hideStatus();
+    }
+
+    function buildOutputPanels() {
+      const tabBar   = document.getElementById('sop-tabs');
+      const panelDiv = document.getElementById('sop-panels');
+      tabBar.innerHTML   = '';
+      panelDiv.innerHTML = '';
+
+      const multi = sopVariations.length > 1;
+      tabBar.classList.toggle('hidden', !multi);
+
+      sopVariations.forEach((v, i) => {
+        if (multi) {
+          const tab = document.createElement('button');
+          tab.id        = `sop-tab-${i}`;
+          tab.textContent = v.label;
+          tab.className = i === 0
+            ? 'px-5 py-2 text-xs font-semibold border-b-2 border-slate-900 text-slate-900 transition whitespace-nowrap'
+            : 'px-5 py-2 text-xs font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-700 transition whitespace-nowrap';
+          tab.onclick = () => switchVariation(i);
+          tabBar.appendChild(tab);
+        }
+        const panel = document.createElement('div');
+        panel.id        = `sop-panel-${i}`;
+        panel.className = i === 0 ? '' : 'hidden';
+        panelDiv.appendChild(panel);
+      });
+    }
+
+    function switchVariation(idx) {
+      activeVarIdx = idx;
+      sopVariations.forEach((_, i) => {
+        const tab   = document.getElementById(`sop-tab-${i}`);
+        const panel = document.getElementById(`sop-panel-${i}`);
+        if (tab) tab.className = i === idx
+          ? 'px-5 py-2 text-xs font-semibold border-b-2 border-slate-900 text-slate-900 transition whitespace-nowrap'
+          : 'px-5 py-2 text-xs font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-700 transition whitespace-nowrap';
+        if (panel) panel.classList.toggle('hidden', i !== idx);
+      });
     }
 
     // ── Restart ───────────────────────────────────────────────────────────────
     function restartSop() {
-      selectedFiles      = [];
-      currentSopMarkdown = null;
-      currentSopTitle    = null;
+      selectedFiles   = [];
+      sopVariations   = [];
+      currentSopTitle = null;
+      activeVarIdx    = 0;
       renderFileList();
       document.getElementById('sop-title').value  = '';
-      document.getElementById('department').value = '';
+      document.getElementById('sop-tabs').innerHTML   = '';
+      document.getElementById('sop-panels').innerHTML = '';
       applyPreset('standard');
+      setVariations(1);
       updateGenerateBtn();
       hideError();
       hideStatus();
       document.getElementById('output-section').classList.add('hidden');
       document.getElementById('form-section').classList.remove('hidden');
-      document.getElementById('sop-output').innerHTML = '';
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
@@ -451,25 +555,24 @@
     buildSectionList();
     applyPreset('standard');
 
-    // ── Download Word ─────────────────────────────────────────────────────────
+    // ── Download Word (active variation) ──────────────────────────────────────
     async function downloadWord() {
-      if (!currentSopMarkdown) return;
+      const active = sopVariations[activeVarIdx];
+      if (!active || !active.markdown) { showError('No SOP available to download yet.'); return; }
+      const varLabel = sopVariations.length > 1 ? `_${active.label}` : '';
       try {
         const formData = new FormData();
-        formData.append('sop_markdown', currentSopMarkdown);
+        formData.append('sop_markdown', active.markdown);
         formData.append('sop_title',    currentSopTitle || 'SOP');
 
-        const response = await fetch(`${API_BASE}/api/export-sop`, {
-          method: 'POST',
-          body: formData
-        });
+        const response = await fetch(`${API_BASE}/api/export-sop`, { method: 'POST', body: formData });
         if (!response.ok) throw new Error('Export failed');
 
-        const blob     = await response.blob();
-        const url      = URL.createObjectURL(blob);
-        const a        = document.createElement('a');
-        a.href         = url;
-        a.download     = (currentSopTitle || 'SOP').replace(/[^a-z0-9]/gi, '_') + '.docx';
+        const blob = await response.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = ((currentSopTitle || 'SOP') + varLabel).replace(/[^a-z0-9_]/gi, '_') + '.docx';
         a.click();
         URL.revokeObjectURL(url);
       } catch (err) {

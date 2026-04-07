@@ -3,20 +3,23 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Create a Process Map – POET</title>
+  <title>Create a BPMN Process Map &amp; Implementation Plan – POET</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
   <!-- bpmn-js renderer -->
   <link rel="stylesheet" href="https://unpkg.com/bpmn-js@17/dist/assets/bpmn-js.css" />
   <link rel="stylesheet" href="https://unpkg.com/bpmn-js@17/dist/assets/diagram-js.css" />
   <link rel="stylesheet" href="https://unpkg.com/bpmn-js@17/dist/assets/bpmn-font/css/bpmn.css" />
-  <script src="https://unpkg.com/bpmn-js@17/dist/bpmn-viewer.production.min.js"></script>
+  <script src="https://unpkg.com/bpmn-js@17/dist/bpmn-navigated-viewer.production.min.js"></script>
 
   <style>
     body { font-family: 'Segoe UI', system-ui, sans-serif; }
     #drop-zone.dragover { border-color: #475569; background-color: #f1f5f9; }
     #bpmn-container { width: 100%; height: 520px; border: 1px solid #e2e8f0; border-radius: 0.75rem; background: #fff; }
     .bjs-powered-by { display: none !important; }
+    /* Focus ring when keyboard-navigating; suppress default outline */
+    .bpmn-canvas-wrap:focus { outline: none; box-shadow: 0 0 0 2px #94a3b8; border-radius: 0.75rem; }
   </style>
 
   <script>
@@ -28,110 +31,176 @@
 <body class="min-h-screen bg-slate-50">
 
   <!-- Header -->
-  <header class="bg-slate-900 text-white px-8 py-0 flex items-center min-h-28 relative shadow-lg">
-    <img src="/ChatGPT Image Feb 23, 2026, 09_07_03 PM.png" alt="POET" class="h-24 w-auto object-contain mr-6" />
+  <header class="bg-slate-900 text-white px-8 py-0 flex items-center min-h-16 relative shadow-lg">
+    <img src="/ChatGPT Image Feb 23, 2026, 09_07_03 PM.png" alt="POET" class="h-10 w-auto object-contain mr-6" />
     <div>
-      <div class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-1">SSA & Company</div>
-      <h1 class="text-2xl font-bold tracking-tight">Process Optimization Engineering Tool (POET)</h1>
-      <p class="text-slate-400 text-sm mt-0.5">AI-Enabled Process Re-Engineering Platform</p>
+      <div class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-0">SSA & Company</div>
+      <h1 class="text-lg font-bold tracking-tight">Process Optimization Engineering Tool (POET)</h1>
+      <p class="text-slate-400 text-xs mt-0.5">AI-Enabled Process Re-Engineering Platform</p>
     </div>
     <div class="ml-auto flex items-center gap-4">
+      <a href="/index.html" class="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7m-9 10V10m0 0h4m-4 0H7" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 21V10h6v11" />
+        </svg>
+        Home
+      </a>
       <button onclick="signOut()" class="text-xs text-slate-400 hover:text-white transition">Sign out</button>
       <div class="h-8 w-8 rounded-full bg-slate-600 flex items-center justify-center text-white font-medium text-sm">U</div>
     </div>
   </header>
 
   <!-- Hero Banner -->
-  <div class="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-8 py-4">
+  <div class="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-8 py-2">
     <div class="max-w-5xl mx-auto">
-      <p class="text-slate-300 text-sm">Upload process documentation to automatically generate a BPMN-aligned process map.</p>
+      <p class="text-slate-300 text-xs">Upload process documentation to generate current and future state BPMN process maps, then produce a structured implementation plan to bridge the gap.</p>
     </div>
   </div>
 
   <!-- Page Content -->
-  <main class="max-w-5xl mx-auto px-8 py-8">
+  <main class="max-w-5xl mx-auto px-8 py-4">
 
-    <div class="flex items-center gap-3 mb-6">
+    <div class="flex items-center gap-3 mb-3">
       <a href="/index.html" class="text-sm text-slate-400 hover:text-slate-700 transition">← Back</a>
       <span class="text-slate-300">/</span>
-      <span class="text-sm font-semibold text-slate-700">Create a Process Map</span>
+      <span class="text-sm font-semibold text-slate-700">Create a BPMN Process Map &amp; Implementation Plan</span>
     </div>
 
-    <!-- Upload Section -->
-    <div id="upload-section" class="mb-8">
-      <h2 class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-4">Step 1 — Upload Your Document</h2>
+    <!-- Step 1 — Configure & Upload -->
+    <div id="upload-section" class="mb-4">
+      <h2 class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-2">Step 1 — Configure &amp; Upload Documents</h2>
 
-      <!-- Process Map Title -->
-      <div class="mb-5">
-        <label class="block text-xs font-semibold text-slate-600 mb-1.5" for="process-title">
-          Process Map Title <span class="text-red-500">*</span>
-        </label>
-        <input id="process-title" type="text" placeholder="e.g. Invoice Approval Process"
-          oninput="updateGenerateBtn()"
-          class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400" />
-      </div>
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
 
-      <!-- BPMN Level -->
-      <div class="mb-5">
-        <label class="block text-xs font-semibold text-slate-600 mb-1.5" for="bpmn-level">
-          BPMN Level <span class="text-red-500">*</span>
-        </label>
-        <select id="bpmn-level" onchange="updateGenerateBtn()"
-          class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400 bg-white">
-          <option value="">— Select a level —</option>
-          <option value="1">Level 1 — High-level overview (major phases only)</option>
-          <option value="2">Level 2 — Key activities within each phase</option>
-          <option value="3">Level 3 — Detailed steps and decision points</option>
-          <option value="4">Level 4 — Task-level detail with system interactions</option>
-        </select>
-      </div>
-
-      <div id="drop-zone"
-        class="border-2 border-dashed border-slate-300 rounded-xl p-10 text-center cursor-pointer transition-all duration-200 hover:border-slate-400 hover:bg-slate-100"
-        onclick="document.getElementById('file-input').click()"
-        ondragover="handleDragOver(event)"
-        ondragleave="handleDragLeave(event)"
-        ondrop="handleDrop(event)">
-        <div class="flex flex-col items-center gap-3">
-          <div class="w-12 h-12 rounded-full bg-slate-200 flex items-center justify-center">
-            <svg class="w-6 h-6 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-            </svg>
+        <!-- Row 1: Title + Level -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5 p-4 border-b border-slate-100">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5" for="process-title">
+              Process Map Title <span class="text-red-500">*</span>
+            </label>
+            <input id="process-title" type="text" placeholder="e.g. Invoice Approval Process"
+              oninput="updateGenerateBtn()"
+              class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400" />
           </div>
           <div>
-            <p class="font-semibold text-slate-700">Drop files here or <span class="text-slate-900 underline">browse</span></p>
-            <p class="text-sm text-slate-400 mt-1">Supports PDF, Word (.docx), PowerPoint (.pptx), and plain text</p>
-            <p class="text-xs text-slate-400 mt-0.5">Multiple files supported · Maximum 20 MB per file</p>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5" for="bpmn-level">
+              BPMN Level <span class="text-red-500">*</span>
+            </label>
+            <select id="bpmn-level" onchange="updateGenerateBtn()"
+              class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400 bg-white">
+              <option value="">— Select a level —</option>
+              <option value="1">Level 1 — Process Landscape (5–10 major phases, executive view)</option>
+              <option value="2">Level 2 — End-to-End Cross-Functional Flow (15–25 activities, swimlanes)</option>
+              <option value="3">Level 3 — Detailed Operational Workflow (30–50 steps, exception paths)</option>
+              <option value="4">Level 4 — Work Instructions / System Detail (50–80 steps, field-level)</option>
+            </select>
           </div>
         </div>
-        <input id="file-input" type="file" class="hidden" multiple
-          accept=".pdf,.docx,.doc,.pptx,.ppt,.txt"
-          onchange="handleFileSelect(event)" />
-      </div>
 
-      <!-- Selected files list -->
-      <div id="file-list" class="hidden mt-4 space-y-2"></div>
+        <!-- Row 2: What to generate -->
+        <div class="p-4 border-b border-slate-100">
+          <p class="text-xs font-semibold text-slate-600 mb-2">What would you like to generate? <span class="text-red-500">*</span></p>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <label id="card-current" onclick="onOutputToggle()" class="flex items-start gap-3 border-2 border-slate-900 bg-slate-50 rounded-xl px-3 py-2 cursor-pointer select-none transition">
+              <input type="checkbox" id="want-current" checked class="mt-0.5 h-4 w-4 accent-slate-800 flex-shrink-0" />
+              <div>
+                <p class="text-sm font-semibold text-slate-800">Current State Map</p>
+                <p class="text-xs text-slate-500 mt-0.5">Document the process as it exists today</p>
+              </div>
+            </label>
+            <label id="card-future" onclick="onOutputToggle()" class="flex items-start gap-3 border-2 border-slate-200 rounded-xl px-3 py-2 cursor-pointer select-none transition hover:border-slate-400">
+              <input type="checkbox" id="want-future" class="mt-0.5 h-4 w-4 accent-slate-800 flex-shrink-0" />
+              <div>
+                <p class="text-sm font-semibold text-slate-800">Future State Map</p>
+                <p class="text-xs text-slate-500 mt-0.5">Design the optimised process</p>
+              </div>
+            </label>
+            <label id="card-impl" class="flex items-start gap-3 border-2 border-slate-200 rounded-xl px-3 py-2 select-none transition opacity-40 cursor-not-allowed">
+              <input type="checkbox" id="want-impl" disabled class="mt-0.5 h-4 w-4 accent-slate-800 flex-shrink-0" />
+              <div>
+                <p class="text-sm font-semibold text-slate-800">Implementation Plan</p>
+                <p class="text-xs text-slate-500 mt-0.5">Roadmap from current → future (requires both maps)</p>
+              </div>
+            </label>
+          </div>
+        </div>
 
-      <!-- Generate Button -->
-      <div class="mt-5">
-        <button id="generate-btn"
-          onclick="generateBpmn()"
-          disabled
-          class="inline-flex items-center gap-2 px-6 py-3 bg-slate-900 text-white text-sm font-semibold rounded-lg shadow disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 active:bg-slate-800 transition-colors duration-150">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>
-          </svg>
-          Generate Process Map
-        </button>
+        <!-- Row 3: Upload zones -->
+        <div id="upload-zones" class="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-100">
+
+          <!-- Current State upload -->
+          <div class="p-4">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2.5 py-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block"></span>Current State
+              </span>
+              <span class="text-xs text-slate-400">— how the process works today</span>
+            </div>
+            <div id="drop-zone-current"
+              class="border-2 border-dashed border-slate-300 rounded-xl p-3 text-center cursor-pointer transition hover:border-emerald-400 hover:bg-emerald-50"
+              onclick="document.getElementById('file-input-current').click()"
+              ondragover="handleDragOver(event,'current')" ondragleave="handleDragLeave(event,'current')" ondrop="handleDrop(event,'current')">
+              <svg class="w-5 h-5 text-slate-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+              </svg>
+              <p class="text-sm font-medium text-slate-600">Drop files or <span class="underline">browse</span></p>
+              <p class="text-xs text-slate-400 mt-1">PDF, Word, PPT, TXT, Excel, CSV</p>
+              <input id="file-input-current" type="file" class="hidden" multiple
+                accept=".pdf,.docx,.doc,.pptx,.ppt,.txt,.xlsx,.xls,.csv"
+                onchange="handleFileSelect(event,'current')" />
+            </div>
+            <div id="file-list-current" class="mt-3 space-y-1.5"></div>
+          </div>
+
+          <!-- Future State upload -->
+          <div id="future-upload-zone" class="p-4 hidden">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-2.5 py-0.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block"></span>Future State
+              </span>
+              <span class="text-xs text-slate-400">— how the process should work</span>
+            </div>
+            <div id="drop-zone-future"
+              class="border-2 border-dashed border-slate-300 rounded-xl p-3 text-center cursor-pointer transition hover:border-blue-400 hover:bg-blue-50"
+              onclick="document.getElementById('file-input-future').click()"
+              ondragover="handleDragOver(event,'future')" ondragleave="handleDragLeave(event,'future')" ondrop="handleDrop(event,'future')">
+              <svg class="w-5 h-5 text-slate-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+              </svg>
+              <p class="text-sm font-medium text-slate-600">Drop files or <span class="underline">browse</span></p>
+              <p class="text-xs text-slate-400 mt-1">PDF, Word, PPT, TXT, Excel, CSV</p>
+              <input id="file-input-future" type="file" class="hidden" multiple
+                accept=".pdf,.docx,.doc,.pptx,.ppt,.txt,.xlsx,.xls,.csv"
+                onchange="handleFileSelect(event,'future')" />
+            </div>
+            <div id="file-list-future" class="mt-3 space-y-1.5"></div>
+          </div>
+
+        </div>
+
+        <!-- Footer: Generate button -->
+        <div class="border-t border-slate-100 px-6 py-2 bg-slate-50 flex justify-end">
+          <button id="generate-btn"
+            onclick="analyseDocuments()"
+            disabled
+            class="inline-flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white text-sm font-semibold rounded-lg shadow disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 active:bg-slate-800 transition">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>
+            </svg>
+            Analyse &amp; Generate
+          </button>
+        </div>
+
       </div>
     </div>
 
     <!-- Progress / Status -->
     <div id="status-bar" class="hidden mb-6">
       <div class="bg-white border border-slate-200 rounded-xl px-5 py-4 flex items-center gap-4">
-        <div id="spinner" class="w-5 h-5 border-2 border-slate-300 border-t-slate-700 rounded-full animate-spin flex-shrink-0"></div>
+        <div class="w-5 h-5 border-2 border-slate-300 border-t-slate-700 rounded-full animate-spin flex-shrink-0"></div>
         <div>
-          <p id="status-text" class="text-sm font-medium text-slate-700">Uploading document...</p>
+          <p id="status-text" class="text-sm font-medium text-slate-700">Analysing documents...</p>
           <p id="status-sub" class="text-xs text-slate-400 mt-0.5">This may take 15–30 seconds</p>
         </div>
       </div>
@@ -143,172 +212,238 @@
       <p id="error-text" class="text-xs text-red-500 mt-1"></p>
     </div>
 
-    <!-- BPMN Viewer Section -->
+    <!-- Step 2 — Process Selection -->
+    <div id="process-select-section" class="hidden mb-8">
+      <h2 class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-1">Step 2 — Select Processes to Map</h2>
+      <p class="text-sm text-slate-500 mb-4">The following processes were identified in your document(s). Select which ones to generate maps for.</p>
+
+      <div id="process-checklist" class="space-y-2 mb-4"></div>
+
+      <div class="flex items-center gap-3 mb-5">
+        <button onclick="selectAllProcesses(true)"  class="text-xs text-slate-500 hover:text-slate-900 underline transition">Select all</button>
+        <span class="text-slate-300">·</span>
+        <button onclick="selectAllProcesses(false)" class="text-xs text-slate-500 hover:text-slate-900 underline transition">Deselect all</button>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <button onclick="generateSelectedMaps()"
+          class="inline-flex items-center gap-2 px-6 py-3 bg-slate-900 text-white text-sm font-semibold rounded-lg shadow hover:bg-slate-700 active:bg-slate-800 transition-colors duration-150">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>
+          </svg>
+          Generate Maps
+        </button>
+        <button onclick="restartProcess()" class="text-xs text-slate-400 hover:text-slate-700 transition">← Start over</button>
+      </div>
+    </div>
+
+    <!-- Step 4 — BPMN Viewer Section (tabbed, one per generated map) -->
     <div id="viewer-section" class="hidden">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-xs font-semibold tracking-widest text-slate-400 uppercase">Step 2 — Review Your Process Map</h2>
-        <div class="flex items-center gap-3 flex-wrap">
-          <button onclick="restartProcess()" class="text-xs text-slate-500 hover:text-red-600 border border-slate-200 rounded-lg px-3 py-1.5 transition">
-            ↺ Restart
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-xs font-semibold tracking-widest text-slate-400 uppercase">Step 4 — Review Your Process Map(s)</h2>
+        <button onclick="restartProcess()" class="text-xs text-slate-500 hover:text-red-600 border border-slate-200 rounded-lg px-3 py-1.5 transition">↺ Restart</button>
+      </div>
+
+      <!-- Map selector table (hidden when only one map) -->
+      <div id="map-tabs" class="hidden mb-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"></div>
+
+      <!-- Per-map panels -->
+      <div id="map-panels"></div>
+
+      <!-- Step 5 — Implementation Plan (shown only when both current + future state maps exist) -->
+      <div id="impl-plan-section" class="hidden mt-8">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-xs font-semibold tracking-widest text-slate-400 uppercase">Step 5 — Implementation Plan</h2>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-6 mb-4">
+          <p class="text-sm text-slate-600 mb-4">Generate a structured roadmap to transition from your <strong>Current State</strong> to your <strong>Future State</strong> process. Choose the sections to include:</p>
+
+          <!-- Section selector -->
+          <div class="mb-5">
+            <div class="flex items-center justify-between mb-2">
+              <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Sections to Include</p>
+              <div class="flex gap-3">
+                <button type="button" onclick="implSelectAll(true)"  class="text-xs text-slate-500 hover:text-slate-800 underline">Select all</button>
+                <button type="button" onclick="implSelectAll(false)" class="text-xs text-slate-500 hover:text-slate-800 underline">Deselect all</button>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <label class="impl-sec-label flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer text-sm text-slate-700 transition select-none">
+                <input type="checkbox" class="impl-sec-cb" value="executive_summary" checked /> Executive Summary
+              </label>
+              <label class="impl-sec-label flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer text-sm text-slate-700 transition select-none">
+                <input type="checkbox" class="impl-sec-cb" value="gap_analysis" checked /> Gap Analysis
+              </label>
+              <label class="impl-sec-label flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer text-sm text-slate-700 transition select-none">
+                <input type="checkbox" class="impl-sec-cb" value="implementation_phases" checked /> Implementation Phases
+              </label>
+              <label class="impl-sec-label flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer text-sm text-slate-700 transition select-none">
+                <input type="checkbox" class="impl-sec-cb" value="resource_requirements" checked /> Resource Requirements
+              </label>
+              <label class="impl-sec-label flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer text-sm text-slate-700 transition select-none">
+                <input type="checkbox" class="impl-sec-cb" value="risks_mitigations" checked /> Risks &amp; Mitigations
+              </label>
+              <label class="impl-sec-label flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer text-sm text-slate-700 transition select-none">
+                <input type="checkbox" class="impl-sec-cb" value="success_metrics" checked /> Success Metrics &amp; KPIs
+              </label>
+              <label class="impl-sec-label flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer text-sm text-slate-700 transition select-none">
+                <input type="checkbox" class="impl-sec-cb" value="change_management" checked /> Change Management
+              </label>
+            </div>
+          </div>
+
+          <!-- Implementation parameters selector -->
+          <div class="mb-5">
+            <div class="flex items-center justify-between mb-2">
+              <div>
+                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Implementation Parameters</p>
+                <p class="text-xs text-slate-400 mt-0.5">Select which strategic principles the plan should address</p>
+              </div>
+              <div class="flex gap-3">
+                <button type="button" onclick="implParamSelectAll(true)"  class="text-xs text-slate-500 hover:text-slate-800 underline">Select all</button>
+                <button type="button" onclick="implParamSelectAll(false)" class="text-xs text-slate-500 hover:text-slate-800 underline">Deselect all</button>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              <label class="impl-param-label flex items-start gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
+                <input type="checkbox" class="impl-param-cb mt-0.5 shrink-0" value="business_continuity" checked />
+                <span>
+                  <span class="block text-sm font-medium text-slate-700">Business Continuity</span>
+                  <span class="block text-xs text-slate-400 leading-snug mt-0.5">No disruption; parallel systems &amp; rollback</span>
+                </span>
+              </label>
+              <label class="impl-param-label flex items-start gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
+                <input type="checkbox" class="impl-param-cb mt-0.5 shrink-0" value="customer_experience" checked />
+                <span>
+                  <span class="block text-sm font-medium text-slate-700">Customer Experience</span>
+                  <span class="block text-xs text-slate-400 leading-snug mt-0.5">Speed, transparency &amp; satisfaction</span>
+                </span>
+              </label>
+              <label class="impl-param-label flex items-start gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
+                <input type="checkbox" class="impl-param-cb mt-0.5 shrink-0" value="phased_delivery" checked />
+                <span>
+                  <span class="block text-sm font-medium text-slate-700">Phased Delivery</span>
+                  <span class="block text-xs text-slate-400 leading-snug mt-0.5">Waves; high-volume use cases first</span>
+                </span>
+              </label>
+              <label class="impl-param-label flex items-start gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
+                <input type="checkbox" class="impl-param-cb mt-0.5 shrink-0" value="human_in_the_loop" checked />
+                <span>
+                  <span class="block text-sm font-medium text-slate-700">Human-in-the-Loop</span>
+                  <span class="block text-xs text-slate-400 leading-snug mt-0.5">AI augmentation with human oversight</span>
+                </span>
+              </label>
+              <label class="impl-param-label flex items-start gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
+                <input type="checkbox" class="impl-param-cb mt-0.5 shrink-0" value="data_governance" checked />
+                <span>
+                  <span class="block text-sm font-medium text-slate-700">Data &amp; Governance</span>
+                  <span class="block text-xs text-slate-400 leading-snug mt-0.5">Quality data; accuracy, fairness, auditability</span>
+                </span>
+              </label>
+              <label class="impl-param-label flex items-start gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
+                <input type="checkbox" class="impl-param-cb mt-0.5 shrink-0" value="technology_flexibility" checked />
+                <span>
+                  <span class="block text-sm font-medium text-slate-700">Technology Flexibility</span>
+                  <span class="block text-xs text-slate-400 leading-snug mt-0.5">Modular, API-driven; legacy integration</span>
+                </span>
+              </label>
+              <label class="impl-param-label flex items-start gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
+                <input type="checkbox" class="impl-param-cb mt-0.5 shrink-0" value="regulatory_compliance" checked />
+                <span>
+                  <span class="block text-sm font-medium text-slate-700">Regulatory Compliance</span>
+                  <span class="block text-xs text-slate-400 leading-snug mt-0.5">Explainability, audit trails, regulations</span>
+                </span>
+              </label>
+              <label class="impl-param-label flex items-start gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
+                <input type="checkbox" class="impl-param-cb mt-0.5 shrink-0" value="change_management" checked />
+                <span>
+                  <span class="block text-sm font-medium text-slate-700">Change Management</span>
+                  <span class="block text-xs text-slate-400 leading-snug mt-0.5">Roles, training &amp; adoption</span>
+                </span>
+              </label>
+              <label class="impl-param-label flex items-start gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
+                <input type="checkbox" class="impl-param-cb mt-0.5 shrink-0" value="financial_accountability" checked />
+                <span>
+                  <span class="block text-sm font-medium text-slate-700">Financial Accountability</span>
+                  <span class="block text-xs text-slate-400 leading-snug mt-0.5">ROI tracking; measurable outcomes</span>
+                </span>
+              </label>
+              <label class="impl-param-label flex items-start gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
+                <input type="checkbox" class="impl-param-cb mt-0.5 shrink-0" value="performance_measurement" checked />
+                <span>
+                  <span class="block text-sm font-medium text-slate-700">Performance Measurement</span>
+                  <span class="block text-xs text-slate-400 leading-snug mt-0.5">KPIs: cycle time, cost, satisfaction</span>
+                </span>
+              </label>
+              <label class="impl-param-label flex items-start gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
+                <input type="checkbox" class="impl-param-cb mt-0.5 shrink-0" value="scalability" checked />
+                <span>
+                  <span class="block text-sm font-medium text-slate-700">Scalability</span>
+                  <span class="block text-xs text-slate-400 leading-snug mt-0.5">Expand across products &amp; volumes</span>
+                </span>
+              </label>
+              <label class="impl-param-label flex items-start gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 cursor-pointer transition select-none">
+                <input type="checkbox" class="impl-param-cb mt-0.5 shrink-0" value="governance_leadership" checked />
+                <span>
+                  <span class="block text-sm font-medium text-slate-700">Governance &amp; Leadership</span>
+                  <span class="block text-xs text-slate-400 leading-snug mt-0.5">Ownership, decision rights &amp; sponsorship</span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <button id="gen-impl-btn" onclick="generateImplementationPlan()"
+            class="inline-flex items-center gap-2 px-6 py-3 bg-slate-900 text-white text-sm font-semibold rounded-lg shadow hover:bg-slate-700 transition">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+            </svg>
+            Generate Implementation Plan
           </button>
-          <button onclick="fitDiagram()" class="text-xs text-slate-500 hover:text-slate-900 border border-slate-200 rounded-lg px-3 py-1.5 transition">
-            Fit to Screen
-          </button>
-          <!-- Format selector + export button -->
-          <div class="flex items-center gap-2">
-            <select id="export-format" class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-slate-400 cursor-pointer">
-              <option value="pptx">PowerPoint (.pptx)</option>
-              <option value="docx">Word (.docx)</option>
-              <option value="vsdx">Visio (.vsdx)</option>
-            </select>
-            <button id="export-btn" onclick="downloadExport()"
-              class="inline-flex items-center gap-1.5 text-xs font-medium text-white bg-slate-900 hover:bg-slate-700 rounded-lg px-3 py-1.5 transition disabled:opacity-40 disabled:cursor-not-allowed">
+        </div>
+
+        <!-- Implementation plan output -->
+        <div id="impl-plan-output" class="hidden">
+          <div class="flex items-center justify-between mb-3">
+            <p class="text-xs text-slate-400">Implementation Plan</p>
+            <button onclick="downloadImplPlan()"
+              class="inline-flex items-center gap-1.5 text-xs font-medium text-white bg-slate-900 hover:bg-slate-700 rounded-lg px-3 py-1.5 transition">
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-              Download
+              Download as Word
             </button>
           </div>
+          <div class="bg-white border border-slate-200 rounded-xl shadow-sm px-10 py-10">
+            <div id="impl-plan-body" class="sop-body max-w-3xl mx-auto"></div>
+          </div>
         </div>
       </div>
 
-      <div id="bpmn-container"></div>
-
-      <p class="text-xs text-slate-400 mt-3 text-center">Use scroll to zoom · Click and drag to pan</p>
-
-      <!-- BPMN Shape Key -->
-      <div class="mt-5 bg-white border border-slate-200 rounded-xl p-4">
-        <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Shape Key</h3>
-        <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-2">
-
-          <!-- Start Event -->
-          <div class="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24" flex-shrink="0">
-              <circle cx="12" cy="12" r="10" fill="white" stroke="#22c55e" stroke-width="2"/>
-            </svg>
-            <span class="text-xs text-slate-600">Start Event</span>
-          </div>
-
-          <!-- End Event -->
-          <div class="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="8" fill="white" stroke="#991b1b" stroke-width="4"/>
-            </svg>
-            <span class="text-xs text-slate-600">End Event</span>
-          </div>
-
-          <!-- Exclusive Gateway -->
-          <div class="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24">
-              <polygon points="12,2 22,12 12,22 2,12" fill="white" stroke="#555" stroke-width="1.5"/>
-              <line x1="8" y1="8" x2="16" y2="16" stroke="#555" stroke-width="2"/>
-              <line x1="16" y1="8" x2="8" y2="16" stroke="#555" stroke-width="2"/>
-            </svg>
-            <span class="text-xs text-slate-600">Exclusive Gateway — decision (one path)</span>
-          </div>
-
-          <!-- Parallel Gateway -->
-          <div class="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24">
-              <polygon points="12,2 22,12 12,22 2,12" fill="white" stroke="#555" stroke-width="1.5"/>
-              <line x1="12" y1="6" x2="12" y2="18" stroke="#555" stroke-width="2"/>
-              <line x1="6" y1="12" x2="18" y2="12" stroke="#555" stroke-width="2"/>
-            </svg>
-            <span class="text-xs text-slate-600">Parallel Gateway — all paths taken</span>
-          </div>
-
-          <!-- Inclusive Gateway -->
-          <div class="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24">
-              <polygon points="12,2 22,12 12,22 2,12" fill="white" stroke="#555" stroke-width="1.5"/>
-              <circle cx="12" cy="12" r="4" fill="none" stroke="#555" stroke-width="2"/>
-            </svg>
-            <span class="text-xs text-slate-600">Inclusive Gateway — one or more paths</span>
-          </div>
-
-          <!-- User Task -->
-          <div class="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24">
-              <rect x="1" y="1" width="22" height="22" rx="2" fill="white" stroke="#555" stroke-width="1.5"/>
-              <circle cx="7" cy="7.5" r="2.5" fill="#777"/>
-              <path d="M1.5 17 C1.5 12.5 12.5 12.5 12.5 17" fill="#777"/>
-            </svg>
-            <span class="text-xs text-slate-600">User Task — person performs activity</span>
-          </div>
-
-          <!-- Service Task -->
-          <div class="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24">
-              <rect x="1" y="1" width="22" height="22" rx="2" fill="white" stroke="#555" stroke-width="1.5"/>
-              <!-- gear -->
-              <circle cx="7.5" cy="8" r="2.5" fill="none" stroke="#777" stroke-width="1.5"/>
-              <circle cx="7.5" cy="8" r="1" fill="#777"/>
-              <line x1="7.5" y1="4.5" x2="7.5" y2="5.5" stroke="#777" stroke-width="1.5"/>
-              <line x1="7.5" y1="10.5" x2="7.5" y2="11.5" stroke="#777" stroke-width="1.5"/>
-              <line x1="4" y1="8" x2="5" y2="8" stroke="#777" stroke-width="1.5"/>
-              <line x1="10" y1="8" x2="11" y2="8" stroke="#777" stroke-width="1.5"/>
-              <line x1="5.1" y1="5.1" x2="5.8" y2="5.8" stroke="#777" stroke-width="1.5"/>
-              <line x1="9.2" y1="10.2" x2="9.9" y2="10.9" stroke="#777" stroke-width="1.5"/>
-              <line x1="9.9" y1="5.1" x2="9.2" y2="5.8" stroke="#777" stroke-width="1.5"/>
-              <line x1="5.8" y1="10.2" x2="5.1" y2="10.9" stroke="#777" stroke-width="1.5"/>
-            </svg>
-            <span class="text-xs text-slate-600">Service Task — system / automated step</span>
-          </div>
-
-          <!-- Manual Task -->
-          <div class="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24">
-              <rect x="1" y="1" width="22" height="22" rx="2" fill="white" stroke="#555" stroke-width="1.5"/>
-              <!-- hand icon -->
-              <path d="M5 14 L5 8.5 Q5 7.5 6 7.5 Q7 7.5 7 8.5 L7 8 Q7 7 8 7 Q9 7 9 8 L9 7.5 Q9 6.5 10 6.5 Q11 6.5 11 7.5 L11 7 Q11 6 12 6 Q13 6 13 7 L13 12 L14 12 Q15 12 15 13 L13 16 Q12 18 10 18 L7 18 Q5 18 5 16 Z" fill="#777"/>
-            </svg>
-            <span class="text-xs text-slate-600">Manual Task — offline / physical work</span>
-          </div>
-
-          <!-- Business Rule Task -->
-          <div class="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24">
-              <rect x="1" y="1" width="22" height="22" rx="2" fill="white" stroke="#555" stroke-width="1.5"/>
-              <rect x="3.5" y="5" width="8" height="3" fill="#777"/>
-              <rect x="3.5" y="9.5" width="17" height="2" fill="#bbb"/>
-              <rect x="3.5" y="13" width="17" height="2" fill="#ddd"/>
-              <rect x="3.5" y="16.5" width="17" height="2" fill="#eee" stroke="#bbb" stroke-width="0.5"/>
-            </svg>
-            <span class="text-xs text-slate-600">Business Rule Task — policy / rule check</span>
-          </div>
-
-          <!-- Send Task -->
-          <div class="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24">
-              <rect x="1" y="1" width="22" height="22" rx="2" fill="white" stroke="#555" stroke-width="1.5"/>
-              <!-- filled envelope -->
-              <rect x="4" y="7" width="16" height="11" rx="1" fill="#555"/>
-              <polyline points="4,7 12,14 20,7" fill="none" stroke="white" stroke-width="1.5"/>
-            </svg>
-            <span class="text-xs text-slate-600">Send Task — sends message / notification</span>
-          </div>
-
-          <!-- Receive Task -->
-          <div class="flex items-center gap-2">
-            <svg width="24" height="24" viewBox="0 0 24 24">
-              <rect x="1" y="1" width="22" height="22" rx="2" fill="white" stroke="#555" stroke-width="1.5"/>
-              <!-- outline envelope -->
-              <rect x="4" y="7" width="16" height="11" rx="1" fill="white" stroke="#555" stroke-width="1.5"/>
-              <polyline points="4,7 12,14 20,7" fill="none" stroke="#555" stroke-width="1.5"/>
-            </svg>
-            <span class="text-xs text-slate-600">Receive Task — waits for message / trigger</span>
-          </div>
-
-        </div>
-      </div>
     </div>
 
   </main>
 
+  <style>
+    .sop-body h1 { font-size: 1.35rem; font-weight: 700; color: #0f172a; margin: 0 0 0.25rem; }
+    .sop-body h2 { font-size: 0.95rem; font-weight: 700; color: #0f172a; text-transform: uppercase; letter-spacing: 0.04em; margin: 1.75rem 0 0.5rem; padding-bottom: 0.3rem; border-bottom: 1px solid #e2e8f0; }
+    .sop-body p  { color: #334155; line-height: 1.75; margin-bottom: 0.6rem; font-size: 0.875rem; }
+    .sop-body ol { list-style: decimal; padding-left: 1.5rem; margin-bottom: 0.75rem; }
+    .sop-body ol li { color: #334155; margin-bottom: 0.4rem; line-height: 1.65; font-size: 0.875rem; }
+    .sop-body ul { list-style: disc; padding-left: 1.5rem; margin-bottom: 0.75rem; }
+    .sop-body ul li { color: #334155; margin-bottom: 0.4rem; line-height: 1.65; font-size: 0.875rem; }
+    .sop-body strong { color: #0f172a; }
+    .sop-body hr { border: none; border-top: 1px solid #e2e8f0; margin: 0.5rem 0 1.25rem; }
+    .impl-sec-label:has(input:checked)   { border-color: #0f172a; background-color: #f8fafc; color: #0f172a; font-weight: 500; }
+    .impl-param-label:has(input:checked) { border-color: #0f172a; background-color: #f8fafc; }
+    .impl-param-label:has(input:checked) .text-slate-700 { color: #0f172a; font-weight: 600; }
+  </style>
+
   <script>
     const API_BASE = 'http://localhost:8000';
-    let selectedFiles = [];
-    let currentBpmnXml = null;
-    let currentProcessName = null;
-    let bpmnViewer = null;
+    let currentStateFiles   = [];
+    let futureStateFiles    = [];
+    let identifiedProcs     = [];
+    let generatedMaps       = [];
+    let activeMapIdx        = 0;
+    let implPlanMarkdown    = null;
 
     // ── Auth ──────────────────────────────────────────────────────────────────
     function signOut() {
@@ -316,64 +451,158 @@
       window.location.href = '/login.html';
     }
 
+    // ── Output toggle (what to generate cards) ────────────────────────────────
+    function onOutputToggle() {
+      // Allow checkboxes to update before reading them
+      setTimeout(() => {
+        const cur  = document.getElementById('want-current').checked;
+        const fut  = document.getElementById('want-future').checked;
+        const both = cur && fut;
+
+        // Style cards
+        styleCard('card-current', cur);
+        styleCard('card-future',  fut);
+
+        // Implementation plan only available when both selected
+        const implCard = document.getElementById('card-impl');
+        const implCb   = document.getElementById('want-impl');
+        if (both) {
+          implCard.classList.remove('opacity-40', 'cursor-not-allowed');
+          implCard.classList.add('cursor-pointer', 'hover:border-slate-400');
+          implCb.disabled = false;
+        } else {
+          implCard.classList.add('opacity-40', 'cursor-not-allowed');
+          implCard.classList.remove('cursor-pointer', 'hover:border-slate-400');
+          implCb.disabled = true;
+          implCb.checked  = false;
+          styleCard('card-impl', false);
+        }
+
+        // Show/hide future upload zone
+        document.getElementById('future-upload-zone').classList.toggle('hidden', !fut);
+        // Switch upload zones column layout
+        document.getElementById('upload-zones').className = fut
+          ? 'grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-100'
+          : 'grid grid-cols-1';
+
+        updateGenerateBtn();
+      }, 0);
+    }
+
+    const SHAPE_KEY_HTML = `
+      <div class="mt-3 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl">
+        <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Shape Key</p>
+        <div class="flex flex-wrap gap-x-5 gap-y-1.5">
+          <span class="flex items-center gap-1.5">
+            <svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="white" stroke="#22c55e" stroke-width="2.5"/></svg>
+            <span class="text-[10px] text-slate-500">Start</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="white" stroke="#991b1b" stroke-width="4"/></svg>
+            <span class="text-[10px] text-slate-500">End</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <svg width="16" height="16" viewBox="0 0 24 24"><polygon points="12,2 22,12 12,22 2,12" fill="white" stroke="#555" stroke-width="1.5"/><line x1="8" y1="8" x2="16" y2="16" stroke="#555" stroke-width="2"/><line x1="16" y1="8" x2="8" y2="16" stroke="#555" stroke-width="2"/></svg>
+            <span class="text-[10px] text-slate-500">Exclusive Gateway</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <svg width="16" height="16" viewBox="0 0 24 24"><polygon points="12,2 22,12 12,22 2,12" fill="white" stroke="#555" stroke-width="1.5"/><line x1="12" y1="6" x2="12" y2="18" stroke="#555" stroke-width="2"/><line x1="6" y1="12" x2="18" y2="12" stroke="#555" stroke-width="2"/></svg>
+            <span class="text-[10px] text-slate-500">Parallel Gateway</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <svg width="16" height="16" viewBox="0 0 24 24"><polygon points="12,2 22,12 12,22 2,12" fill="white" stroke="#555" stroke-width="1.5"/><circle cx="12" cy="12" r="4" fill="none" stroke="#555" stroke-width="2"/></svg>
+            <span class="text-[10px] text-slate-500">Inclusive Gateway</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <svg width="16" height="16" viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="2" fill="white" stroke="#555" stroke-width="1.5"/><circle cx="7" cy="7.5" r="2.5" fill="#777"/><path d="M1.5 17 C1.5 12.5 12.5 12.5 12.5 17" fill="#777"/></svg>
+            <span class="text-[10px] text-slate-500">User Task</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <svg width="16" height="16" viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="2" fill="white" stroke="#555" stroke-width="1.5"/><circle cx="7.5" cy="8" r="2.5" fill="none" stroke="#777" stroke-width="1.5"/><circle cx="7.5" cy="8" r="1" fill="#777"/><line x1="7.5" y1="4.5" x2="7.5" y2="5.5" stroke="#777" stroke-width="1.5"/><line x1="7.5" y1="10.5" x2="7.5" y2="11.5" stroke="#777" stroke-width="1.5"/><line x1="4" y1="8" x2="5" y2="8" stroke="#777" stroke-width="1.5"/><line x1="10" y1="8" x2="11" y2="8" stroke="#777" stroke-width="1.5"/></svg>
+            <span class="text-[10px] text-slate-500">Service Task</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <svg width="16" height="16" viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="2" fill="white" stroke="#555" stroke-width="1.5"/><path d="M5 14 L5 8.5 Q5 7.5 6 7.5 Q7 7.5 7 8.5 L7 8 Q7 7 8 7 Q9 7 9 8 L9 7.5 Q9 6.5 10 6.5 Q11 6.5 11 7.5 L11 7 Q11 6 12 6 Q13 6 13 7 L13 12 L14 12 Q15 12 15 13 L13 16 Q12 18 10 18 L7 18 Q5 18 5 16 Z" fill="#777"/></svg>
+            <span class="text-[10px] text-slate-500">Manual Task</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <svg width="16" height="16" viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="2" fill="white" stroke="#555" stroke-width="1.5"/><rect x="3.5" y="5" width="8" height="3" fill="#777"/><rect x="3.5" y="9.5" width="17" height="2" fill="#bbb"/><rect x="3.5" y="13" width="17" height="2" fill="#ddd"/></svg>
+            <span class="text-[10px] text-slate-500">Business Rule Task</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <svg width="16" height="16" viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="2" fill="white" stroke="#555" stroke-width="1.5"/><rect x="4" y="7" width="16" height="11" rx="1" fill="#555"/><polyline points="4,7 12,14 20,7" fill="none" stroke="white" stroke-width="1.5"/></svg>
+            <span class="text-[10px] text-slate-500">Send Task</span>
+          </span>
+          <span class="flex items-center gap-1.5">
+            <svg width="16" height="16" viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="2" fill="white" stroke="#555" stroke-width="1.5"/><rect x="4" y="7" width="16" height="11" rx="1" fill="white" stroke="#555" stroke-width="1.5"/><polyline points="4,7 12,14 20,7" fill="none" stroke="#555" stroke-width="1.5"/></svg>
+            <span class="text-[10px] text-slate-500">Receive Task</span>
+          </span>
+        </div>
+      </div>`;
+
+    function styleCard(id, active) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.toggle('border-slate-900', active);
+      el.classList.toggle('bg-slate-50', active);
+      el.classList.toggle('border-slate-200', !active);
+    }
+
     // ── Drag & Drop ───────────────────────────────────────────────────────────
-    function handleDragOver(e) {
+    function handleDragOver(e, zone) {
       e.preventDefault();
-      document.getElementById('drop-zone').classList.add('dragover');
+      document.getElementById(`drop-zone-${zone}`).classList.add('dragover');
     }
-    function handleDragLeave(e) {
-      document.getElementById('drop-zone').classList.remove('dragover');
+    function handleDragLeave(e, zone) {
+      document.getElementById(`drop-zone-${zone}`).classList.remove('dragover');
     }
-    function handleDrop(e) {
+    function handleDrop(e, zone) {
       e.preventDefault();
-      document.getElementById('drop-zone').classList.remove('dragover');
-      addFiles(Array.from(e.dataTransfer.files));
+      document.getElementById(`drop-zone-${zone}`).classList.remove('dragover');
+      addFiles(Array.from(e.dataTransfer.files), zone);
     }
-    function handleFileSelect(e) {
-      addFiles(Array.from(e.target.files));
+    function handleFileSelect(e, zone) {
+      addFiles(Array.from(e.target.files), zone);
       e.target.value = '';
     }
 
     // ── File Management ───────────────────────────────────────────────────────
-    function addFiles(files) {
+    function addFiles(files, zone) {
+      const list = zone === 'future' ? futureStateFiles : currentStateFiles;
       for (const file of files) {
-        const isDuplicate = selectedFiles.some(f => f.name === file.name && f.size === file.size);
-        if (!isDuplicate) selectedFiles.push(file);
+        if (!list.some(f => f.name === file.name && f.size === file.size)) list.push(file);
       }
-      renderFileList();
+      renderFileList(zone);
       updateGenerateBtn();
       hideError();
     }
-    function removeFile(index) {
-      selectedFiles.splice(index, 1);
-      renderFileList();
+    function removeFile(zone, index) {
+      const list = zone === 'future' ? futureStateFiles : currentStateFiles;
+      list.splice(index, 1);
+      renderFileList(zone);
       updateGenerateBtn();
     }
-    function renderFileList() {
-      const container = document.getElementById('file-list');
-      if (selectedFiles.length === 0) {
-        container.classList.add('hidden');
-        container.innerHTML = '';
-        return;
-      }
-      container.classList.remove('hidden');
-      container.innerHTML = selectedFiles.map((f, i) => `
-        <div class="flex items-center gap-3 bg-white border border-slate-200 rounded-lg px-4 py-3">
-          <svg class="w-5 h-5 text-slate-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    function renderFileList(zone) {
+      const list      = zone === 'future' ? futureStateFiles : currentStateFiles;
+      const container = document.getElementById(`file-list-${zone}`);
+      container.innerHTML = list.map((f, i) => `
+        <div class="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          <svg class="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
           </svg>
-          <div class="flex-1 min-w-0">
-            <p class="text-sm font-medium text-slate-800 truncate">${f.name}</p>
-            <p class="text-xs text-slate-400">${formatBytes(f.size)}</p>
-          </div>
-          <button onclick="removeFile(${i})" class="text-xs text-slate-400 hover:text-red-500 transition">Remove</button>
+          <span class="flex-1 text-xs font-medium text-slate-700 truncate">${escHtml(f.name)}</span>
+          <span class="text-xs text-slate-400 flex-shrink-0">${formatBytes(f.size)}</span>
+          <button onclick="removeFile('${zone}',${i})" class="text-xs text-slate-400 hover:text-red-500 transition ml-1">✕</button>
         </div>`).join('');
     }
     function updateGenerateBtn() {
-      const hasFiles = selectedFiles.length > 0;
-      const hasTitle = document.getElementById('process-title').value.trim().length > 0;
-      const hasLevel = document.getElementById('bpmn-level').value !== '';
-      document.getElementById('generate-btn').disabled = !(hasFiles && hasTitle && hasLevel);
+      const hasTitle   = document.getElementById('process-title').value.trim().length > 0;
+      const hasLevel   = document.getElementById('bpmn-level').value !== '';
+      const wantCur    = document.getElementById('want-current').checked;
+      const wantFut    = document.getElementById('want-future').checked;
+      const hasFiles   = currentStateFiles.length > 0;
+      const hasOutput  = wantCur || wantFut;
+      document.getElementById('generate-btn').disabled = !(hasFiles && hasTitle && hasLevel && hasOutput);
     }
     function formatBytes(bytes) {
       if (bytes < 1024) return bytes + ' B';
@@ -381,131 +610,470 @@
       return (bytes / 1048576).toFixed(1) + ' MB';
     }
 
-    // ── Status helpers ────────────────────────────────────────────────────────
+    // ── Status / Error helpers ─────────────────────────────────────────────────
     function showStatus(text, sub) {
       document.getElementById('status-text').textContent = text;
-      document.getElementById('status-sub').textContent = sub || '';
+      document.getElementById('status-sub').textContent  = sub || '';
       document.getElementById('status-bar').classList.remove('hidden');
     }
-    function hideStatus() {
-      document.getElementById('status-bar').classList.add('hidden');
-    }
+    function hideStatus() { document.getElementById('status-bar').classList.add('hidden'); }
     function showError(msg) {
       document.getElementById('error-text').textContent = msg;
       document.getElementById('error-bar').classList.remove('hidden');
     }
-    function hideError() {
-      document.getElementById('error-bar').classList.add('hidden');
-    }
+    function hideError() { document.getElementById('error-bar').classList.add('hidden'); }
 
-    // ── Generate BPMN ─────────────────────────────────────────────────────────
-    async function generateBpmn() {
-      if (selectedFiles.length === 0) return;
-
+    // ── Step 1 → Step 2: Analyse documents ────────────────────────────────────
+    async function analyseDocuments() {
+      if (currentStateFiles.length === 0) return;
       hideError();
-      document.getElementById('viewer-section').classList.add('hidden');
       document.getElementById('generate-btn').disabled = true;
-      showStatus('Uploading and parsing documents...', 'Extracting process content from your files');
+      document.getElementById('process-select-section').classList.add('hidden');
+      document.getElementById('viewer-section').classList.add('hidden');
+      showStatus('Analysing documents…', 'Identifying processes in your files');
 
-      const processTitle = document.getElementById('process-title').value.trim();
-      const bpmnLevel   = document.getElementById('bpmn-level').value;
+      // Use all uploaded files combined for process identification
+      const allFiles = [...currentStateFiles, ...futureStateFiles];
       const formData = new FormData();
-      selectedFiles.forEach(f => formData.append('files', f));
-      formData.append('process_title', processTitle);
-      formData.append('bpmn_level', bpmnLevel);
+      allFiles.forEach(f => formData.append('files', f));
 
       try {
-        showStatus('Analyzing process content...', 'Claude is reading your document');
-        const response = await fetch(`${API_BASE}/api/upload`, {
-          method: 'POST',
-          body: formData
-        });
-
-        if (!response.ok) {
-          const err = await response.json();
-          throw new Error(err.detail || 'Upload failed');
-        }
-
-        showStatus('Generating BPMN diagram...', 'Building your process map');
-        const data = await response.json();
-        currentBpmnXml = data.bpmn_xml;
-        currentProcessName = data.process_name || 'Process Map';
-
+        const res = await fetch(`${API_BASE}/api/identify-processes`, { method: 'POST', body: formData });
+        if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Analysis failed'); }
+        const data = await res.json();
+        identifiedProcs = data.processes || [];
         hideStatus();
-        document.getElementById('viewer-section').classList.remove('hidden');
-        await renderBpmn(currentBpmnXml);
-
+        renderProcessChecklist();
       } catch (err) {
         hideStatus();
-        if (err.message.includes('fetch')) {
-          showError('Cannot reach the backend. Make sure the Python server is running on port 8000 (see instructions below).');
-        } else {
-          showError(err.message);
-        }
-      } finally {
+        showError(err.message.includes('fetch')
+          ? 'Cannot reach the backend. Make sure the Python server is running on port 8000.'
+          : err.message);
         updateGenerateBtn();
       }
     }
 
-    // ── BPMN Rendering ────────────────────────────────────────────────────────
-    async function renderBpmn(xml) {
-      if (bpmnViewer) {
-        bpmnViewer.destroy();
-        bpmnViewer = null;
-      }
-      // Wait one frame so the container is visible and has real dimensions
-      await new Promise(resolve => requestAnimationFrame(resolve));
+    // ── Step 2: Render process checklist ──────────────────────────────────────
+    function renderProcessChecklist() {
+      const list = document.getElementById('process-checklist');
+      list.innerHTML = identifiedProcs.map((p, i) => `
+        <label class="flex items-start gap-3 bg-white border border-slate-200 rounded-lg px-4 py-3 cursor-pointer hover:border-slate-400 transition select-none">
+          <input type="checkbox" class="proc-check mt-0.5 h-4 w-4 accent-slate-800 flex-shrink-0" value="${i}" checked />
+          <div>
+            <p class="text-sm font-semibold text-slate-800">${escHtml(p.name)}</p>
+            <p class="text-xs text-slate-500 mt-0.5">${escHtml(p.description)}</p>
+          </div>
+        </label>`).join('');
+      document.getElementById('process-select-section').classList.remove('hidden');
+      document.getElementById('process-select-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
 
-      bpmnViewer = new BpmnJS({ container: '#bpmn-container' });
-      try {
-        await bpmnViewer.importXML(xml);
-        // Small delay before fitting to ensure layout is complete
-        setTimeout(fitDiagram, 50);
-      } catch (err) {
-        showError('Could not render the BPMN diagram: ' + err.message);
+    function selectAllProcesses(checked) {
+      document.querySelectorAll('.proc-check').forEach(cb => cb.checked = checked);
+    }
+
+    function escHtml(s) {
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ── Step 2 → Step 3: Generate selected maps ───────────────────────────────
+    async function generateSelectedMaps() {
+      const wantCurrent = document.getElementById('want-current').checked;
+      const wantFuture  = document.getElementById('want-future').checked;
+      if (!wantCurrent && !wantFuture) { showError('Please select at least one map type.'); return; }
+
+      const checkedIdxs   = [...document.querySelectorAll('.proc-check:checked')].map(cb => parseInt(cb.value));
+      const selectedProcs = checkedIdxs.map(i => identifiedProcs[i]);
+      const mapTypes      = [
+        ...(wantCurrent ? [{ type: 'current_state', label: 'Current State' }] : []),
+        ...(wantFuture  ? [{ type: 'future_state',  label: 'Future State'  }] : []),
+      ];
+
+      hideError();
+      document.getElementById('process-select-section').classList.add('hidden');
+      document.getElementById('viewer-section').classList.add('hidden');
+      document.getElementById('impl-plan-section').classList.add('hidden');
+
+      const processTitle = document.getElementById('process-title').value.trim();
+      const bpmnLevel    = document.getElementById('bpmn-level').value;
+
+      generatedMaps.forEach(m => { if (m.viewer) m.viewer.destroy(); });
+      generatedMaps    = [];
+      implPlanMarkdown = null;
+
+      // Build job list: one entry per process × map type
+      const jobs = [];
+      for (const proc of selectedProcs) {
+        for (const mt of mapTypes) {
+          const label = selectedProcs.length === 1 && processTitle
+            ? (mapTypes.length > 1 ? `${processTitle} — ${mt.label}` : processTitle)
+            : `${proc.name} — ${mt.label}`;
+          jobs.push({ proc, mapType: mt.type, mapTypeLabel: mt.label, label });
+        }
+      }
+
+      let jobNum = 0;
+      for (const job of jobs) {
+        jobNum++;
+        showStatus(
+          `Generating map ${jobNum} of ${jobs.length}: ${job.label}`,
+          'Claude is building your process map…'
+        );
+
+        // Use state-specific files; fall back to current state files if none uploaded for future
+        const filesForJob = job.mapType === 'future_state' && futureStateFiles.length > 0
+          ? futureStateFiles : currentStateFiles;
+
+        const formData = new FormData();
+        filesForJob.forEach(f => formData.append('files', f));
+        formData.append('process_title', job.label);
+        formData.append('bpmn_level',    bpmnLevel);
+        formData.append('focus_process', job.proc.name);
+        formData.append('map_type',      job.mapType);
+
+        try {
+          const res = await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: formData });
+          if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Generation failed'); }
+          const data = await res.json();
+          generatedMaps.push({ processName: job.label, mapType: job.mapType, procName: job.proc.name, bpmnXml: data.bpmn_xml, viewer: null });
+        } catch (err) {
+          generatedMaps.push({ processName: job.label, mapType: job.mapType, procName: job.proc.name, bpmnXml: null, error: err.message, viewer: null });
+        }
+      }
+
+      hideStatus();
+      await renderMapViewer();
+
+      // Show implementation plan step if we have both state types
+      const hasCurrentState = generatedMaps.some(m => m.mapType === 'current_state' && m.bpmnXml);
+      const hasFutureState  = generatedMaps.some(m => m.mapType === 'future_state'  && m.bpmnXml);
+      if (hasCurrentState && hasFutureState) {
+        document.getElementById('impl-plan-section').classList.remove('hidden');
+        document.getElementById('impl-plan-output').classList.add('hidden');
+        document.getElementById('impl-plan-body').innerHTML = '';
+        implPlanMarkdown = null;
       }
     }
 
-    function fitDiagram() {
-      if (!bpmnViewer) return;
-      try {
-        const canvas = bpmnViewer.get('canvas');
-        canvas.zoom('fit-viewport', 'auto');
-      } catch (e) {
-        // Ignore fit errors — diagram is still usable
+    // ── Step 5 helpers ─────────────────────────────────────────────────────────
+    function implSelectAll(checked) {
+      document.querySelectorAll('.impl-sec-cb').forEach(cb => cb.checked = checked);
+    }
+
+    function implParamSelectAll(checked) {
+      document.querySelectorAll('.impl-param-cb').forEach(cb => cb.checked = checked);
+    }
+
+    function getImplSelectedSections() {
+      return [...document.querySelectorAll('.impl-sec-cb:checked')].map(cb => cb.value);
+    }
+
+    function getImplSelectedParameters() {
+      return [...document.querySelectorAll('.impl-param-cb:checked')].map(cb => cb.value);
+    }
+
+    // ── Step 5: Generate Implementation Plan ──────────────────────────────────
+    async function generateImplementationPlan() {
+      const currentMap = generatedMaps.find(m => m.mapType === 'current_state' && m.bpmnXml);
+      const futureMap  = generatedMaps.find(m => m.mapType === 'future_state'  && m.bpmnXml);
+      if (!currentMap || !futureMap) return;
+
+      const selectedSections = getImplSelectedSections();
+      if (selectedSections.length === 0) {
+        alert('Please select at least one section to include.');
+        return;
       }
+
+      const btn     = document.getElementById('gen-impl-btn');
+      const outputEl = document.getElementById('impl-plan-body');
+      btn.disabled  = true;
+      btn.textContent = 'Generating…';
+      document.getElementById('impl-plan-output').classList.remove('hidden');
+      outputEl.innerHTML = '<span class="text-slate-400 text-sm animate-pulse">Writing implementation plan…</span>';
+
+      const formData = new FormData();
+      [...currentStateFiles, ...futureStateFiles].forEach(f => formData.append('files', f));
+      formData.append('current_process',  currentMap.procName || currentMap.processName);
+      formData.append('future_process',   futureMap.procName  || futureMap.processName);
+      formData.append('sections_json',    JSON.stringify(selectedSections));
+      formData.append('parameters_json',  JSON.stringify(getImplSelectedParameters()));
+
+      try {
+        const res = await fetch(`${API_BASE}/api/generate-implementation-plan`, { method: 'POST', body: formData });
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || 'Failed'); }
+
+        const reader  = res.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = '';
+        let renderTimer = null;
+        const scheduleRender = () => {
+          if (renderTimer) return;
+          renderTimer = requestAnimationFrame(() => {
+            renderTimer = null;
+            outputEl.innerHTML = marked.parse(accumulated);
+          });
+        };
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          accumulated += decoder.decode(value, { stream: true });
+          scheduleRender();
+        }
+        implPlanMarkdown = accumulated;
+        outputEl.innerHTML = marked.parse(accumulated);
+      } catch (err) {
+        outputEl.innerHTML = `<p class="text-red-500 text-sm">Failed: ${escHtml(err.message)}</p>`;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg> Regenerate`;
+      }
+    }
+
+    async function downloadImplPlan() {
+      if (!implPlanMarkdown) return;
+      const formData = new FormData();
+      formData.append('sop_markdown', implPlanMarkdown);
+      formData.append('sop_title',    'Implementation Plan');
+      try {
+        const res = await fetch(`${API_BASE}/api/export-sop`, { method: 'POST', body: formData });
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a'); a.href = url;
+        a.download = 'Implementation_Plan.docx'; a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) { showError('Download failed: ' + err.message); }
+    }
+
+    // ── Step 3: Build tabbed viewer ───────────────────────────────────────────
+    async function renderMapViewer() {
+      const tabBar   = document.getElementById('map-tabs');
+      const panelDiv = document.getElementById('map-panels');
+      tabBar.innerHTML   = '';
+      panelDiv.innerHTML = '';
+
+      const multi = generatedMaps.length > 1;
+      tabBar.classList.toggle('hidden', !multi);
+
+      // ── Build selector table when there are multiple maps ─────────────────
+      if (multi) {
+        const hasCurrentCol = generatedMaps.some(m => m.mapType === 'current_state');
+        const hasFutureCol  = generatedMaps.some(m => m.mapType === 'future_state');
+
+        // Collect unique process base names in order
+        const seen = new Set();
+        const procNames = [];
+        for (const m of generatedMaps) {
+          if (!seen.has(m.procName)) { seen.add(m.procName); procNames.push(m.procName); }
+        }
+
+        // Build table HTML
+        let thead = `<thead><tr>
+          <th class="text-left text-xs font-semibold text-slate-500 uppercase tracking-wide px-4 py-3 bg-slate-50 border-b border-slate-200 w-1/2">Process</th>`;
+        if (hasCurrentCol) thead += `<th class="text-center text-xs font-semibold text-slate-500 uppercase tracking-wide px-4 py-3 bg-slate-50 border-b border-slate-200 border-l border-slate-200">Current State</th>`;
+        if (hasFutureCol)  thead += `<th class="text-center text-xs font-semibold text-slate-500 uppercase tracking-wide px-4 py-3 bg-slate-50 border-b border-slate-200 border-l border-slate-200">Future State</th>`;
+        thead += `</tr></thead>`;
+
+        let tbody = '<tbody>';
+        procNames.forEach((name, rowIdx) => {
+          const rowBg = rowIdx % 2 === 0 ? '' : 'bg-slate-50/60';
+          tbody += `<tr class="${rowBg}">`;
+          tbody += `<td class="px-4 py-3 text-sm font-medium text-slate-700">${escHtml(name)}</td>`;
+
+          for (const mt of ['current_state', 'future_state']) {
+            if ((mt === 'current_state' && !hasCurrentCol) || (mt === 'future_state' && !hasFutureCol)) continue;
+            const mapIdx = generatedMaps.findIndex(m => m.procName === name && m.mapType === mt);
+            if (mapIdx === -1) {
+              tbody += `<td class="px-4 py-3 text-center border-l border-slate-200"><span class="text-xs text-slate-300">—</span></td>`;
+            } else {
+              const m = generatedMaps[mapIdx];
+              if (m.error) {
+                tbody += `<td class="px-4 py-3 text-center border-l border-slate-200">
+                  <span class="inline-block px-2.5 py-1 rounded-md text-xs font-medium bg-red-50 text-red-500 border border-red-200">Error</span>
+                </td>`;
+              } else {
+                tbody += `<td class="px-4 py-3 text-center border-l border-slate-200">
+                  <button data-idx="${mapIdx}" onclick="switchTab(${mapIdx})"
+                    class="map-sel-btn inline-block px-3 py-1.5 rounded-lg text-xs font-semibold transition border ${
+                      mapIdx === 0 ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400 hover:text-slate-800'
+                    }">View</button>
+                </td>`;
+              }
+            }
+          }
+          tbody += `</tr>`;
+        });
+        tbody += '</tbody>';
+
+        tabBar.innerHTML = `<table class="w-full border-collapse">${thead}${tbody}</table>`;
+      }
+
+      // ── Build panels ───────────────────────────────────────────────────────
+      for (let i = 0; i < generatedMaps.length; i++) {
+        const map = generatedMaps[i];
+
+        // Panel
+        const panel = document.createElement('div');
+        panel.id = `map-panel-${i}`;
+        panel.className = i === 0 ? '' : 'hidden';
+
+        if (map.error) {
+          panel.innerHTML = `
+            <div class="bg-red-50 border border-red-200 rounded-xl px-5 py-4 mb-4">
+              <p class="text-sm font-semibold text-red-700">Failed: ${escHtml(map.processName)}</p>
+              <p class="text-xs text-red-500 mt-1">${escHtml(map.error)}</p>
+            </div>`;
+        } else {
+          panel.innerHTML = `
+            <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <p class="text-sm font-semibold text-slate-700">${escHtml(map.processName)}</p>
+              <div class="flex items-center gap-2">
+                <div class="flex items-center border border-slate-200 rounded-lg overflow-hidden">
+                  <button onclick="zoomMap(${i},'out')" title="Zoom out"
+                    class="px-2.5 py-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900 text-base font-bold transition border-r border-slate-200">−</button>
+                  <button onclick="zoomMap(${i},'fit')" title="Fit to screen"
+                    class="px-2.5 py-1.5 text-xs text-slate-500 hover:bg-slate-100 hover:text-slate-900 transition border-r border-slate-200">⊡</button>
+                  <button onclick="zoomMap(${i},'in')" title="Zoom in"
+                    class="px-2.5 py-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900 text-base font-bold transition">+</button>
+                </div>
+                <select id="map-export-fmt-${i}" class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-slate-400 cursor-pointer">
+                  <option value="pptx">PowerPoint (.pptx)</option>
+                  <option value="docx">Word (.docx)</option>
+                  <option value="vsdx">Visio (.vsdx)</option>
+                </select>
+                <button id="map-export-btn-${i}" onclick="downloadExport(${i})"
+                  class="inline-flex items-center gap-1.5 text-xs font-medium text-white bg-slate-900 hover:bg-slate-700 rounded-lg px-3 py-1.5 transition">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                  Download
+                </button>
+              </div>
+            </div>
+            <div class="bpmn-canvas-wrap" tabindex="0" onkeydown="handleMapKey(event,${i})"
+              style="width:100%;height:520px;border:1px solid #e2e8f0;border-radius:0.75rem;background:#fff;position:relative;outline:none;">
+              <div id="bpmn-container-${i}" style="width:100%;height:100%;border-radius:0.75rem;overflow:hidden;"></div>
+            </div>
+            <p class="text-xs text-slate-400 mt-2 text-center">
+              Click &amp; drag to pan · Scroll to zoom · Arrow keys to pan · <kbd class="bg-slate-100 border border-slate-200 rounded px-1">+</kbd> / <kbd class="bg-slate-100 border border-slate-200 rounded px-1">−</kbd> to zoom · <kbd class="bg-slate-100 border border-slate-200 rounded px-1">0</kbd> to fit
+            </p>
+            ${SHAPE_KEY_HTML}`;
+        }
+        panelDiv.appendChild(panel);
+      }
+
+      document.getElementById('viewer-section').classList.remove('hidden');
+      document.getElementById('viewer-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+      // Only render the first (visible) panel now — hidden panels are lazy-rendered
+      // on first tab switch so bpmn-js has real container dimensions to work with.
+      await new Promise(r => requestAnimationFrame(r));
+      if (generatedMaps[0] && generatedMaps[0].bpmnXml) {
+        await renderBpmnInto(0, generatedMaps[0].bpmnXml);
+      }
+    }
+
+    function switchTab(idx) {
+      activeMapIdx = idx;
+      document.querySelectorAll('.map-sel-btn').forEach(btn => {
+        const active = parseInt(btn.dataset.idx) === idx;
+        btn.className = `map-sel-btn inline-block px-3 py-1.5 rounded-lg text-xs font-semibold transition border ${
+          active ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400 hover:text-slate-800'
+        }`;
+      });
+      document.querySelectorAll('[id^="map-panel-"]').forEach(p => p.classList.add('hidden'));
+      const panel = document.getElementById(`map-panel-${idx}`);
+      if (panel) panel.classList.remove('hidden');
+
+      const map = generatedMaps[idx];
+      if (!map) return;
+      if (map.bpmnXml && !map.viewer) {
+        // First time this tab is shown — render now that the container is visible
+        renderBpmnInto(idx, map.bpmnXml);
+      } else {
+        // Already rendered — just re-fit to the now-visible container
+        setTimeout(() => fitMap(idx), 50);
+      }
+    }
+
+    async function renderBpmnInto(idx, xml) {
+      const container = document.getElementById(`bpmn-container-${idx}`);
+      if (!container) return;
+      const viewer = new BpmnJS({ container });
+      generatedMaps[idx].viewer = viewer;
+      try {
+        await viewer.importXML(xml);
+        // Two rAF passes to let bpmn-js finish layout before fitting
+        await new Promise(r => requestAnimationFrame(r));
+        await new Promise(r => requestAnimationFrame(r));
+        fitMap(idx);
+      } catch (err) {
+        container.innerHTML = `<p class="text-xs text-red-500 p-4">Could not render: ${escHtml(err.message)}</p>`;
+      }
+    }
+
+    function fitMap(idx) {
+      const m = generatedMaps[idx];
+      if (!m || !m.viewer) return;
+      try { m.viewer.get('canvas').zoom('fit-viewport', 'auto'); } catch (e) {}
+    }
+
+    function zoomMap(idx, dir) {
+      const m = generatedMaps[idx];
+      if (!m || !m.viewer) return;
+      try {
+        const canvas = m.viewer.get('canvas');
+        if (dir === 'fit') {
+          canvas.zoom('fit-viewport', 'auto');
+        } else {
+          canvas.zoom(dir === 'in' ? canvas.zoom() * 1.25 : canvas.zoom() * 0.8);
+        }
+      } catch (e) {}
+    }
+
+    function handleMapKey(e, idx) {
+      const m = generatedMaps[idx];
+      if (!m || !m.viewer) return;
+      const PAN = 120;   // pixels per keypress
+      const canvas = m.viewer.get('canvas');
+      let handled = true;
+      switch (e.key) {
+        case 'ArrowLeft':  canvas.scroll({ dx:  PAN, dy: 0 }); break;
+        case 'ArrowRight': canvas.scroll({ dx: -PAN, dy: 0 }); break;
+        case 'ArrowUp':    canvas.scroll({ dx: 0, dy:  PAN }); break;
+        case 'ArrowDown':  canvas.scroll({ dx: 0, dy: -PAN }); break;
+        case '+': case '=': zoomMap(idx, 'in');  break;
+        case '-': case '_': zoomMap(idx, 'out'); break;
+        case '0':           zoomMap(idx, 'fit'); break;
+        default: handled = false;
+      }
+      if (handled) e.preventDefault();
     }
 
     // ── Restart ───────────────────────────────────────────────────────────────
     function restartProcess() {
-      selectedFiles = [];
-      renderFileList();
-      document.getElementById('process-title').value = '';
-      document.getElementById('bpmn-level').value = '';
+      generatedMaps.forEach(m => { if (m.viewer) m.viewer.destroy(); });
+      generatedMaps      = [];
+      identifiedProcs    = [];
+      currentStateFiles  = [];
+      futureStateFiles   = [];
+      implPlanMarkdown   = null;
+      renderFileList('current');
+      renderFileList('future');
+      document.getElementById('process-title').value   = '';
+      document.getElementById('bpmn-level').value      = '';
+      document.getElementById('want-current').checked  = true;
+      document.getElementById('want-future').checked   = false;
+      document.getElementById('want-impl').checked     = false;
+      onOutputToggle();
       updateGenerateBtn();
+      document.getElementById('process-select-section').classList.add('hidden');
       document.getElementById('viewer-section').classList.add('hidden');
+      document.getElementById('impl-plan-section').classList.add('hidden');
       document.getElementById('error-bar').classList.add('hidden');
       document.getElementById('status-bar').classList.add('hidden');
-      currentBpmnXml = null;
-      currentProcessName = null;
-      if (bpmnViewer) { bpmnViewer.destroy(); bpmnViewer = null; }
-      document.getElementById('bpmn-container').innerHTML = '';
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     // ── Export ────────────────────────────────────────────────────────────────
-    function downloadXml() {
-      if (!currentBpmnXml) return;
-      const blob = new Blob([currentBpmnXml], { type: 'application/xml' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'process-map.bpmn';
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-
-    // Convert the live bpmn-js SVG to a PNG base64 string via an off-screen canvas
     async function svgToPng(svgStr) {
       return new Promise((resolve, reject) => {
         const blob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' });
@@ -515,8 +1083,7 @@
           try {
             const W = img.naturalWidth  || 1920;
             const H = img.naturalHeight || 600;
-            // 2× resolution for crisp output in Office documents
-            const scale = Math.min(2, 8000 / Math.max(W, H));
+            const scale  = Math.min(2, 8000 / Math.max(W, H));
             const canvas = document.createElement('canvas');
             canvas.width  = Math.round(W * scale);
             canvas.height = Math.round(H * scale);
@@ -533,42 +1100,39 @@
       });
     }
 
-    async function downloadExport() {
-      if (!bpmnViewer) return;
-      const format = document.getElementById('export-format').value;
-      const btn    = document.getElementById('export-btn');
+    async function downloadExport(idx) {
+      const map    = generatedMaps[idx];
+      if (!map || !map.viewer) return;
+      const fmtSel = document.getElementById(`map-export-fmt-${idx}`);
+      const btn    = document.getElementById(`map-export-btn-${idx}`);
+      const format = fmtSel.value;
       btn.disabled = true;
       btn.innerHTML = '<svg class="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke-width="4" class="opacity-25"/><path d="M4 12a8 8 0 018-8" stroke-width="4" class="opacity-75"/></svg> Exporting…';
 
       try {
-        const { svg }            = await bpmnViewer.saveSVG();
-        const { xml: bpmnXml }   = await bpmnViewer.saveXML({ format: true });
-        const pngBase64          = await svgToPng(svg);
+        const { svg }          = await map.viewer.saveSVG();
+        const { xml: bpmnXml } = await map.viewer.saveXML({ format: true });
+        const pngBase64        = await svgToPng(svg);
 
         const formData = new FormData();
         formData.append('format',       format);
         formData.append('png_base64',   pngBase64);
         formData.append('bpmn_xml',     bpmnXml || '');
-        formData.append('process_name', currentProcessName || 'Process Map');
+        formData.append('process_name', map.processName || 'Process Map');
 
-        const response = await fetch(`${API_BASE}/api/export`, { method: 'POST', body: formData });
-        if (!response.ok) {
-          const err = await response.json().catch(() => ({ detail: 'Export failed' }));
-          throw new Error(err.detail || 'Export failed');
-        }
+        const res = await fetch(`${API_BASE}/api/export`, { method: 'POST', body: formData });
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || 'Export failed'); }
 
-        const blob = await response.blob();
+        const blob = await res.blob();
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
         a.href     = url;
-        const disposition = response.headers.get('Content-Disposition') || '';
+        const disposition = res.headers.get('Content-Disposition') || '';
         const serverName  = disposition.match(/filename="([^"]+)"/)?.[1];
         const extMap      = { vsdx: 'vdx' };
         const ext         = extMap[format] || format;
-        a.download = serverName || `process-map.${ext}`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        a.download = serverName || `${map.processName.replace(/\s+/g, '-')}.${ext}`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
       } catch (err) {

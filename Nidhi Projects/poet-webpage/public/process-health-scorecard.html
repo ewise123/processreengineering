@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Process Health Scorecard – POET</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', system-ui, sans-serif; }
+    #drop-zone.dragover { border-color: #475569; background-color: #f1f5f9; }
+    .sc-body h1 { font-size: 1.35rem; font-weight: 700; color: #0f172a; margin: 0 0 0.25rem; }
+    .sc-body h2 { font-size: 0.95rem; font-weight: 700; color: #0f172a; text-transform: uppercase; letter-spacing: 0.04em; margin: 1.75rem 0 0.5rem; padding-bottom: 0.3rem; border-bottom: 1px solid #e2e8f0; }
+    .sc-body p  { color: #334155; line-height: 1.75; margin-bottom: 0.6rem; font-size: 0.875rem; }
+    .sc-body ul { list-style: disc; padding-left: 1.5rem; margin-bottom: 0.75rem; }
+    .sc-body ul li { color: #334155; margin-bottom: 0.4rem; line-height: 1.65; font-size: 0.875rem; }
+    .sc-body ol { list-style: decimal; padding-left: 1.5rem; margin-bottom: 0.75rem; }
+    .sc-body ol li { color: #334155; margin-bottom: 0.4rem; line-height: 1.65; font-size: 0.875rem; }
+    .sc-body strong { color: #0f172a; }
+    .sc-body hr { border: none; border-top: 1px solid #e2e8f0; margin: 0.5rem 0 1.25rem; }
+    /* RAG / status badge colours — applied via JS after render */
+    .rag-red    { display:inline-block; background:#fee2e2; color:#991b1b; font-weight:700; padding:1px 8px; border-radius:4px; font-size:0.78rem; }
+    .rag-amber  { display:inline-block; background:#fef3c7; color:#92400e; font-weight:700; padding:1px 8px; border-radius:4px; font-size:0.78rem; }
+    .rag-green  { display:inline-block; background:#dcfce7; color:#166534; font-weight:700; padding:1px 8px; border-radius:4px; font-size:0.78rem; }
+    .rag-high   { display:inline-block; background:#fee2e2; color:#991b1b; font-weight:700; padding:1px 8px; border-radius:4px; font-size:0.78rem; }
+    .rag-medium { display:inline-block; background:#fef3c7; color:#92400e; font-weight:700; padding:1px 8px; border-radius:4px; font-size:0.78rem; }
+    .rag-low    { display:inline-block; background:#dcfce7; color:#166534; font-weight:700; padding:1px 8px; border-radius:4px; font-size:0.78rem; }
+    /* Legend block — first ## section after render */
+    .sc-body .legend-box { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px 16px; margin-bottom:1.25rem; }
+  </style>
+  <script>
+    if (!sessionStorage.getItem('poet_auth')) {
+      window.location.href = '/login.html';
+    }
+  </script>
+</head>
+<body class="min-h-screen bg-slate-50">
+
+  <!-- Header -->
+  <header class="bg-slate-900 text-white px-8 py-0 flex items-center min-h-16 relative shadow-lg">
+    <img src="/ChatGPT Image Feb 23, 2026, 09_07_03 PM.png" alt="POET" class="h-10 w-auto object-contain mr-6" />
+    <div>
+      <div class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-0">SSA & Company</div>
+      <h1 class="text-lg font-bold tracking-tight">Process Optimization Engineering Tool (POET)</h1>
+      <p class="text-slate-400 text-xs mt-0.5">AI-Enabled Process Re-Engineering Platform</p>
+    </div>
+    <div class="ml-auto flex items-center gap-4">
+      <a href="/index.html" class="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7m-9 10V10m0 0h4m-4 0H7" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 21V10h6v11" />
+        </svg>
+        Home
+      </a>
+      <button onclick="signOut()" class="text-xs text-slate-400 hover:text-white transition">Sign out</button>
+      <div class="h-8 w-8 rounded-full bg-slate-600 flex items-center justify-center text-white font-medium text-sm">U</div>
+    </div>
+  </header>
+
+  <!-- Hero Banner -->
+  <div class="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-8 py-2">
+    <div class="max-w-5xl mx-auto">
+      <p class="text-slate-300 text-xs">Upload process documents to receive a RAG-rated health assessment across ESOAR and LEAN dimensions — identifying waste, inefficiency, automation potential, and rework.</p>
+    </div>
+  </div>
+
+  <!-- Page Content -->
+  <main class="max-w-5xl mx-auto px-8 py-4">
+
+    <!-- Breadcrumb -->
+    <div class="flex items-center gap-3 mb-3">
+      <a href="/index.html" class="text-sm text-slate-400 hover:text-slate-700 transition">← Back</a>
+      <span class="text-slate-300">/</span>
+      <span class="text-sm font-semibold text-slate-700">Process Health Scorecard</span>
+    </div>
+
+    <!-- Error bar -->
+    <div id="error-bar" class="hidden mb-3 flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+      <svg class="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <p id="error-text" class="text-sm text-red-700"></p>
+    </div>
+
+    <!-- Status bar -->
+    <div id="status-bar" class="hidden mb-3 flex items-center gap-3 bg-white border border-slate-200 rounded-lg px-4 py-3 shadow-sm">
+      <svg class="w-5 h-5 text-slate-500 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+      </svg>
+      <div>
+        <p id="status-text" class="text-sm font-medium text-slate-800">Analysing process health...</p>
+        <p id="status-sub" class="text-xs text-slate-400">This may take 20–40 seconds</p>
+      </div>
+    </div>
+
+    <!-- Form Section -->
+    <div id="form-section">
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+        <div class="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-200">
+
+          <!-- Left: Configure -->
+          <div class="p-5">
+            <p class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-2">Configure</p>
+
+            <!-- Process Name -->
+            <div class="mb-3">
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5" for="process-name">
+                Process Name <span class="text-red-500">*</span>
+              </label>
+              <input id="process-name" type="text" placeholder="e.g. Claims Processing"
+                oninput="updateGenerateBtn()"
+                class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400" />
+            </div>
+
+            <!-- Industry Context (optional) -->
+            <div class="mb-3">
+              <label class="block text-xs font-semibold text-slate-600 mb-1.5" for="industry">
+                Industry / Context <span class="text-slate-400 font-normal">(optional)</span>
+              </label>
+              <input id="industry" type="text" placeholder="e.g. Insurance, Banking, Healthcare"
+                class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400" />
+            </div>
+
+            <!-- Assessment Dimensions -->
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <label class="text-xs font-semibold text-slate-600">Assessment Dimensions <span class="text-red-500">*</span></label>
+                <span class="text-xs text-slate-400">select all that apply</span>
+              </div>
+              <div id="dimension-list" class="border border-slate-200 rounded-lg divide-y divide-slate-100 overflow-y-auto" style="max-height:200px"></div>
+            </div>
+          </div>
+
+          <!-- Right: Upload -->
+          <div class="p-5">
+            <p class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-2">
+              Source Documents <span class="text-red-500">*</span>
+            </p>
+            <div id="drop-zone"
+              class="border-2 border-dashed border-slate-300 rounded-xl p-3 text-center cursor-pointer transition-all duration-200 hover:border-slate-400 hover:bg-slate-50 mb-2"
+              onclick="document.getElementById('file-input').click()"
+              ondragover="handleDragOver(event)"
+              ondragleave="handleDragLeave(event)"
+              ondrop="handleDrop(event)">
+              <div class="flex flex-col items-center gap-2">
+                <div class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center">
+                  <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                  </svg>
+                </div>
+                <div>
+                  <p class="font-semibold text-slate-600 text-sm">Drop files here or <span class="text-slate-900 underline">browse</span></p>
+                  <p class="text-xs text-slate-400 mt-0.5">Process maps, SOPs, PDF, Word, PowerPoint — add as many as needed</p>
+                </div>
+              </div>
+              <input id="file-input" type="file" class="hidden"
+                accept=".pdf,.docx,.doc,.pptx,.ppt,.txt,.xlsx,.xls,.csv"
+                multiple
+                onchange="handleFileSelect(event)" />
+            </div>
+            <div id="file-list" class="flex flex-col gap-2 mb-4"></div>
+
+            <!-- Output format -->
+            <div>
+              <p class="text-xs font-semibold text-slate-600 mb-2">Output Format</p>
+              <div class="flex gap-3 flex-wrap">
+                <label class="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="output-format" value="screen" checked class="accent-slate-900" />
+                  <span class="text-xs text-slate-700">View on screen</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="output-format" value="docx" class="accent-slate-900" />
+                  <span class="text-xs text-slate-700">Download Word</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="output-format" value="pptx" class="accent-slate-900" />
+                  <span class="text-xs text-slate-700">Download PowerPoint</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="border-t border-slate-200 px-7 py-2 flex justify-end bg-slate-50">
+          <button id="generate-btn"
+            onclick="generateScorecard()"
+            disabled
+            class="inline-flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white text-sm font-semibold rounded-lg shadow disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 active:bg-slate-800 transition-colors duration-150">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+            </svg>
+            Generate Scorecard
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Output Section -->
+    <div id="output-section" class="hidden">
+      <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <button onclick="restartScorecard()"
+          class="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-600 border border-slate-300 rounded-lg bg-white hover:bg-slate-50 transition">
+          ↺ Restart
+        </button>
+        <div class="flex gap-2">
+          <button onclick="downloadScorecard('docx')"
+            class="inline-flex items-center gap-2 px-4 py-2 border border-slate-300 text-slate-700 text-sm font-semibold rounded-lg bg-white hover:bg-slate-50 transition">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            Download Word
+          </button>
+          <button onclick="downloadScorecard('pptx')"
+            class="inline-flex items-center gap-2 px-5 py-2 bg-slate-900 text-white text-sm font-semibold rounded-lg hover:bg-slate-700 transition">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            Download PowerPoint
+          </button>
+        </div>
+      </div>
+      <div class="bg-white border border-slate-200 rounded-xl shadow-sm px-10 py-10">
+        <div id="sc-output" class="sc-body max-w-3xl mx-auto"></div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    const API_BASE = 'http://localhost:8000';
+    let selectedFiles = [];
+    let currentScMarkdown = null;
+    let currentProcessName = null;
+
+    const DIMENSIONS = [
+      { id: 'waste',        label: 'Waste & Non-Value-Adding Activity (LEAN)' },
+      { id: 'handoffs',     label: 'Handoffs & Waiting Time' },
+      { id: 'automation',   label: 'Automation Potential (ESOAR)' },
+      { id: 'rework',       label: 'Rework & Exception Rate' },
+      { id: 'standardisation', label: 'Standardisation & Consistency' },
+      { id: 'controls',     label: 'Controls & Risk Exposure' },
+      { id: 'data_quality', label: 'Data Quality & Availability' },
+      { id: 'customer',     label: 'Customer / Stakeholder Impact' },
+    ];
+
+    function signOut() {
+      sessionStorage.removeItem('poet_auth');
+      window.location.href = '/login.html';
+    }
+
+    function escHtml(s) {
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function buildDimensionList() {
+      document.getElementById('dimension-list').innerHTML = DIMENSIONS.map(d => `
+        <label class="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-slate-50 select-none">
+          <input type="checkbox" id="dim-${d.id}" value="${d.id}"
+            onchange="updateGenerateBtn()"
+            class="w-3.5 h-3.5 flex-shrink-0 accent-slate-900" />
+          <span class="text-xs text-slate-700">${escHtml(d.label)}</span>
+        </label>
+      `).join('');
+    }
+
+    function updateGenerateBtn() {
+      const hasName = document.getElementById('process-name').value.trim().length > 0;
+      const hasDims = DIMENSIONS.some(d => {
+        const el = document.getElementById('dim-' + d.id);
+        return el && el.checked;
+      });
+      const hasFiles = selectedFiles.length > 0;
+      document.getElementById('generate-btn').disabled = !(hasName && hasDims && hasFiles);
+    }
+
+    function handleDragOver(e) { e.preventDefault(); document.getElementById('drop-zone').classList.add('dragover'); }
+    function handleDragLeave(e) { document.getElementById('drop-zone').classList.remove('dragover'); }
+    function handleDrop(e) {
+      e.preventDefault();
+      document.getElementById('drop-zone').classList.remove('dragover');
+      addFiles(Array.from(e.dataTransfer.files));
+    }
+    function handleFileSelect(e) { addFiles(Array.from(e.target.files)); }
+
+    function addFiles(files) {
+      files.forEach(f => {
+        if (!selectedFiles.find(x => x.name === f.name && x.size === f.size)) {
+          selectedFiles.push(f);
+        }
+      });
+      renderFileList();
+      updateGenerateBtn();
+    }
+
+    function removeFile(idx) {
+      selectedFiles.splice(idx, 1);
+      renderFileList();
+      updateGenerateBtn();
+    }
+
+    function renderFileList() {
+      document.getElementById('file-list').innerHTML = selectedFiles.map((f, i) => `
+        <div class="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <svg class="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+            </svg>
+            <span class="text-xs text-slate-700 truncate">${escHtml(f.name)}</span>
+          </div>
+          <button onclick="removeFile(${i})" class="text-slate-400 hover:text-red-500 ml-2 flex-shrink-0">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    async function generateScorecard() {
+      const processName = document.getElementById('process-name').value.trim();
+      const industry    = document.getElementById('industry').value.trim();
+      const dims        = DIMENSIONS.filter(d => document.getElementById('dim-' + d.id)?.checked).map(d => d.id);
+      const fmt         = document.querySelector('input[name="output-format"]:checked')?.value || 'screen';
+
+      document.getElementById('error-bar').classList.add('hidden');
+      document.getElementById('status-bar').classList.remove('hidden');
+      document.getElementById('generate-btn').disabled = true;
+
+      const fd = new FormData();
+      selectedFiles.forEach(f => fd.append('files', f));
+      fd.append('process_name', processName);
+      fd.append('industry', industry);
+      fd.append('dimensions_json', JSON.stringify(dims));
+
+      try {
+        const res = await fetch(`${API_BASE}/api/generate-scorecard`, { method: 'POST', body: fd });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || res.statusText);
+        }
+        const data = await res.json();
+        currentScMarkdown  = data.sc_markdown;
+        currentProcessName = processName;
+
+        document.getElementById('status-bar').classList.add('hidden');
+
+        if (fmt === 'screen') {
+          const container = document.getElementById('sc-output');
+          container.innerHTML = LEGEND_HTML + marked.parse(currentScMarkdown);
+          applyRagBadges(container);
+          document.getElementById('form-section').classList.add('hidden');
+          document.getElementById('output-section').classList.remove('hidden');
+        } else {
+          await downloadScorecard(fmt);
+          document.getElementById('generate-btn').disabled = false;
+        }
+      } catch (err) {
+        document.getElementById('status-bar').classList.add('hidden');
+        document.getElementById('error-text').textContent = err.message;
+        document.getElementById('error-bar').classList.remove('hidden');
+        document.getElementById('generate-btn').disabled = false;
+      }
+    }
+
+    async function downloadScorecard(fmt) {
+      if (!currentScMarkdown) return;
+      const fd = new FormData();
+      fd.append('sc_markdown',  currentScMarkdown);
+      fd.append('process_name', currentProcessName || 'Process Health Scorecard');
+      fd.append('format', fmt);
+      const res = await fetch(`${API_BASE}/api/export-scorecard`, { method: 'POST', body: fd });
+      if (!res.ok) { alert('Export failed'); return; }
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = (currentProcessName || 'scorecard').toLowerCase().replace(/\s+/g,'_') + '.' + fmt;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function restartScorecard() {
+      selectedFiles = [];
+      currentScMarkdown = null;
+      currentProcessName = null;
+      document.getElementById('process-name').value = '';
+      document.getElementById('industry').value = '';
+      renderFileList();
+      buildDimensionList();
+      updateGenerateBtn();
+      document.getElementById('output-section').classList.add('hidden');
+      document.getElementById('form-section').classList.remove('hidden');
+      document.getElementById('error-bar').classList.add('hidden');
+    }
+
+    // Hardcoded legend — always shown at the top of every scorecard output
+    const LEGEND_HTML = `
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px 18px;margin-bottom:1.5rem;">
+        <p style="font-size:0.7rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;margin:0 0 10px;">Rating Legend</p>
+        <div style="display:flex;flex-wrap:wrap;gap:10px 24px;">
+          <div style="display:flex;align-items:flex-start;gap:8px;">
+            <span class="rag-red" style="margin-top:1px;flex-shrink:0;">RED</span>
+            <span style="font-size:0.78rem;color:#475569;">Significant problems — urgent attention and remediation required</span>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:8px;">
+            <span class="rag-amber" style="margin-top:1px;flex-shrink:0;">AMBER</span>
+            <span style="font-size:0.78rem;color:#475569;">Notable issues — improvement recommended within current cycle</span>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:8px;">
+            <span class="rag-green" style="margin-top:1px;flex-shrink:0;">GREEN</span>
+            <span style="font-size:0.78rem;color:#475569;">Performing well — minor improvements only, no urgent action</span>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:8px;">
+            <span class="rag-high" style="margin-top:1px;flex-shrink:0;">HIGH</span>
+            <span style="font-size:0.78rem;color:#475569;">Priority: address immediately</span>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:8px;">
+            <span class="rag-medium" style="margin-top:1px;flex-shrink:0;">MEDIUM</span>
+            <span style="font-size:0.78rem;color:#475569;">Priority: plan within current delivery cycle</span>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:8px;">
+            <span class="rag-low" style="margin-top:1px;flex-shrink:0;">LOW</span>
+            <span style="font-size:0.78rem;color:#475569;">Priority: monitor or address when capacity allows</span>
+          </div>
+        </div>
+        <p style="font-size:0.72rem;color:#94a3b8;margin:10px 0 0;">All ratings are based on evidence from uploaded source documents. Consultant judgement applied where document data is limited.</p>
+      </div>`;
+
+    // Colour RAG/status keywords throughout the rendered body
+    function applyRagBadges(container) {
+      const map = [
+        { re: /\bRED\b/g,    cls: 'rag-red'    },
+        { re: /\bAMBER\b/g,  cls: 'rag-amber'  },
+        { re: /\bGREEN\b/g,  cls: 'rag-green'  },
+        { re: /\bHIGH\b/g,   cls: 'rag-high'   },
+        { re: /\bMEDIUM\b/g, cls: 'rag-medium' },
+        { re: /\bLOW\b/g,    cls: 'rag-low'    },
+      ];
+      const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      nodes.forEach(node => {
+        const skip = ['H1','H2','H3','SPAN'];
+        if (skip.includes(node.parentNode.tagName)) return;
+        let html = node.textContent.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        let changed = false;
+        map.forEach(({re, cls}) => {
+          html = html.replace(re, m => { changed = true; return `<span class="${cls}">${m}</span>`; });
+        });
+        if (changed) {
+          const wrap = document.createElement('span');
+          wrap.innerHTML = html;
+          node.parentNode.replaceChild(wrap, node);
+        }
+      });
+    }
+
+    buildDimensionList();
+    updateGenerateBtn();
+  </script>
+</body>
+</html>

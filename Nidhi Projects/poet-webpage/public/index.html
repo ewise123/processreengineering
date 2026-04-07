@@ -17,12 +17,12 @@
 <body class="min-h-screen bg-slate-50">
 
   <!-- Header -->
-  <header class="bg-slate-900 text-white px-8 py-0 flex items-center min-h-28 relative shadow-lg">
-    <img src="/ChatGPT Image Feb 23, 2026, 09_07_03 PM.png" alt="POET" class="h-24 w-auto object-contain mr-6" />
+  <header class="bg-slate-900 text-white px-8 py-0 flex items-center min-h-16 relative shadow-lg">
+    <img src="/ChatGPT Image Feb 23, 2026, 09_07_03 PM.png" alt="POET" class="h-10 w-auto object-contain mr-5" />
     <div>
-      <div class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-1">SSA & Company</div>
-      <h1 class="text-2xl font-bold tracking-tight">Process Optimization Engineering Tool (POET)</h1>
-      <p class="text-slate-400 text-sm mt-0.5">AI-Enabled Process Re-Engineering Platform</p>
+      <div class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-0">SSA & Company</div>
+      <h1 class="text-lg font-bold tracking-tight">Process Optimization Engineering Tool (POET)</h1>
+      <p class="text-slate-400 text-xs mt-0">AI-Enabled Process Re-Engineering Platform</p>
     </div>
     <div class="ml-auto flex items-center gap-4">
       <button onclick="signOut()" class="text-xs text-slate-400 hover:text-white transition">Sign out</button>
@@ -31,47 +31,101 @@
   </header>
 
   <!-- Hero Banner -->
-  <div class="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-8 py-6">
-    <div class="max-w-4xl mx-auto">
-      <p class="text-slate-300 text-sm leading-relaxed max-w-2xl">
+  <div class="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-8 py-2">
+    <div class="max-w-5xl mx-auto">
+      <p class="text-slate-300 text-xs">
         Ingest existing client documentation and generate a standardized suite of process deliverables — accelerating discovery, improving consistency, and embedding governance from the start.
       </p>
     </div>
   </div>
 
   <!-- Main Actions -->
-  <main class="max-w-5xl mx-auto px-8 py-10">
-    <h2 class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-6">Select a Workflow</h2>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+  <main class="max-w-5xl mx-auto px-8 py-4">
+    <h2 class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-3">Select a Workflow</h2>
+
+    <!-- Row 1 -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch">
 
       <button onclick="window.location.href='/process-document.html'"
-        class="group text-left bg-white border border-slate-200 rounded-xl p-6 hover:border-slate-400 hover:shadow-md transition-all duration-200">
-        <div class="w-10 h-10 rounded-lg bg-slate-900 flex items-center justify-center mb-4">
-          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        class="group flex flex-col text-left bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-400 hover:shadow-md transition-all duration-200">
+        <div class="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center mb-2">
+          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
         </div>
-        <h3 class="font-semibold text-slate-900 mb-1">Create a Standard Operating Procedure (SOP)</h3>
-        <p class="text-sm text-slate-500 leading-relaxed">Produce executive overviews, architecture documents, RACI matrices, and activity-level documentation.</p>
-        <span class="mt-4 inline-flex items-center text-xs font-medium text-slate-700 group-hover:underline">Get started →</span>
+        <h3 class="font-semibold text-slate-900 text-sm mb-1">Create a Standard Operating Procedure (SOP)</h3>
+        <p class="text-xs text-slate-500 leading-relaxed">Generate structured SOPs from source documents — with executive, concise, and full-detail output variations.</p>
+        <span class="mt-auto pt-3 inline-flex items-center text-xs font-medium text-slate-700 group-hover:underline">Get started →</span>
       </button>
 
       <button onclick="window.location.href='/process-map.html'"
-        class="group text-left bg-white border border-slate-200 rounded-xl p-6 hover:border-slate-400 hover:shadow-md transition-all duration-200">
-        <div class="w-10 h-10 rounded-lg bg-slate-900 flex items-center justify-center mb-4">
-          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+        class="group flex flex-col text-left bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-400 hover:shadow-md transition-all duration-200">
+        <div class="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center mb-2">
+          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
         </div>
-        <h3 class="font-semibold text-slate-900 mb-1">Create a BPMN Process Map</h3>
-        <p class="text-sm text-slate-500 leading-relaxed">Generate BPMN process maps (L1–L4) for current and future state with consistent modeling conventions.</p>
-        <span class="mt-4 inline-flex items-center text-xs font-medium text-slate-700 group-hover:underline">Get started →</span>
+        <h3 class="font-semibold text-slate-900 text-sm mb-1">Create a BPMN Process Map &amp; Implementation Plan</h3>
+        <p class="text-xs text-slate-500 leading-relaxed">Generate current and future state BPMN maps (L1–L4) and a structured implementation plan to bridge the gap.</p>
+        <div class="mt-1.5 flex flex-wrap gap-1">
+          <span class="text-xs bg-slate-100 text-slate-600 rounded px-1.5 py-0.5">Current State</span>
+          <span class="text-xs bg-slate-100 text-slate-600 rounded px-1.5 py-0.5">Future State</span>
+          <span class="text-xs bg-slate-100 text-slate-600 rounded px-1.5 py-0.5">Impl. Plan</span>
+        </div>
+        <span class="mt-auto pt-3 inline-flex items-center text-xs font-medium text-slate-700 group-hover:underline">Get started →</span>
       </button>
 
       <button onclick="window.location.href='/automation-options.html'"
-        class="group text-left bg-white border border-slate-200 rounded-xl p-6 hover:border-slate-400 hover:shadow-md transition-all duration-200">
-        <div class="w-10 h-10 rounded-lg bg-slate-900 flex items-center justify-center mb-4">
-          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+        class="group flex flex-col text-left bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-400 hover:shadow-md transition-all duration-200">
+        <div class="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center mb-2">
+          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
         </div>
-        <h3 class="font-semibold text-slate-900 mb-1">Assess Process Automation Options</h3>
-        <p class="text-sm text-slate-500 leading-relaxed">Identify waste, surface root causes, and prioritize a lean-based opportunity backlog by impact and effort.</p>
-        <span class="mt-4 inline-flex items-center text-xs font-medium text-slate-700 group-hover:underline">Get started →</span>
+        <h3 class="font-semibold text-slate-900 text-sm mb-1">Assess Process Optimization Options</h3>
+        <p class="text-xs text-slate-500 leading-relaxed">Identify waste and prioritize opportunities using the Eliminate, Standardize, Optimize, Automate, Robotize (ESOAR) framework.</p>
+        <span class="mt-auto pt-3 inline-flex items-center text-xs font-medium text-slate-700 group-hover:underline">Get started →</span>
+      </button>
+
+    </div>
+
+    <!-- Row 2 -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch mt-3">
+
+      <button onclick="window.location.href='/process-health-scorecard.html'"
+        class="group flex flex-col text-left bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-400 hover:shadow-md transition-all duration-200">
+        <div class="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center mb-2">
+          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+        </div>
+        <h3 class="font-semibold text-slate-900 text-sm mb-1">Process Health Scorecard</h3>
+        <p class="text-xs text-slate-500 leading-relaxed">RAG-rated health assessment across ESOAR and LEAN dimensions — identifying waste, automation potential, and rework.</p>
+        <div class="mt-1.5 flex flex-wrap gap-1">
+          <span class="text-xs bg-slate-100 text-slate-600 rounded px-1.5 py-0.5">RAG Rating</span>
+          <span class="text-xs bg-slate-100 text-slate-600 rounded px-1.5 py-0.5">LEAN / ESOAR</span>
+        </div>
+        <span class="mt-auto pt-3 inline-flex items-center text-xs font-medium text-slate-700 group-hover:underline">Get started →</span>
+      </button>
+
+      <button onclick="window.location.href='/raci-matrix.html'"
+        class="group flex flex-col text-left bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-400 hover:shadow-md transition-all duration-200">
+        <div class="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center mb-2">
+          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18M10 3v18M14 3v18"/></svg>
+        </div>
+        <h3 class="font-semibold text-slate-900 text-sm mb-1">RACI Matrix Generator</h3>
+        <p class="text-xs text-slate-500 leading-relaxed">Auto-generate a Responsible, Accountable, Consulted, Informed matrix from any process map or SOP — with gap analysis.</p>
+        <div class="mt-1.5 flex flex-wrap gap-1">
+          <span class="text-xs bg-slate-100 text-slate-600 rounded px-1.5 py-0.5">RACI Table</span>
+          <span class="text-xs bg-slate-100 text-slate-600 rounded px-1.5 py-0.5">Gap Analysis</span>
+        </div>
+        <span class="mt-auto pt-3 inline-flex items-center text-xs font-medium text-slate-700 group-hover:underline">Get started →</span>
+      </button>
+
+      <button onclick="window.location.href='/change-impact-assessment.html'"
+        class="group flex flex-col text-left bg-white border border-slate-200 rounded-xl p-4 hover:border-slate-400 hover:shadow-md transition-all duration-200">
+        <div class="w-8 h-8 rounded-lg bg-slate-900 flex items-center justify-center mb-2">
+          <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+        </div>
+        <h3 class="font-semibold text-slate-900 text-sm mb-1">Change Impact Assessment</h3>
+        <p class="text-xs text-slate-500 leading-relaxed">Compare current and future state documents to produce a structured change impact report by stakeholder group.</p>
+        <div class="mt-1.5 flex flex-wrap gap-1">
+          <span class="text-xs bg-slate-100 text-slate-600 rounded px-1.5 py-0.5">Stakeholder Impact</span>
+          <span class="text-xs bg-slate-100 text-slate-600 rounded px-1.5 py-0.5">Change Actions</span>
+        </div>
+        <span class="mt-auto pt-3 inline-flex items-center text-xs font-medium text-slate-700 group-hover:underline">Get started →</span>
       </button>
 
     </div>

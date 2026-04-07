@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Assess Process Automation Options – POET</title>
+  <title>Assess Process Optimization Options – POET</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
@@ -29,38 +29,45 @@
 <body class="min-h-screen bg-slate-50">
 
   <!-- Header -->
-  <header class="bg-slate-900 text-white px-8 py-0 flex items-center min-h-28 relative shadow-lg">
-    <img src="/ChatGPT Image Feb 23, 2026, 09_07_03 PM.png" alt="POET" class="h-24 w-auto object-contain mr-6" />
+  <header class="bg-slate-900 text-white px-8 py-0 flex items-center min-h-16 relative shadow-lg">
+    <img src="/ChatGPT Image Feb 23, 2026, 09_07_03 PM.png" alt="POET" class="h-10 w-auto object-contain mr-6" />
     <div>
-      <div class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-1">SSA & Company</div>
-      <h1 class="text-2xl font-bold tracking-tight">Process Optimization Engineering Tool (POET)</h1>
-      <p class="text-slate-400 text-sm mt-0.5">AI-Enabled Process Re-Engineering Platform</p>
+      <div class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-0">SSA & Company</div>
+      <h1 class="text-lg font-bold tracking-tight">Process Optimization Engineering Tool (POET)</h1>
+      <p class="text-slate-400 text-xs mt-0.5">AI-Enabled Process Re-Engineering Platform</p>
     </div>
     <div class="ml-auto flex items-center gap-4">
+      <a href="/index.html" class="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7m-9 10V10m0 0h4m-4 0H7" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 21V10h6v11" />
+        </svg>
+        Home
+      </a>
       <button onclick="signOut()" class="text-xs text-slate-400 hover:text-white transition">Sign out</button>
       <div class="h-8 w-8 rounded-full bg-slate-600 flex items-center justify-center text-white font-medium text-sm">U</div>
     </div>
   </header>
 
   <!-- Hero Banner -->
-  <div class="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-8 py-4">
+  <div class="bg-gradient-to-r from-slate-800 to-slate-700 text-white px-8 py-2">
     <div class="max-w-5xl mx-auto">
-      <p class="text-slate-300 text-sm">Upload process documents and generate a professional Process Optimisation Business Case with targeted improvement recommendations.</p>
+      <p class="text-slate-300 text-xs">Upload process documents and generate targeted improvement recommendations using the Eliminate, Standardize, Optimize, Automate, Robotize (ESOAR) framework — delivered as a professional Process Optimization Business Case.</p>
     </div>
   </div>
 
   <!-- Page Content -->
-  <main class="max-w-5xl mx-auto px-8 py-8">
+  <main class="max-w-5xl mx-auto px-8 py-4">
 
     <!-- Breadcrumb -->
-    <div class="flex items-center gap-3 mb-6">
+    <div class="flex items-center gap-3 mb-3">
       <a href="/index.html" class="text-sm text-slate-400 hover:text-slate-700 transition">← Back</a>
       <span class="text-slate-300">/</span>
-      <span class="text-sm font-semibold text-slate-700">Assess Process Automation Options</span>
+      <span class="text-sm font-semibold text-slate-700">Assess Process Optimization Options</span>
     </div>
 
     <!-- Error bar -->
-    <div id="error-bar" class="hidden mb-5 flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+    <div id="error-bar" class="hidden mb-3 flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
       <svg class="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
       </svg>
@@ -68,7 +75,7 @@
     </div>
 
     <!-- Status bar -->
-    <div id="status-bar" class="hidden mb-5 flex items-center gap-3 bg-white border border-slate-200 rounded-lg px-4 py-3 shadow-sm">
+    <div id="status-bar" class="hidden mb-3 flex items-center gap-3 bg-white border border-slate-200 rounded-lg px-4 py-3 shadow-sm">
       <svg class="w-5 h-5 text-slate-500 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
@@ -85,11 +92,11 @@
         <div class="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-200">
 
           <!-- Left: Configure -->
-          <div class="p-7">
-            <p class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-5">Configure</p>
+          <div class="p-5">
+            <p class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-2">Configure</p>
 
             <!-- Process Name -->
-            <div class="mb-5">
+            <div class="mb-3">
               <label class="block text-xs font-semibold text-slate-600 mb-1.5" for="process-name">
                 Process Name <span class="text-red-500">*</span>
               </label>
@@ -98,17 +105,8 @@
                 class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400" />
             </div>
 
-            <!-- Department -->
-            <div class="mb-5">
-              <label class="block text-xs font-semibold text-slate-600 mb-1.5" for="bc-department">
-                Department / Owner
-              </label>
-              <input id="bc-department" type="text" placeholder="e.g. Finance Team"
-                class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400" />
-            </div>
-
             <!-- Improvement Focus -->
-            <div class="mb-5">
+            <div class="mb-3">
               <div class="flex items-center justify-between mb-2">
                 <label class="text-xs font-semibold text-slate-600">Improvement Focus <span class="text-red-500">*</span></label>
                 <span class="text-xs text-slate-400">select all that apply</span>
@@ -122,25 +120,25 @@
                 <label class="text-xs font-semibold text-slate-600">Business Case Sections <span class="text-red-500">*</span></label>
                 <span id="section-count" class="text-xs text-slate-400"></span>
               </div>
-              <div id="section-list" class="border border-slate-200 rounded-lg overflow-y-auto divide-y divide-slate-100" style="max-height:200px"></div>
+              <div id="section-list" class="border border-slate-200 rounded-lg overflow-y-auto divide-y divide-slate-100" style="max-height:160px"></div>
             </div>
           </div>
 
           <!-- Right: Upload -->
-          <div class="p-7">
-            <p class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-5">
+          <div class="p-5">
+            <p class="text-xs font-semibold tracking-widest text-slate-400 uppercase mb-2">
               Source Documents <span class="text-red-500">*</span>
             </p>
 
             <!-- Drop zone -->
             <div id="drop-zone"
-              class="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center cursor-pointer transition-all duration-200 hover:border-slate-400 hover:bg-slate-50 mb-4"
+              class="border-2 border-dashed border-slate-300 rounded-xl p-3 text-center cursor-pointer transition-all duration-200 hover:border-slate-400 hover:bg-slate-50 mb-2"
               onclick="document.getElementById('file-input').click()"
               ondragover="handleDragOver(event)"
               ondragleave="handleDragLeave(event)"
               ondrop="handleDrop(event)">
               <div class="flex flex-col items-center gap-2">
-                <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center">
+                <div class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center">
                   <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                   </svg>
@@ -182,7 +180,7 @@
         </div>
 
         <!-- Footer -->
-        <div class="border-t border-slate-200 px-7 py-4 flex justify-end bg-slate-50">
+        <div class="border-t border-slate-200 px-7 py-2 flex justify-end bg-slate-50">
           <button id="generate-btn"
             onclick="generateBusinessCase()"
             disabled
@@ -236,12 +234,11 @@
 
     // ── Data ──────────────────────────────────────────────────────────────────
     const IMPROVEMENT_OPTIONS = [
-      { id: 'lean',             label: 'LEAN Process Optimisation' },
-      { id: 'rpa',              label: 'Robotic Process Automation (RPA)' },
-      { id: 'ai',               label: 'AI / Intelligent Automation' },
-      { id: 'system_integration', label: 'System Integration' },
-      { id: 'digitisation',     label: 'Workflow Digitisation' },
-      { id: 'offshoring',       label: 'Offshoring / Outsourcing' },
+      { id: 'eliminate',   label: 'Eliminate — remove non-value-adding steps and waste' },
+      { id: 'standardize', label: 'Standardize — establish consistent, repeatable processes' },
+      { id: 'optimize',    label: 'Optimize — improve efficiency, quality, and throughput' },
+      { id: 'automate',    label: 'Automate — apply workflow and rules-based automation' },
+      { id: 'robotize',    label: 'Robotize — apply RPA or AI-driven intelligent automation' },
     ];
 
     const BC_SECTIONS = [
@@ -255,11 +252,12 @@
       { id: 'technology_requirements', label: 'Technology Requirements' },
       { id: 'governance',              label: 'Governance & Ownership' },
       { id: 'risks_mitigations',       label: 'Risks & Mitigations' },
+      { id: 'sources',                 label: 'Sources and Assumptions', required: true },
     ];
 
     const DEFAULT_BC_SECTIONS = [
       'executive_summary', 'current_state', 'target_state',
-      'financial_impact', 'implementation_plan', 'risks_mitigations'
+      'financial_impact', 'implementation_plan', 'risks_mitigations', 'sources'
     ];
 
     // ── Auth ──────────────────────────────────────────────────────────────────
@@ -394,7 +392,6 @@
       if (!selectedFiles.length) return;
 
       const processName  = document.getElementById('process-name').value.trim();
-      const dept         = document.getElementById('bc-department').value.trim();
       const focuses      = getSelectedFocuses();
       const sections     = getSelectedSections();
       const outputFormat = document.querySelector('input[name="output-format"]:checked').value;
@@ -406,7 +403,6 @@
       const formData = new FormData();
       selectedFiles.forEach(f => formData.append('files', f));
       formData.append('process_name',   processName);
-      formData.append('department',     dept);
       formData.append('focuses_json',   JSON.stringify(focuses));
       formData.append('sections_json',  JSON.stringify(sections));
 
@@ -423,7 +419,7 @@
         }
 
         const data = await response.json();
-        currentBcMarkdown  = data.bc_markdown;
+        currentBcMarkdown  = data.bc_markdown.replace(/~~(.+?)~~/gs, '$1');
         currentProcessName = processName;
 
         hideStatus();
@@ -454,7 +450,6 @@
       currentProcessName = null;
       renderFileList();
       document.getElementById('process-name').value  = '';
-      document.getElementById('bc-department').value = '';
       IMPROVEMENT_OPTIONS.forEach(o => {
         const cb = document.getElementById('focus-' + o.id);
         if (cb) cb.checked = false;

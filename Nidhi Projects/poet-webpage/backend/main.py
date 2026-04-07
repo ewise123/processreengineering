@@ -17,7 +17,9 @@ from dotenv import load_dotenv
 import anthropic
 
 # Document parsers
+import csv
 import pdfplumber
+import openpyxl
 from docx import Document as DocxDocument
 from pptx import Presentation
 
@@ -34,7 +36,7 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".txt"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".txt", ".xlsx", ".xls", ".csv"}
 MAX_FILE_SIZE_MB = 20
 
 
@@ -74,6 +76,25 @@ def extract_text_from_pptx(file_bytes: bytes) -> str:
     return "\n\n".join(slide_texts)
 
 
+def extract_text_from_excel(file_bytes: bytes) -> str:
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    parts = []
+    for sheet in wb.worksheets:
+        parts.append(f"[Sheet: {sheet.title}]")
+        for row in sheet.iter_rows(values_only=True):
+            row_text = " | ".join(str(c) for c in row if c is not None and str(c).strip())
+            if row_text:
+                parts.append(row_text)
+    wb.close()
+    return "\n".join(parts)
+
+
+def extract_text_from_csv(file_bytes: bytes) -> str:
+    text = file_bytes.decode("utf-8", errors="ignore")
+    reader = csv.reader(io.StringIO(text))
+    return "\n".join(" | ".join(cell.strip() for cell in row if cell.strip()) for row in reader)
+
+
 def extract_text(file_bytes: bytes, filename: str) -> str:
     ext = Path(filename).suffix.lower()
     if ext == ".pdf":
@@ -84,6 +105,10 @@ def extract_text(file_bytes: bytes, filename: str) -> str:
         return extract_text_from_pptx(file_bytes)
     elif ext == ".txt":
         return file_bytes.decode("utf-8", errors="ignore")
+    elif ext in (".xlsx", ".xls"):
+        return extract_text_from_excel(file_bytes)
+    elif ext == ".csv":
+        return extract_text_from_csv(file_bytes)
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
@@ -155,7 +180,7 @@ GATEWAY ROUTING — critical rules for no_to and yes_to:
 - A gateway with both Yes and No going to the same step is invalid — use a task instead.
 
 ADDITIONAL RULES:
-- Maximum 10 steps total
+- The number of steps is defined by the detail level instruction below — follow it precisely
 - Step IDs must be unique snake_case strings
 - The "role" field is REQUIRED for every step — identify the actor, department, or system. If unspecified, use "Process Team"
 - Group related steps under the same role name so swimlanes are meaningful
@@ -163,45 +188,100 @@ ADDITIONAL RULES:
 - If no clear branches exist, return an empty gateways array"""
 
 
+IDENTIFY_PROCESSES_PROMPT = """Analyze the provided document(s) and identify all distinct business processes described within them.
+
+Return ONLY a valid JSON array — no prose, no markdown fences. Each item must have:
+- "name": short process name in Title Case (3–6 words)
+- "description": one sentence describing what the process achieves
+
+Rules:
+- List only genuine end-to-end processes, not individual tasks or sub-steps
+- Typical document contains 1–5 processes
+- If the content describes one coherent process, return a single-item array
+
+Example output:
+[
+  {"name": "Invoice Approval Process", "description": "Manages review and sign-off of vendor invoices before payment is released."},
+  {"name": "Vendor Onboarding Process", "description": "Guides new suppliers through registration, compliance checks, and system setup."}
+]"""
+
+
 LEVEL_INSTRUCTIONS = {
     "1": (
-        "This is a LEVEL 1 process map — high-level overview only. "
-        "Extract only the major phases or stages (aim for 4–6 steps). "
-        "Do not include sub-tasks, detailed decisions, or system interactions. "
-        "Use broad role names (e.g. 'Business', 'Management')."
+        "This is a LEVEL 1 — Process Landscape map. Purpose: executive alignment and scope definition.\n"
+        "STEP COUNT: 5–10 major process phases only (e.g. 'Receive Claim → Triage → Adjudicate → Settle → Close').\n"
+        "CONTENT RULES:\n"
+        "  - Show ONLY the major end-to-end stages — what happens, not how.\n"
+        "  - Do NOT include sub-tasks, decision gateways, exception paths, or system interactions.\n"
+        "  - Return an EMPTY gateways array — no decision points at this level.\n"
+        "  - Use a single broad role (e.g. 'Business', 'Operations') or omit swimlane differentiation.\n"
+        "  - Think of this as a value chain: simple linear boxes representing major phases.\n"
+        "  - Suitable for: steering committees, strategy sessions, executive briefings."
     ),
     "2": (
-        "This is a LEVEL 2 process map — key activities within each phase. "
-        "Extract the main activities (aim for 6–8 steps). "
-        "Include significant decision points but omit low-level sub-tasks. "
-        "Assign roles to each step."
+        "This is a LEVEL 2 — End-to-End Cross-Functional Process map. Purpose: understand flow across teams.\n"
+        "STEP COUNT: 15–25 activities.\n"
+        "CONTENT RULES:\n"
+        "  - Introduce full BPMN elements: start/end events, activities, and key decision gateways.\n"
+        "  - Show major steps AND handoffs between functions — who does what and when.\n"
+        "  - Use distinct swimlane roles for each function or department involved (e.g. 'Call Center', 'Adjuster', 'Finance').\n"
+        "  - Include key decision points (exclusive gateways) that drive the main flow, but omit low-level task detail.\n"
+        "  - Do NOT break activities into individual sub-tasks — keep each step at a functional action level.\n"
+        "  - Suitable for: process owners, operations managers, transformation programmes."
     ),
     "3": (
-        "This is a LEVEL 3 process map — detailed steps and decision points. "
-        "Extract all meaningful steps and decisions (up to 10 steps). "
-        "Include all decision gateways where the process branches. "
-        "Assign specific roles or departments to each step."
+        "This is a LEVEL 3 — Detailed Operational Workflow map. Purpose: diagnose inefficiencies and design improvements.\n"
+        "STEP COUNT: 30–50 activities.\n"
+        "CONTENT RULES:\n"
+        "  - Break each Level 2 activity into its granular component tasks.\n"
+        "  - Include ALL of the following where they exist:\n"
+        "      * Detailed decision logic (exclusive, parallel, and inclusive gateways)\n"
+        "      * Exception paths and error handling\n"
+        "      * Rework loops (e.g. 'Return for correction → Re-check')\n"
+        "      * System interactions (e.g. 'Log in policy system', 'Update CRM record') — but not field-level detail\n"
+        "  - Assign specific roles, departments, or systems to EVERY step.\n"
+        "  - Capture real operational complexity — this map should expose bottlenecks and handoff delays.\n"
+        "  - Suitable for: process improvement teams, Six Sigma, Lean, operational redesign."
     ),
     "4": (
-        "This is a LEVEL 4 process map — task-level detail with system interactions. "
-        "Extract every individual task and system interaction (up to 10 steps, prioritise the most important). "
-        "Include all decision points. "
-        "Assign precise roles, systems, or tools to each step (e.g. 'ERP System', 'Finance Analyst')."
+        "This is a LEVEL 4 — Work Instruction / System-Level Detail map. Purpose: execution, training, and automation design.\n"
+        "STEP COUNT: 50–80 activities (use the most important if the process would exceed 80).\n"
+        "CONTENT RULES:\n"
+        "  - The lowest level of detail — step-by-step instructions for individuals or systems.\n"
+        "  - Each step should describe a single atomic action, such as:\n"
+        "      * Opening a specific screen or system\n"
+        "      * Entering a specific field, selecting a dropdown, or triggering a workflow\n"
+        "      * Applying a specific business rule or calculation\n"
+        "      * Sending a specific form or notification to a named recipient\n"
+        "  - Include all business rules, validation checks, and conditional logic.\n"
+        "  - Assign precise roles, named systems, or tools to every step (e.g. 'Claims System', 'RPA Bot', 'Senior Adjuster').\n"
+        "  - Suitable for: SOPs, RPA development, system configuration, staff training, audit documentation."
     ),
 }
 
 
-def extract_process_structure(client: anthropic.Anthropic, document_text: str, bpmn_level: str = "2") -> dict:
+def extract_process_structure(client: anthropic.Anthropic, document_text: str, bpmn_level: str = "2", focus_process: str = "", map_type: str = "") -> dict:
     level_note = LEVEL_INSTRUCTIONS.get(bpmn_level, LEVEL_INSTRUCTIONS["2"])
     system_prompt = STRUCTURE_PROMPT + f"\n\nIMPORTANT — Detail level instruction:\n{level_note}"
     truncated = document_text[:8000] if len(document_text) > 8000 else document_text
+    focus_note = (f"\n\nFocus exclusively on the process named: \"{focus_process}\". "
+                  f"Ignore all other processes described in the document."
+                  if focus_process else "")
+    if map_type == "current_state":
+        focus_note += ("\n\nMAP TYPE — CURRENT STATE: Document the process EXACTLY AS IT EXISTS TODAY. "
+                       "Show the actual workflow including manual steps, handoffs, delays, and inefficiencies as they currently occur. "
+                       "Do not optimise or idealise — capture reality.")
+    elif map_type == "future_state":
+        focus_note += ("\n\nMAP TYPE — FUTURE STATE: Design the process AS IT SHOULD WORK after improvement. "
+                       "Show the optimised, streamlined workflow with inefficiencies removed, automation where applicable, "
+                       "and best-practice steps applied. This is the target desired state.")
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2000,
         system=system_prompt,
         messages=[{
             "role": "user",
-            "content": f"Extract the process structure from this document:\n\n{truncated}"
+            "content": f"Extract the process structure from this document:{focus_note}\n\n{truncated}"
         }]
     )
     raw = message.content[0].text.strip()
@@ -665,6 +745,134 @@ def _parse_bpmn(bpmn_xml: str):
 
 # ── Export helpers ────────────────────────────────────────────────────────────
 
+def _make_shape_key_image() -> bytes:
+    """Render a compact BPMN shape key as a PNG using PIL."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    FONT_SIZE_TITLE = 13
+    FONT_SIZE_LABEL = 11
+    font_title = font_label = None
+    for fpath in [
+        "C:/Windows/Fonts/calibrib.ttf",
+        "C:/Windows/Fonts/calibri.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ]:
+        try:
+            font_title = ImageFont.truetype(fpath, FONT_SIZE_TITLE)
+            font_label = ImageFont.truetype(fpath, FONT_SIZE_LABEL)
+            break
+        except Exception:
+            pass
+    if font_title is None:
+        font_title = ImageFont.load_default()
+        font_label = font_title
+
+    entries = [
+        ("start",  "Start Event"),
+        ("end",    "End Event"),
+        ("xgw",    "Exclusive Gateway"),
+        ("pgw",    "Parallel Gateway"),
+        ("igw",    "Inclusive Gateway"),
+        ("user",   "User Task"),
+        ("svc",    "Service Task"),
+        ("manual", "Manual Task"),
+        ("br",     "Business Rule Task"),
+        ("send",   "Send Task"),
+        ("recv",   "Receive Task"),
+    ]
+
+    COLS     = 2
+    COL_W    = 185
+    ROW_H    = 24
+    ICON_SZ  = 15
+    ICON_PAD = 8
+    TEXT_OFF = ICON_PAD + ICON_SZ + 6
+    TITLE_H  = 22
+    PAD_B    = 8
+
+    rows = (len(entries) + COLS - 1) // COLS
+    W = COLS * COL_W + 16
+    H = TITLE_H + rows * ROW_H + PAD_B
+
+    img = Image.new("RGBA", (W, H), (255, 255, 255, 255))
+    d   = ImageDraw.Draw(img)
+
+    # Border + title bar
+    d.rectangle([0, 0, W - 1, H - 1], outline=(200, 200, 200), width=1)
+    d.rectangle([0, 0, W - 1, TITLE_H - 1], fill=(248, 250, 252))
+    d.line([(0, TITLE_H - 1), (W, TITLE_H - 1)], fill=(220, 220, 220))
+    d.text((8, 4), "SHAPE KEY", fill=(100, 116, 139), font=font_title)
+
+    # Column divider
+    d.line([(COL_W + 8, TITLE_H), (COL_W + 8, H - 1)], fill=(230, 230, 230))
+
+    for i, (key, label) in enumerate(entries):
+        col = i % COLS
+        row = i // COLS
+        x0  = 8 + col * COL_W
+        y0  = TITLE_H + row * ROW_H
+        icx = x0 + ICON_PAD + ICON_SZ // 2
+        icy = y0 + ROW_H // 2
+        r   = ICON_SZ // 2 - 1
+
+        if key == "start":
+            d.ellipse([icx - r, icy - r, icx + r, icy + r],
+                      outline=(34, 197, 94), fill=(255, 255, 255), width=2)
+        elif key == "end":
+            d.ellipse([icx - r, icy - r, icx + r, icy + r],
+                      outline=(153, 27, 27), fill=(255, 255, 255), width=4)
+        elif key in ("xgw", "pgw", "igw"):
+            pts = [(icx, icy - r), (icx + r, icy), (icx, icy + r), (icx - r, icy)]
+            d.polygon(pts, outline=(85, 85, 85), fill=(245, 203, 92))
+            if key == "xgw":
+                d.line([icx - 3, icy - 3, icx + 3, icy + 3], fill=(85, 85, 85), width=1)
+                d.line([icx + 3, icy - 3, icx - 3, icy + 3], fill=(85, 85, 85), width=1)
+            elif key == "pgw":
+                d.line([icx, icy - 3, icx, icy + 3], fill=(85, 85, 85), width=1)
+                d.line([icx - 3, icy, icx + 3, icy], fill=(85, 85, 85), width=1)
+            else:
+                d.ellipse([icx - 2, icy - 2, icx + 2, icy + 2],
+                          outline=(85, 85, 85), fill=(245, 203, 92), width=1)
+        else:
+            rw, rh = ICON_SZ, ICON_SZ - 2
+            d.rectangle([icx - rw // 2, icy - rh // 2, icx + rw // 2, icy + rh // 2],
+                        outline=(100, 130, 160), fill=(175, 193, 214))
+            if key == "user":
+                d.ellipse([icx - 2, icy - rh // 2 + 1, icx + 2, icy - rh // 2 + 5],
+                          fill=(60, 80, 100))
+                d.arc([icx - 4, icy - 2, icx + 4, icy + rh // 2 - 1],
+                      start=0, end=180, fill=(60, 80, 100), width=1)
+            elif key == "svc":
+                d.ellipse([icx - 2, icy - 2, icx + 2, icy + 2],
+                          outline=(60, 80, 100), fill=(175, 193, 214), width=1)
+                for ang_d in [0, 90, 45, 135]:
+                    import math
+                    rad = math.radians(ang_d)
+                    d.line([icx + int(4 * math.cos(rad)), icy + int(4 * math.sin(rad)),
+                            icx - int(4 * math.cos(rad)), icy - int(4 * math.sin(rad))],
+                           fill=(60, 80, 100), width=1)
+            elif key == "br":
+                d.rectangle([icx - 4, icy - 3, icx + 4, icy - 1], fill=(60, 80, 100))
+                d.line([icx - 4, icy + 1, icx + 4, icy + 1], fill=(120, 140, 160), width=1)
+                d.line([icx - 4, icy + 3, icx + 4, icy + 3], fill=(160, 175, 190), width=1)
+            elif key == "send":
+                d.rectangle([icx - 4, icy - 2, icx + 4, icy + 3], fill=(60, 80, 100))
+                d.line([icx - 4, icy - 2, icx, icy + 1], fill=(255, 255, 255), width=1)
+                d.line([icx + 4, icy - 2, icx, icy + 1], fill=(255, 255, 255), width=1)
+            elif key == "recv":
+                d.rectangle([icx - 4, icy - 2, icx + 4, icy + 3],
+                            outline=(60, 80, 100), fill=(175, 193, 214), width=1)
+                d.line([icx - 4, icy - 2, icx, icy + 1], fill=(60, 80, 100), width=1)
+                d.line([icx + 4, icy - 2, icx, icy + 1], fill=(60, 80, 100), width=1)
+
+        d.text((x0 + TEXT_OFF, icy - 6), label, fill=(60, 80, 100), font=font_label)
+
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
 def _make_pptx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes:
     from pptx import Presentation as PRS
     from pptx.util import Inches, Pt, Emu
@@ -885,6 +1093,18 @@ def _make_pptx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes
         run.font.size = Pt(20); run.font.bold = True
         slide.shapes.add_picture(io.BytesIO(png_bytes),
                                  Inches(0.4), Inches(0.9), Inches(12.5), Inches(6.3))
+
+    # ── Shape key: bottom-right corner ────────────────────────────────────────
+    try:
+        key_png    = _make_shape_key_image()
+        KEY_W_E    = Emu(int(2.6 * 914400))
+        KEY_H_E    = Emu(int(1.75 * 914400))
+        _key_mar   = Emu(304800)   # 1/3" margin
+        key_left   = prs.slide_width  - KEY_W_E - _key_mar
+        key_top    = prs.slide_height - KEY_H_E - _key_mar
+        slide.shapes.add_picture(io.BytesIO(key_png), key_left, key_top, KEY_W_E, KEY_H_E)
+    except Exception:
+        pass
 
     out = io.BytesIO()
     prs.save(out)
@@ -1259,6 +1479,68 @@ def _make_docx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes
         sec.top_margin   = sec.bottom_margin = Inches(0.5)
         doc.add_heading(process_name, 0)
         doc.add_picture(io.BytesIO(png_bytes), width=Inches(9.5))
+
+    # ── Shape key: floating picture at bottom-right ───────────────────────────
+    try:
+        key_png  = _make_shape_key_image()
+        KEY_W_IN = 2.6
+        KEY_H_IN = 1.75
+        KEY_W_E  = int(KEY_W_IN * EMU_IN)
+        KEY_H_E  = int(KEY_H_IN * EMU_IN)
+
+        # Add image as a document relationship via a temporary inline picture
+        tmp_p  = doc.add_paragraph()
+        tmp_r  = tmp_p.add_run()
+        tmp_il = tmp_r.add_picture(io.BytesIO(key_png), width=Inches(KEY_W_IN))
+        blip_el = tmp_il._inline.find(
+            './/{http://schemas.openxmlformats.org/drawingml/2006/main}blip')
+        r_id = blip_el.get(
+            '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+        tmp_p._p.getparent().remove(tmp_p._p)
+
+        # Position: bottom-right of the content area
+        key_x_e = int((page_w_in - MARGIN_IN - KEY_W_IN) * EMU_IN)
+        key_y_e = int((MARGIN_IN + TITLE_IN + src_h_in * scale - KEY_H_IN) * EMU_IN)
+
+        PIC_NS = 'http://schemas.openxmlformats.org/drawingml/2006/picture'
+        R_NS   = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+        pic_xml = (
+            f'<w:drawing xmlns:w="{W}">'
+            f'<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0"'
+            f' relativeHeight="30000" behindDoc="0" locked="0"'
+            f' layoutInCell="1" allowOverlap="1" xmlns:wp="{WP}">'
+            f'<wp:simplePos x="0" y="0"/>'
+            f'<wp:positionH relativeFrom="page"><wp:posOffset>{key_x_e}</wp:posOffset></wp:positionH>'
+            f'<wp:positionV relativeFrom="page"><wp:posOffset>{key_y_e}</wp:posOffset></wp:positionV>'
+            f'<wp:extent cx="{KEY_W_E}" cy="{KEY_H_E}"/>'
+            f'<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+            f'<wp:wrapNone/>'
+            f'<wp:docPr id="{sid}" name="ShapeKey"/>'
+            f'<wp:cNvGraphicFramePr/>'
+            f'<a:graphic xmlns:a="{A}">'
+            f'<a:graphicData uri="{PIC_NS}">'
+            f'<pic:pic xmlns:pic="{PIC_NS}">'
+            f'<pic:nvPicPr>'
+            f'<pic:cNvPr id="{sid}" name="ShapeKey"/>'
+            f'<pic:cNvPicPr/>'
+            f'</pic:nvPicPr>'
+            f'<pic:blipFill>'
+            f'<a:blip xmlns:r="{R_NS}" r:embed="{r_id}"/>'
+            f'<a:stretch><a:fillRect/></a:stretch>'
+            f'</pic:blipFill>'
+            f'<pic:spPr>'
+            f'<a:xfrm><a:off x="0" y="0"/><a:ext cx="{KEY_W_E}" cy="{KEY_H_E}"/></a:xfrm>'
+            f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+            f'</pic:spPr>'
+            f'</pic:pic>'
+            f'</a:graphicData>'
+            f'</a:graphic>'
+            f'</wp:anchor>'
+            f'</w:drawing>'
+        )
+        run._r.append(etree.fromstring(pic_xml.encode('utf-8')))
+    except Exception:
+        pass
 
     out = io.BytesIO()
     doc.save(out)
@@ -1716,6 +1998,36 @@ def _make_vdx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes:
         w(f'<Text>{esc(flabel)}</Text>')
         w('</Shape>')
 
+    # ── Shape key: Foreign image at bottom-right ──────────────────────────────
+    try:
+        from PIL import Image as _PILImg
+        key_png     = _make_shape_key_image()
+        KEY_W_IN_V  = 2.6
+        KEY_H_IN_V  = 1.75
+        # Convert PNG to BMP (VDX Foreign bitmap format)
+        pil_key = _PILImg.open(io.BytesIO(key_png)).convert("RGB")
+        bmp_buf = io.BytesIO()
+        pil_key.save(bmp_buf, "BMP")
+        key_b64 = base64.b64encode(bmp_buf.getvalue()).decode("ascii")
+        # Position: bottom-right, just above the MARGIN
+        key_pin_x = page_w - MARGIN - KEY_W_IN_V / 2
+        key_pin_y = MARGIN + KEY_H_IN_V / 2
+        key_sid   = _ctr[0]; _ctr[0] += 1
+        w(f'<Shape ID="{key_sid}" Type="Foreign">')
+        w(f'<XForm>')
+        w(f'<PinX>{key_pin_x:.4f}</PinX><PinY>{key_pin_y:.4f}</PinY>')
+        w(f'<Width>{KEY_W_IN_V:.4f}</Width><Height>{KEY_H_IN_V:.4f}</Height>')
+        w(f'<LocPinX>{KEY_W_IN_V / 2:.4f}</LocPinX><LocPinY>{KEY_H_IN_V / 2:.4f}</LocPinY>')
+        w('</XForm>')
+        w(f'<Foreign>')
+        w(f'<ImgOffsetX>0</ImgOffsetX><ImgOffsetY>0</ImgOffsetY>')
+        w(f'<ImgWidth>{KEY_W_IN_V:.4f}</ImgWidth><ImgHeight>{KEY_H_IN_V:.4f}</ImgHeight>')
+        w(f'</Foreign>')
+        w(f'<ForeignData ForeignType="Bitmap">{key_b64}</ForeignData>')
+        w('</Shape>')
+    except Exception:
+        pass
+
     w('</Shapes>')
     w('</Page></Pages></VisioDocument>')
     return ''.join(out).encode('utf-8')
@@ -1728,11 +2040,8 @@ def health():
     return {"status": "ok", "service": "POET API"}
 
 
-@app.post("/api/upload")
-async def upload_document(files: List[UploadFile] = File(...), process_title: str = Form(""), bpmn_level: str = Form("2")):
-    if not files:
-        raise HTTPException(status_code=400, detail="No files uploaded.")
-
+async def _extract_document_text(files: List[UploadFile]) -> str:
+    """Read, validate, and extract text from a list of uploaded files."""
     text_parts = []
     for file in files:
         ext = Path(file.filename).suffix.lower()
@@ -1741,7 +2050,6 @@ async def upload_document(files: List[UploadFile] = File(...), process_title: st
                 status_code=400,
                 detail=f"Unsupported file type '{ext}' in '{file.filename}'. Accepted: {', '.join(ALLOWED_EXTENSIONS)}"
             )
-
         file_bytes = await file.read()
         size_mb = len(file_bytes) / (1024 * 1024)
         if size_mb > MAX_FILE_SIZE_MB:
@@ -1749,19 +2057,50 @@ async def upload_document(files: List[UploadFile] = File(...), process_title: st
                 status_code=413,
                 detail=f"File '{file.filename}' is too large ({size_mb:.1f} MB). Maximum is {MAX_FILE_SIZE_MB} MB."
             )
-
         try:
             text = extract_text(file_bytes, file.filename)
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"Could not parse '{file.filename}': {str(e)}")
-
         if text.strip():
             text_parts.append(f"[Document: {file.filename}]\n{text}")
-
     if not text_parts:
         raise HTTPException(status_code=422, detail="No text could be extracted from the uploaded documents.")
+    return "\n\n---\n\n".join(text_parts)
 
-    document_text = "\n\n---\n\n".join(text_parts)
+
+@app.post("/api/identify-processes")
+async def identify_processes(files: List[UploadFile] = File(...)):
+    """Scan uploaded documents and return a list of distinct processes found."""
+    document_text = await _extract_document_text(files)
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured in backend/.env")
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        truncated = document_text[:8000] if len(document_text) > 8000 else document_text
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": f"{IDENTIFY_PROCESSES_PROMPT}\n\n---\n\n{truncated}"}]
+        )
+        raw = msg.content[0].text.strip()
+        raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw).strip()
+        match = re.search(r'\[.*\]', raw, re.DOTALL)
+        processes = json.loads(match.group() if match else raw)
+        return JSONResponse({"processes": processes})
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"Could not parse process list: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Process identification failed: {str(e)}")
+
+
+@app.post("/api/upload")
+async def upload_document(files: List[UploadFile] = File(...), process_title: str = Form(""), bpmn_level: str = Form("2"), focus_process: str = Form(""), map_type: str = Form("")):
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded.")
+
+    document_text = await _extract_document_text(files)
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
@@ -1769,7 +2108,7 @@ async def upload_document(files: List[UploadFile] = File(...), process_title: st
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        structure = extract_process_structure(client, document_text, bpmn_level)
+        structure = extract_process_structure(client, document_text, bpmn_level, focus_process=focus_process, map_type=map_type)
         if process_title.strip():
             structure["process_name"] = process_title.strip()
         bpmn_xml = build_bpmn_xml(structure)
@@ -1790,6 +2129,154 @@ async def upload_document(files: List[UploadFile] = File(...), process_title: st
         "step_count": len(structure.get("steps", [])),
         "bpmn_xml": bpmn_xml
     })
+
+
+IMPL_PLAN_SECTIONS = [
+    ("executive_summary",      "Executive Summary",
+     "Brief overview of the transformation and expected benefits."),
+    ("gap_analysis",           "Gap Analysis",
+     "Key differences between current state and future state — what needs to change."),
+    ("implementation_phases",  "Implementation Phases",
+     "Break the transition into clear phases (e.g. Phase 1: Discovery, Phase 2: Design, "
+     "Phase 3: Implementation, Phase 4: Testing, Phase 5: Go-Live & Stabilisation). "
+     "For each phase include:\n"
+     "- **Objective:** What this phase achieves\n"
+     "- **Key Activities:** Bullet list of tasks\n"
+     "- **Deliverables:** Tangible outputs\n"
+     "- **Timeline:** Suggested duration (weeks)\n"
+     "- **Owner / Responsible Party:** Who leads this phase"),
+    ("resource_requirements",  "Resource Requirements",
+     "People, tools, systems, and budget considerations."),
+    ("risks_mitigations",      "Risks & Mitigations",
+     "Top risks with likelihood, impact, and mitigation actions."),
+    ("success_metrics",        "Success Metrics & KPIs",
+     "How to measure a successful transition."),
+    ("change_management",      "Change Management",
+     "Stakeholder communication, training needs, and adoption strategy."),
+]
+
+IMPL_PLAN_SECTIONS_MAP = {sid: (title, desc) for sid, title, desc in IMPL_PLAN_SECTIONS}
+
+DEFAULT_IMPL_PLAN_SECTIONS = [sid for sid, _, _ in IMPL_PLAN_SECTIONS]
+
+IMPLEMENTATION_PLAN_PROMPT_BASE = """You are a business transformation consultant. Based on the source documents and the process names provided, generate a structured implementation plan to transition from the Current State process to the Future State process.
+
+Format the plan in markdown with ONLY the sections listed below (in the order given). Do not add any extra sections.
+
+{sections_block}
+
+Rules:
+- Use ## for section headings, **Bold:** for sub-field labels
+- Use numbered lists for sequential steps, bullet lists for non-sequential items
+- Be specific and actionable — avoid generic filler
+- Be concise: 4–8 bullet points or sentences per section maximum
+- Do NOT use ALL CAPS
+- Do NOT use markdown tables — use bullet lists or numbered lists instead
+- Do NOT add a title or preamble — start directly with the first ## section heading
+- All financial figures, costs, savings, and estimates MUST be expressed in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
+- Return only the implementation plan document"""
+
+
+def _build_impl_plan_prompt(selected_sections: list) -> str:
+    ordered = [s for s in IMPL_PLAN_SECTIONS if s[0] in selected_sections]
+    blocks = []
+    for sid, title, desc in ordered:
+        blocks.append(f"## {title}\n{desc}")
+    sections_block = "\n\n".join(blocks)
+    return IMPLEMENTATION_PLAN_PROMPT_BASE.format(sections_block=sections_block)
+
+
+IMPL_PARAMETERS = {
+    "business_continuity":    ("Business Continuity",
+        "Ensure no disruption to operations, with parallel systems and rollback options."),
+    "customer_experience":    ("Customer Experience",
+        "Maintain or improve speed, transparency, and satisfaction throughout the transition."),
+    "phased_delivery":        ("Phased Delivery",
+        "Implement in waves, prioritising high-volume, low-complexity use cases to deliver quick wins."),
+    "human_in_the_loop":      ("Human-in-the-Loop",
+        "Augment staff with automation/AI while retaining human oversight and escalation for complex decisions."),
+    "data_governance":        ("Data & Governance",
+        "Establish high-quality data foundations and strong governance (accuracy, fairness, auditability)."),
+    "technology_flexibility": ("Technology Flexibility",
+        "Use modular, API-driven architecture that integrates with legacy systems."),
+    "regulatory_compliance":  ("Regulatory Compliance",
+        "Ensure explainability, audit trails, and alignment with applicable regulations."),
+    "change_management":      ("Change Management",
+        "Redesign roles, train employees, and drive adoption through clear communication and incentives."),
+    "financial_accountability":("Financial Accountability",
+        "Track ROI with clear metrics and tie investment to measurable outcomes."),
+    "performance_measurement":("Performance Measurement",
+        "Define and monitor KPIs (e.g. cycle time, cost per unit, error rate, customer satisfaction)."),
+    "scalability":            ("Scalability",
+        "Build solutions that can expand across products, regions, and volumes over time."),
+    "governance_leadership":  ("Governance & Leadership",
+        "Establish clear ownership, decision rights, and strong executive sponsorship."),
+}
+
+
+async def _stream_implementation_plan(api_key: str, document_text: str,
+                                       current_process: str, future_process: str,
+                                       selected_sections: list = None,
+                                       selected_parameters: list = None):
+    if not selected_sections:
+        selected_sections = DEFAULT_IMPL_PLAN_SECTIONS
+    system_prompt = _build_impl_plan_prompt(selected_sections)
+    params_block = ""
+    if selected_parameters:
+        param_lines = []
+        for pid in selected_parameters:
+            if pid in IMPL_PARAMETERS:
+                label, desc = IMPL_PARAMETERS[pid]
+                param_lines.append(f"- **{label}:** {desc}")
+        if param_lines:
+            params_block = (
+                "\n\nThe plan must specifically address the following implementation parameters "
+                "throughout the content — weave them into every relevant section:\n"
+                + "\n".join(param_lines)
+            )
+    user_msg = (
+        f"Generate an implementation plan to transition from the current state to the future state "
+        f"for the following process:\n\n"
+        f"- Current State Process: {current_process}\n"
+        f"- Future State Process: {future_process}\n\n"
+        f"Source documents:\n\n{document_text[:12000]}"
+        f"{params_block}"
+    )
+    async_client = anthropic.AsyncAnthropic(api_key=api_key)
+    async with async_client.messages.stream(
+        model="claude-sonnet-4-6",
+        max_tokens=8000,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_msg}]
+    ) as stream:
+        async for text in stream.text_stream:
+            yield text
+
+
+@app.post("/api/generate-implementation-plan")
+async def generate_implementation_plan(
+    files: List[UploadFile] = File(...),
+    current_process:    str = Form(""),
+    future_process:     str = Form(""),
+    sections_json:      str = Form("[]"),
+    parameters_json:    str = Form("[]"),
+):
+    document_text = await _extract_document_text(files)
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured in backend/.env")
+    selected_sections   = json.loads(sections_json)   if sections_json.strip()   else DEFAULT_IMPL_PLAN_SECTIONS
+    selected_parameters = json.loads(parameters_json) if parameters_json.strip() else []
+    if not selected_sections:
+        selected_sections = DEFAULT_IMPL_PLAN_SECTIONS
+    from fastapi.responses import StreamingResponse as _SR
+    return _SR(
+        _stream_implementation_plan(
+            api_key, document_text, current_process, future_process,
+            selected_sections, selected_parameters
+        ),
+        media_type="text/plain; charset=utf-8",
+    )
 
 
 @app.post("/api/export")
@@ -1839,7 +2326,19 @@ Formatting rules:
 - Use numbered lists (1. 2. 3.) for procedure steps
 - Use bullet lists (- ) for non-sequential items
 - Use **Bold:** format for key-value pairs (e.g. **Department:** Finance)
+- CRITICAL: Each **Bold label:** sub-field within a step MUST start on its own NEW LINE. NEVER write two bold labels on the same line. Every time you write a **Bold label:** it must be preceded by a newline. Example of CORRECT format:
+  1. **Trigger:** Description of trigger.
+     **Responsible Party:** Name or role.
+     **Systems/Tools Required:** List of tools.
+     **Step Description:** Full description here.
+     **Key Control:** Control point here.
+  Example of WRONG format (DO NOT DO THIS):
+  1. **Trigger:** text. **Responsible Party:** text. **Systems/Tools Required:** text.
 - Do NOT use markdown tables
+- NEVER write text in ALL CAPS. Every single word in the document must be in normal mixed case (e.g. "Trigger:", not "TRIGGER:"). This applies to labels, headings, content, and every other part of the document without exception. Use **bold** for emphasis only.
+- All financial figures, costs, and estimates MUST be expressed in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
+- ASSUMPTION REFERENCES: Every quantitative figure in the document (cycle times, durations, dollar amounts, FTE counts, error rates, frequencies, etc.) MUST be followed immediately by an inline superscript reference marker in the format <sup>[A1]</sup>, <sup>[A2]</sup>, <sup>[A3]</sup> etc. These markers must correspond exactly to numbered **Assumption [A1]:** entries in the Sources section. Number assumptions sequentially across the entire document.
+- Do NOT use strikethrough text (~~text~~). Never cross out, mark out, or use strikethrough formatting anywhere in the document.
 - Do NOT include any explanation or preamble outside the SOP itself — return only the SOP document"""
 
 # Ordered list of all supported SOP sections
@@ -1896,6 +2395,18 @@ SOP_SECTIONS_META = [
     ("appendices",              "Appendices",
      "List any relevant appendices: process flowcharts, templates, forms, checklists, "
      "sample reports, and control testing scripts."),
+    ("sources",                 "Sources and Assumptions",
+     "This section must cover two things:\n"
+     "1. Source documents — list all documents, references, policies, regulations, and data files used to produce this SOP. "
+     "For each source include the document name and, where identifiable, its version, date, or owning team. "
+     "Also include any external sources (journals, websites, frameworks, standards) drawn upon. "
+     "Use **Source:** description format for each entry.\n"
+     "2. Metric assumptions — for every quantitative figure cited in this document (cycle times, durations, "
+     "frequencies, dollar amounts, FTE counts, error rates, etc.), list a corresponding numbered assumption entry "
+     "using the EXACT marker that appears inline in the document body (e.g. **Assumption [A1]:** description, "
+     "**Assumption [A2]:** description). For each entry state: what the figure is, where it came from, "
+     "the basis or benchmark used, and any caveats. Every inline [Ax] marker in the document MUST have a "
+     "matching entry here. Do not omit any."),
 ]
 
 # Map from id → (title, instructions) for quick lookup
@@ -1905,64 +2416,168 @@ DEFAULT_SECTIONS = ['purpose', 'scope', 'definitions', 'roles_responsibilities',
                     'procedures', 'exception_handling', 'documentation_retention']
 
 
-def _generate_sop(client: anthropic.Anthropic, combined_text: str,
-                  sop_title: str, department: str, selected_sections: list) -> str:
+def _build_sop_messages(combined_text: str, sop_title: str,
+                        selected_sections: list) -> tuple:
     today = date.today().strftime("%B %Y")
-
-    # Build ordered section instructions from selected ids
     ordered = [item for item in SOP_SECTIONS_META if item[0] in selected_sections]
     section_lines = []
     for i, (sid, title, instr) in enumerate(ordered, 1):
         section_lines.append(f"{i}. ## {title}\n   {instr}")
     sections_block = "\n\n".join(section_lines)
-
     system = (
         SOP_SYSTEM_PROMPT
         + f"\n\nThe SOP must start with:\n# [SOP Title]\n"
-          f"**Department:** [value]  **Version:** 1.0  **Date:** {today}\n---\n\n"
+          f"**Version:** 1.0  **Date:** {today}\n---\n\n"
           f"Then include exactly these sections in this order:\n\n{sections_block}"
     )
-
-    dept_note = f" for the {department} department" if department.strip() else ""
-    user_msg  = (
-        f'Generate a professional SOP titled "{sop_title}"{dept_note} '
+    user_msg = (
+        f'Generate a professional SOP titled "{sop_title}" '
         f"based on the following source documents:\n\n{combined_text[:12000]}"
     )
+    return system, user_msg
 
-    message = client.messages.create(
+
+async def _stream_sop(api_key: str, combined_text: str,
+                      sop_title: str, selected_sections: list,
+                      style_hint: str = ""):
+    system, user_msg = _build_sop_messages(combined_text, sop_title, selected_sections)
+    if style_hint.strip():
+        user_msg += f"\n\nStyle instruction: {style_hint.strip()}"
+    async_client = anthropic.AsyncAnthropic(api_key=api_key)
+    async with async_client.messages.stream(
         model="claude-sonnet-4-6",
-        max_tokens=4000,
+        max_tokens=8000,
         system=system,
         messages=[{"role": "user", "content": user_msg}]
-    )
-    return message.content[0].text
+    ) as stream:
+        async for text in stream.text_stream:
+            yield text
 
 
 def _add_runs(paragraph, text: str):
-    """Add a paragraph's text, converting **bold** spans to bold runs."""
-    parts = re.split(r'\*\*(.+?)\*\*', text)
-    for i, part in enumerate(parts):
-        if part:
-            run = paragraph.add_run(part)
-            if i % 2 == 1:
-                run.bold = True
+    """Add a paragraph's text, converting **bold** and <sup> spans to styled runs."""
+    # Tokenise into segments: plain, bold (**...**), superscript (<sup>...</sup>)
+    token_re = re.compile(r'\*\*(.+?)\*\*|<sup>(.*?)</sup>', re.DOTALL)
+    cursor = 0
+    for m in token_re.finditer(text):
+        if m.start() > cursor:
+            paragraph.add_run(text[cursor:m.start()])
+        if m.group(1) is not None:          # **bold**
+            run = paragraph.add_run(m.group(1))
+            run.bold = True
+        else:                               # <sup>...</sup>
+            run = paragraph.add_run(m.group(2))
+            run.font.superscript = True
+        cursor = m.end()
+    if cursor < len(text):
+        paragraph.add_run(text[cursor:])
+
+
+def _fix_caps_line(line: str) -> str:
+    """If a line is predominantly uppercase, convert to mixed case preserving **bold** markers."""
+    # Measure uppercase ratio of plain text (excluding markdown markers)
+    plain = re.sub(r'\*\*[^*]+\*\*', '', line)
+    alpha = [c for c in plain if c.isalpha()]
+    if not alpha or (sum(c.isupper() for c in alpha) / len(alpha)) < 0.65:
+        return line  # Already mixed case — leave untouched
+
+    # Split the line into bold-marker segments and plain segments, fix each
+    parts = re.split(r'(\*\*[^*]+\*\*)', line)
+    fixed = []
+    for part in parts:
+        if part.startswith('**') and part.endswith('**'):
+            inner = part[2:-2]
+            # Convert label inside bold to Title Case (e.g. TRIGGER: → Trigger:)
+            fixed.append(f'**{inner.title()}**')
+        else:
+            # Convert plain text to sentence case (lowercase, first char of sentence capitalised)
+            fixed.append(part.lower())
+    result = ''.join(fixed)
+    # Re-capitalise the very first letter of the line
+    for i, ch in enumerate(result):
+        if ch.isalpha():
+            return result[:i] + result[i].upper() + result[i+1:]
+    return result
+
+
+def _preprocess_sop_markdown(md: str) -> str:
+    """Split inline **Bold label:** fields onto their own lines and remove ALL CAPS text.
+
+    Only applies the bold-label line-break to plain paragraph lines — list items
+    (lines starting with -, *, digits) are left untouched so bullet+bold combos
+    like '- **Label:** text' are not broken into a bare '-' plus orphaned text.
+    """
+    lines = md.split('\n')
+    out = []
+    for line in lines:
+        stripped = line.strip()
+        # Apply inline bold-label splitting only on plain paragraph lines
+        if stripped and not re.match(r'^[#\-\*\d>]', stripped):
+            line = re.sub(r'([^\n])\s+(\*\*[A-Za-z][^*\n]{1,50}:\*\*)', r'\1\n   \2', line)
+            line = re.sub(r'([^\n])\s+(\*\*[A-Za-z][^*\n]{1,50}:\*\*)', r'\1\n   \2', line)
+        out.append(_fix_caps_line(line))
+    return '\n'.join(out)
 
 
 def _make_sop_docx(sop_markdown: str, sop_title: str) -> bytes:
     from docx import Document as DocxDocument
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Pt, RGBColor, Inches
+
+    sop_markdown = _preprocess_sop_markdown(sop_markdown)
 
     doc = DocxDocument()
 
-    # Default Normal style
+    # ── Base (Normal) style ───────────────────────────────────────────────────
     normal = doc.styles['Normal']
     normal.font.name = 'Calibri'
     normal.font.size = Pt(11)
+    normal.paragraph_format.space_after = Pt(6)
 
+    # ── Heading styles — professional palette ─────────────────────────────────
+    h1 = doc.styles['Heading 1']
+    h1.font.name  = 'Calibri'
+    h1.font.size  = Pt(18)
+    h1.font.bold  = True
+    h1.font.color.rgb = RGBColor(0x1F, 0x2D, 0x3D)
+    h1.paragraph_format.space_before = Pt(0)
+    h1.paragraph_format.space_after  = Pt(8)
+
+    h2 = doc.styles['Heading 2']
+    h2.font.name  = 'Calibri'
+    h2.font.size  = Pt(12)
+    h2.font.bold  = True
+    h2.font.color.rgb = RGBColor(0x2D, 0x4A, 0x6B)
+    h2.paragraph_format.space_before = Pt(18)
+    h2.paragraph_format.space_after  = Pt(4)
+
+    try:
+        h3 = doc.styles['Heading 3']
+        h3.font.name  = 'Calibri'
+        h3.font.size  = Pt(11)
+        h3.font.bold  = True
+        h3.font.color.rgb = RGBColor(0x44, 0x55, 0x70)
+        h3.paragraph_format.space_before = Pt(12)
+        h3.paragraph_format.space_after  = Pt(2)
+    except KeyError:
+        pass
+
+    # ── List styles — consistent font, tighter spacing, clean indentation ─────
+    for style_name in ['List Number', 'List Bullet', 'List Continue',
+                        'List Number 2', 'List Bullet 2']:
+        try:
+            ls = doc.styles[style_name]
+            ls.font.name = 'Calibri'
+            ls.font.size = Pt(11)
+            ls.paragraph_format.space_after = Pt(3)
+        except KeyError:
+            pass
+
+    # ── Parse and render each line ────────────────────────────────────────────
     for line in sop_markdown.split('\n'):
         s = line.strip()
 
-        if not s:
+        # Skip blank lines and lone list-marker artefacts
+        if not s or s in ('-', '*', '–', '•'):
             continue
 
         if s == '---':
@@ -1971,11 +2586,21 @@ def _make_sop_docx(sop_markdown: str, sop_title: str) -> bytes:
 
         # H1: # Title
         if s.startswith('# ') and not s.startswith('## '):
-            doc.add_heading(s[2:], level=1)
+            doc.add_heading(s[2:].strip(), level=1)
 
         # H2: ## Section
-        elif s.startswith('## '):
-            doc.add_heading(s[3:], level=2)
+        elif s.startswith('## ') and not s.startswith('### '):
+            doc.add_heading(s[3:].strip(), level=2)
+
+        # H3: ### Sub-section (strip literal ### artefacts)
+        elif s.startswith('### '):
+            doc.add_heading(s[4:].strip(), level=3)
+
+        # Stray ### with no space after (artefact) — promote to H3 text
+        elif s.startswith('###'):
+            text = s.lstrip('#').strip()
+            if text:
+                doc.add_heading(text, level=3)
 
         # Numbered list: 1. item
         elif re.match(r'^\d+\.\s', s):
@@ -1983,10 +2608,15 @@ def _make_sop_docx(sop_markdown: str, sop_title: str) -> bytes:
             p = doc.add_paragraph(style='List Number')
             _add_runs(p, text)
 
-        # Bullet list: - item
-        elif s.startswith('- '):
+        # Bullet list: - item  or  * item
+        elif s.startswith('- ') or s.startswith('* '):
             p = doc.add_paragraph(style='List Bullet')
             _add_runs(p, s[2:])
+
+        # Continuation sub-field line (indented **Label:** text) — from preprocessing
+        elif s.startswith('**') and ':' in s:
+            p = doc.add_paragraph(style='List Continue')
+            _add_runs(p, s)
 
         # Normal paragraph (may contain inline bold)
         else:
@@ -2002,8 +2632,8 @@ def _make_sop_docx(sop_markdown: str, sop_title: str) -> bytes:
 async def generate_sop_endpoint(
     files:      List[UploadFile] = File(...),
     sop_title:     str = Form(...),
-    department:    str = Form(""),
     sections_json: str = Form("[]"),
+    style_hint:    str = Form(""),
 ):
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required.")
@@ -2037,19 +2667,18 @@ async def generate_sop_endpoint(
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured in backend/.env")
 
-    try:
-        client            = anthropic.Anthropic(api_key=api_key)
-        combined          = "\n\n".join(all_texts)
-        selected_sections = json.loads(sections_json) if sections_json.strip() else DEFAULT_SECTIONS
-        if not selected_sections:
-            selected_sections = DEFAULT_SECTIONS
-        sop_markdown = _generate_sop(client, combined, sop_title, department, selected_sections)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"SOP generation failed: {str(e)}")
+    combined          = "\n\n".join(all_texts)
+    selected_sections = json.loads(sections_json) if sections_json.strip() else DEFAULT_SECTIONS
+    if not selected_sections:
+        selected_sections = DEFAULT_SECTIONS
+    if 'sources' not in selected_sections:
+        selected_sections = selected_sections + ['sources']
 
-    return JSONResponse({"status": "success", "sop_markdown": sop_markdown})
+    from fastapi.responses import StreamingResponse as _SR
+    return _SR(
+        _stream_sop(api_key, combined, sop_title, selected_sections, style_hint),
+        media_type="text/plain; charset=utf-8",
+    )
 
 
 @app.post("/api/export-sop")
@@ -2104,26 +2733,42 @@ BC_SECTIONS_META = [
     ("risks_mitigations",       "Risks & Mitigations",
      "Identify the top risks to the initiative with mitigations. Cover: delivery risks, adoption risks, "
      "regulatory risks, and operational risks. Use **Risk:** mitigation format for each pair."),
+    ("sources",                 "Sources and Assumptions",
+     "This section must cover two things:\n"
+     "1. Source documents — list ALL sources used to produce this business case, including: uploaded documents "
+     "(note each document name, type, and key information contributed) and any external sources such as industry "
+     "research, academic journals, analyst reports, frameworks, standards, regulations, or websites drawn upon to "
+     "support claims, benchmarks, or recommendations (include title, author/organisation, and URL or publication "
+     "reference where available). Use **Source:** description format for each entry.\n"
+     "2. Metric assumptions — for every quantitative figure cited in this document (cost savings, ROI, dollar "
+     "amounts, FTE counts, cycle times, processing times, error rates, payback periods, percentages, etc.), list "
+     "a corresponding numbered assumption entry using the EXACT marker that appears inline in the document body "
+     "(e.g. **Assumption [A1]:** description, **Assumption [A2]:** description). For each entry state: what the "
+     "figure is, where it came from, the basis or benchmark used, and any caveats or limitations. Every inline "
+     "[Ax] marker in the document MUST have a matching entry here. Do not omit any metric."),
 ]
 
 BC_SECTIONS_MAP = {sid: (title, instr) for sid, title, instr in BC_SECTIONS_META}
 
 BC_DEFAULT_SECTIONS = ['executive_summary', 'current_state', 'target_state',
-                       'financial_impact', 'implementation_plan', 'risks_mitigations']
+                       'financial_impact', 'implementation_plan', 'risks_mitigations', 'sources']
 
 IMPROVEMENT_FOCUS_META = {
-    "lean":               "Apply LEAN methodology: identify waste (muda), value stream mapping insights, "
-                          "elimination of non-value-add steps, and process simplification opportunities.",
-    "rpa":                "Identify RPA automation candidates: repetitive rule-based tasks, high-volume "
-                          "data entry, system re-keying, and reconciliation activities suitable for bots.",
-    "ai":                 "Identify AI/Intelligent Automation opportunities: document processing, decision "
-                          "support, anomaly detection, NLP, and predictive analytics use cases.",
-    "system_integration": "Identify system integration opportunities to eliminate manual handoffs, "
-                          "leverage APIs, and synchronise data across disparate platforms.",
-    "digitisation":       "Identify workflow digitisation opportunities: paper-based processes, manual "
-                          "approvals, and email workflows that can be moved to digital platforms.",
-    "offshoring":         "Assess offshoring/outsourcing opportunities: tasks suitable for low-cost "
-                          "location delivery or third-party outsourcing based on complexity and risk.",
+    "eliminate":   "Eliminate (ESOAR): Identify and remove non-value-adding steps, redundant activities, "
+                   "unnecessary approvals, and process waste. Apply value stream analysis to surface steps "
+                   "that add cost or delay without delivering customer or business value.",
+    "standardize": "Standardize (ESOAR): Establish consistent, repeatable process templates and controls. "
+                   "Identify process variations, inconsistencies across teams or locations, and opportunities "
+                   "to introduce standard operating procedures, checklists, and governance frameworks.",
+    "optimize":    "Optimize (ESOAR): Improve throughput, quality, and efficiency within the existing process. "
+                   "Identify bottlenecks, SLA breaches, handoff delays, rework loops, and opportunities for "
+                   "LEAN continuous improvement, workload balancing, and skill-to-task alignment.",
+    "automate":    "Automate (ESOAR): Apply rules-based workflow automation, business rules engines, and "
+                   "system-triggered actions to reduce manual intervention. Identify decision points, "
+                   "approvals, notifications, and data routing that can be handled by digital workflows.",
+    "robotize":    "Robotize (ESOAR): Apply Robotic Process Automation (RPA) or AI-driven intelligent "
+                   "automation to high-volume, repetitive tasks. Identify candidates for software bots, "
+                   "document processing AI, NLP, predictive analytics, and cognitive automation.",
 }
 
 BC_SYSTEM_PROMPT = """You are a senior management consultant specialising in process optimisation and automation.
@@ -2136,12 +2781,15 @@ Formatting rules:
 - Use numbered lists (1. 2. 3.) for sequential items such as steps and phases
 - Use bullet lists (- ) for non-sequential items
 - Use **Bold:** format for key-value pairs and financial figures
+- All financial figures, costs, savings, ROI, and estimates MUST be expressed in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
+- ASSUMPTION REFERENCES: Every quantitative figure in the document (dollar amounts, cost savings, ROI, FTE counts, cycle times, processing times, error rates, payback periods, percentages, etc.) MUST be followed immediately by an inline superscript reference marker in the format <sup>[A1]</sup>, <sup>[A2]</sup>, <sup>[A3]</sup> etc. These markers must correspond exactly to numbered **Assumption [A1]:** entries in the Sources section. Number assumptions sequentially across the entire document.
+- Do NOT use strikethrough text (~~text~~). Never cross out, mark out, or use strikethrough formatting anywhere in the document.
 - Do NOT use markdown tables
 - Do NOT include any explanation outside the document itself — return only the business case"""
 
 
 def _generate_business_case(client: anthropic.Anthropic, combined_text: str,
-                             process_name: str, department: str,
+                             process_name: str,
                              selected_focuses: list, selected_sections: list) -> str:
     today = date.today().strftime("%B %Y")
 
@@ -2162,26 +2810,27 @@ def _generate_business_case(client: anthropic.Anthropic, combined_text: str,
     system = (
         BC_SYSTEM_PROMPT
         + f"\n\nThe document must start with:\n# Process Optimisation Business Case: [Process Name]\n"
-          f"**Prepared by:** POET  **Department:** {department or 'N/A'}  **Date:** {today}\n---\n\n"
+          f"**Prepared by:** POET  **Date:** {today}\n---\n\n"
           f"Improvement focus areas to analyse:\n{focus_block}\n\n"
           f"Then include exactly these sections in this order:\n\n{sections_block}"
     )
 
-    dept_note = f" owned by the {department} team" if department.strip() else ""
-    focus_names = [IMPROVEMENT_FOCUS_META.get(f, f).split(':')[0] for f in selected_focuses]
     user_msg = (
-        f'Generate a business case for the "{process_name}" process{dept_note}. '
+        f'Generate a business case for the "{process_name}" process. '
         f"Focus areas: {', '.join(selected_focuses)}. "
         f"Based on the following source documents:\n\n{combined_text[:12000]}"
     )
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=4000,
+        max_tokens=8000,
         system=system,
         messages=[{"role": "user", "content": user_msg}]
     )
-    return message.content[0].text
+    text = message.content[0].text
+    # Strip any strikethrough markdown (~~text~~) the model may have produced
+    text = re.sub(r'~~(.+?)~~', r'\1', text, flags=re.DOTALL)
+    return text
 
 
 def _make_bc_pptx(bc_markdown: str, process_name: str) -> bytes:
@@ -2269,7 +2918,6 @@ def _make_bc_pptx(bc_markdown: str, process_name: str) -> bytes:
 async def generate_business_case_endpoint(
     files:         List[UploadFile] = File(...),
     process_name:  str = Form(...),
-    department:    str = Form(""),
     focuses_json:  str = Form("[]"),
     sections_json: str = Form("[]"),
 ):
@@ -2309,12 +2957,14 @@ async def generate_business_case_endpoint(
     selected_sections = json.loads(sections_json) if sections_json.strip() else BC_DEFAULT_SECTIONS
     if not selected_sections:
         selected_sections = BC_DEFAULT_SECTIONS
+    if 'sources' not in selected_sections:
+        selected_sections = selected_sections + ['sources']
 
     try:
         client      = anthropic.Anthropic(api_key=api_key)
         combined    = "\n\n".join(all_texts)
         bc_markdown = _generate_business_case(
-            client, combined, process_name, department, selected_focuses, selected_sections
+            client, combined, process_name, selected_focuses, selected_sections
         )
     except HTTPException:
         raise
@@ -2349,3 +2999,377 @@ async def export_business_case(
         media_type=media,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ── Process Health Scorecard ──────────────────────────────────────────────────
+
+SCORECARD_PROMPT = """You are a senior process excellence consultant. Analyse the uploaded process documentation and produce a Process Health Scorecard.
+
+FORMAT RULES — follow exactly:
+- Use markdown with ## for section headings, ### for sub-headings, **bold** for labels
+- Do NOT use strikethrough text (~~text~~) under any circumstances
+- Do NOT include a title or preamble — start directly with the Legend section
+- All financial figures must be in US dollars ($)
+- For every metric cited, add a superscript reference marker inline: value<sup>[A1]</sup>
+- At the end, include a "## Sources and Assumptions" section listing every [A1], [A2]... marker with: what it is, how it was derived, what data/source was used, and any caveats
+
+STRUCTURE — include only the selected dimensions:
+0. ## Legend — ALWAYS include this as the very first section. Explain every status indicator used in the document:
+   **RED** — Significant problems identified. Urgent attention and remediation required. Process is materially inefficient, high-risk, or broken in this area.
+   **AMBER** — Notable issues present. Improvement is recommended. Process functions but has clear gaps, inefficiencies, or risks that should be addressed.
+   **GREEN** — Performing well. Minor improvements may be beneficial but no urgent action required.
+   **HIGH / MEDIUM / LOW** (where used) — Indicates the priority or severity of an improvement opportunity: High = address immediately, Medium = plan within current cycle, Low = monitor or address when capacity allows.
+   Include a note that all ratings are based on evidence from the uploaded source documents and consultant judgement where document data is limited.
+1. ## Executive Health Summary — overall RAG rating (Red / Amber / Green), 3–5 sentence narrative
+2. ## Scorecard by Dimension — for each selected dimension:
+   ### [Dimension Name] — Rating: [RED / AMBER / GREEN]
+   - Current state observation
+   - Key issues identified
+   - Recommended improvement action
+3. ## Priority Improvement Opportunities — top 3–5 ranked opportunities with estimated impact and priority (HIGH / MEDIUM / LOW)
+4. ## Sources and Assumptions — numbered list [A1], [A2]... with derivation detail
+
+RATING CRITERIA:
+- GREEN: performing well, minor improvements only
+- AMBER: notable issues, improvement recommended
+- RED: significant problems, urgent attention required
+
+Be specific and evidence-based — reference actual content from the uploaded documents."""
+
+
+def _generate_scorecard(client: anthropic.Anthropic, document_text: str, process_name: str,
+                        industry: str, dimensions: list) -> str:
+    dim_labels = {
+        'waste':           'Waste & Non-Value-Adding Activity (LEAN)',
+        'handoffs':        'Handoffs & Waiting Time',
+        'automation':      'Automation Potential (ESOAR)',
+        'rework':          'Rework & Exception Rate',
+        'standardisation': 'Standardisation & Consistency',
+        'controls':        'Controls & Risk Exposure',
+        'data_quality':    'Data Quality & Availability',
+        'customer':        'Customer / Stakeholder Impact',
+    }
+    dims_text = "\n".join(f"- {dim_labels.get(d, d)}" for d in dimensions)
+    industry_note = f" The process operates in the {industry} sector." if industry else ""
+    user_msg = (
+        f"Process name: {process_name}.{industry_note}\n\n"
+        f"Assess the following dimensions only:\n{dims_text}\n\n"
+        f"Source documents:\n\n{document_text[:12000]}"
+    )
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=8000,
+        system=SCORECARD_PROMPT,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    return msg.content[0].text
+
+
+@app.post("/api/generate-scorecard")
+async def generate_scorecard_endpoint(
+    files:           List[UploadFile] = File(...),
+    process_name:    str = Form(...),
+    industry:        str = Form(""),
+    dimensions_json: str = Form("[]"),
+):
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required.")
+    all_texts = []
+    for f in files:
+        ext = Path(f.filename).suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type '{ext}'.")
+        fb = await f.read()
+        if len(fb) / 1024 / 1024 > MAX_FILE_SIZE_MB:
+            raise HTTPException(status_code=413, detail=f"File '{f.filename}' too large.")
+        try:
+            t = extract_text(fb, f.filename)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Could not parse '{f.filename}': {e}")
+        if t.strip():
+            all_texts.append(f"=== {f.filename} ===\n{t.strip()}")
+    if not all_texts:
+        raise HTTPException(status_code=422, detail="No text could be extracted.")
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured.")
+    dimensions = json.loads(dimensions_json) if dimensions_json.strip() else []
+    if not dimensions:
+        dimensions = ['waste', 'handoffs', 'automation', 'rework', 'standardisation', 'controls', 'data_quality', 'customer']
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        md = _generate_scorecard(client, "\n\n".join(all_texts), process_name, industry, dimensions)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Scorecard generation failed: {e}")
+    return JSONResponse({"status": "success", "sc_markdown": md})
+
+
+@app.post("/api/export-scorecard")
+async def export_scorecard(
+    sc_markdown:  str = Form(...),
+    process_name: str = Form("Process Health Scorecard"),
+    format:       str = Form("docx"),
+):
+    safe_name = re.sub(r'[^a-z0-9_\-]', '_', process_name.lower()) or 'scorecard'
+    fmt = format.lower().strip()
+    try:
+        if fmt == "pptx":
+            content  = _make_bc_pptx(sc_markdown, process_name)
+            media    = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            filename = f"{safe_name}.pptx"
+        else:
+            content  = _make_sop_docx(sc_markdown, process_name)
+            media    = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            filename = f"{safe_name}.docx"
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
+    return Response(content=content, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+# ── RACI Matrix Generator ─────────────────────────────────────────────────────
+
+RACI_PROMPT = """You are a senior business analyst and process governance expert. Analyse the uploaded process documentation and produce a professional RACI Matrix document.
+
+FORMAT RULES — follow exactly:
+- Use markdown with ## for section headings, **bold** for labels
+- Do NOT use strikethrough text (~~text~~) under any circumstances
+- Do NOT include a title or preamble — start directly with the first section
+- All financial figures must be in US dollars ($)
+- For every metric or assumption cited, add a superscript reference marker: value<sup>[A1]</sup>
+- At the end, include a "## Sources and Assumptions" section listing every [A1], [A2]... marker
+
+RACI MATRIX FORMAT — render as a markdown table:
+| Activity | Role 1 | Role 2 | Role 3 | ... |
+|---|---|---|---|---|
+| Activity name | R | A | C | ... |
+
+Use only: R (Responsible), A (Accountable), C (Consulted), I (Informed). Each row must have exactly one A.
+
+STRUCTURE (include only selected sections):
+- ## RACI Matrix — the full table
+- ## Role Glossary — each role: name, description, typical job titles
+- ## Key Findings & Accountability Gaps — issues found (duplicate A, missing A, overloaded roles)
+- ## Recommendations — 3–5 prioritised actions to improve accountability clarity
+- ## Sources and Assumptions — numbered [A1], [A2]... with derivation detail
+
+GRANULARITY GUIDANCE:
+- high: 5–12 major activities (phase-level)
+- detailed: 15–30 activities (function-level)
+- task: 30–60 activities (individual task-level)
+
+Be specific — use role names and activity names drawn directly from the uploaded documents."""
+
+
+def _generate_raci(client: anthropic.Anthropic, document_text: str, process_name: str,
+                   granularity: str, sections: list) -> str:
+    sections_note = ", ".join(sections)
+    user_msg = (
+        f"Process name: {process_name}\n"
+        f"Activity granularity: {granularity}\n"
+        f"Sections to include: {sections_note}\n\n"
+        f"Source documents:\n\n{document_text[:12000]}"
+    )
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=8000,
+        system=RACI_PROMPT,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    return msg.content[0].text
+
+
+@app.post("/api/generate-raci")
+async def generate_raci_endpoint(
+    files:         List[UploadFile] = File(...),
+    process_name:  str = Form(...),
+    granularity:   str = Form("detailed"),
+    sections_json: str = Form("[]"),
+):
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required.")
+    all_texts = []
+    for f in files:
+        ext = Path(f.filename).suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type '{ext}'.")
+        fb = await f.read()
+        if len(fb) / 1024 / 1024 > MAX_FILE_SIZE_MB:
+            raise HTTPException(status_code=413, detail=f"File '{f.filename}' too large.")
+        try:
+            t = extract_text(fb, f.filename)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Could not parse '{f.filename}': {e}")
+        if t.strip():
+            all_texts.append(f"=== {f.filename} ===\n{t.strip()}")
+    if not all_texts:
+        raise HTTPException(status_code=422, detail="No text could be extracted.")
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured.")
+    sections = json.loads(sections_json) if sections_json.strip() else ['raci_matrix', 'role_glossary', 'sources']
+    if 'raci_matrix' not in sections:
+        sections = ['raci_matrix'] + sections
+    if 'sources' not in sections:
+        sections.append('sources')
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        md = _generate_raci(client, "\n\n".join(all_texts), process_name, granularity, sections)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"RACI generation failed: {e}")
+    return JSONResponse({"status": "success", "raci_markdown": md})
+
+
+@app.post("/api/export-raci")
+async def export_raci(
+    raci_markdown: str = Form(...),
+    process_name:  str = Form("RACI Matrix"),
+    format:        str = Form("docx"),
+):
+    safe_name = re.sub(r'[^a-z0-9_\-]', '_', process_name.lower()) or 'raci_matrix'
+    fmt = format.lower().strip()
+    try:
+        if fmt == "pptx":
+            content  = _make_bc_pptx(raci_markdown, process_name)
+            media    = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            filename = f"{safe_name}.pptx"
+        else:
+            content  = _make_sop_docx(raci_markdown, process_name)
+            media    = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            filename = f"{safe_name}.docx"
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
+    return Response(content=content, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+# ── Change Impact Assessment ──────────────────────────────────────────────────
+
+CIA_PROMPT = """You are a senior change management and process transformation consultant. Analyse the current state and future state process documents provided and produce a structured Change Impact Assessment.
+
+FORMAT RULES — follow exactly:
+- Use markdown with ## for section headings, ### for sub-headings, **bold** for labels
+- Do NOT use strikethrough text (~~text~~) under any circumstances
+- Do NOT include a title or preamble — start directly with the first section
+- All financial figures must be in US dollars ($)
+- For every metric or assumption cited, add a superscript reference marker: value<sup>[A1]</sup>
+- At the end, include a "## Sources and Assumptions" section listing every [A1], [A2]... marker with derivation, source, and caveats
+
+STRUCTURE (include only selected sections):
+- ## Executive Summary — 3–5 sentences: what is changing, overall impact magnitude, key recommendation
+- ## Change Overview — what is driving the change, scope, timeline if known
+- ## Stakeholder Impact by Group — for each stakeholder group:
+  ### [Group Name] — Impact Level: [HIGH / MEDIUM / LOW]
+  - What changes for them, skills/behaviour changes required, recommended engagement approach
+- ## Process Delta (What Changes) — comparison of key process steps: what is removed, added, or modified
+- ## People & Skills Impact — FTE changes, new skills required, training needs
+- ## Technology & Systems Impact — systems added, retired, or changed; data migration considerations
+- ## Risk & Change Readiness — top 3–5 change risks with likelihood, impact, and mitigation
+- ## Recommended Change Actions — prioritised action plan: communication, training, transition management
+- ## Sources and Assumptions — numbered [A1], [A2]... with derivation detail
+
+DEPTH GUIDANCE:
+- summary: 2–3 bullets per section, high-level only
+- standard: 4–6 bullets per section, balanced detail
+- detailed: 8–12 bullets per section, comprehensive analysis
+
+Base all findings on the actual content of the uploaded documents. Highlight gaps where information is limited."""
+
+
+def _generate_cia(client: anthropic.Anthropic, current_text: str, future_text: str,
+                  process_name: str, depth: str, sections: list) -> str:
+    sections_note = ", ".join(sections)
+    user_msg = (
+        f"Process name: {process_name}\n"
+        f"Analysis depth: {depth}\n"
+        f"Sections to include: {sections_note}\n\n"
+        f"=== CURRENT STATE DOCUMENTS ===\n{current_text[:6000]}\n\n"
+        f"=== FUTURE STATE DOCUMENTS ===\n{future_text[:6000]}"
+    )
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=8000,
+        system=CIA_PROMPT,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    return msg.content[0].text
+
+
+@app.post("/api/generate-cia")
+async def generate_cia_endpoint(
+    current_files: List[UploadFile] = File(...),
+    future_files:  List[UploadFile] = File(...),
+    process_name:  str = Form(...),
+    depth:         str = Form("standard"),
+    sections_json: str = Form("[]"),
+):
+    if not current_files:
+        raise HTTPException(status_code=400, detail="At least one current state file is required.")
+    if not future_files:
+        raise HTTPException(status_code=400, detail="At least one future state file is required.")
+
+    async def read_files(files):
+        texts = []
+        for f in files:
+            ext = Path(f.filename).suffix.lower()
+            if ext not in ALLOWED_EXTENSIONS:
+                raise HTTPException(status_code=400, detail=f"Unsupported file type '{ext}'.")
+            fb = await f.read()
+            if len(fb) / 1024 / 1024 > MAX_FILE_SIZE_MB:
+                raise HTTPException(status_code=413, detail=f"File '{f.filename}' too large.")
+            try:
+                t = extract_text(fb, f.filename)
+            except Exception as e:
+                raise HTTPException(status_code=422, detail=f"Could not parse '{f.filename}': {e}")
+            if t.strip():
+                texts.append(f"=== {f.filename} ===\n{t.strip()}")
+        return texts
+
+    current_texts = await read_files(current_files)
+    future_texts  = await read_files(future_files)
+
+    if not current_texts:
+        raise HTTPException(status_code=422, detail="No text extracted from current state files.")
+    if not future_texts:
+        raise HTTPException(status_code=422, detail="No text extracted from future state files.")
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured.")
+
+    sections = json.loads(sections_json) if sections_json.strip() else [
+        'executive_summary', 'change_overview', 'stakeholder_impact', 'sources'
+    ]
+    if 'sources' not in sections:
+        sections.append('sources')
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        md = _generate_cia(client, "\n\n".join(current_texts), "\n\n".join(future_texts),
+                           process_name, depth, sections)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"CIA generation failed: {e}")
+    return JSONResponse({"status": "success", "cia_markdown": md})
+
+
+@app.post("/api/export-cia")
+async def export_cia(
+    cia_markdown:  str = Form(...),
+    process_name:  str = Form("Change Impact Assessment"),
+    format:        str = Form("docx"),
+):
+    safe_name = re.sub(r'[^a-z0-9_\-]', '_', process_name.lower()) or 'change_impact'
+    fmt = format.lower().strip()
+    try:
+        if fmt == "pptx":
+            content  = _make_bc_pptx(cia_markdown, process_name)
+            media    = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            filename = f"{safe_name}.pptx"
+        else:
+            content  = _make_sop_docx(cia_markdown, process_name)
+            media    = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            filename = f"{safe_name}.docx"
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
+    return Response(content=content, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
