@@ -162,6 +162,45 @@
     .submit-btn:hover  { background: #1e293b; }
     .submit-btn:active { background: #0f172a; }
 
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 24px;
+      border-bottom: 2px solid #e5e7eb;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px;
+      background: none;
+      border: none;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: inherit;
+      color: #9ca3af;
+      cursor: pointer;
+      padding-bottom: 12px;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn.active {
+      color: #0f172a;
+      border-bottom-color: #0f172a;
+    }
+    .form-panel { display: none; }
+    .form-panel.active { display: block; }
+
+    /* ── Divider ── */
+    .switch-link {
+      text-align: center;
+      margin-top: 16px;
+      font-size: 12px;
+      color: #9ca3af;
+    }
+    .switch-link a { color: #0f172a; font-weight: 600; text-decoration: none; cursor: pointer; }
+    .switch-link a:hover { text-decoration: underline; }
+
     /* ── Responsive ── */
     @media (max-width: 700px) {
       body { flex-direction: column; }
@@ -196,43 +235,124 @@
     </div>
   </div>
 
-  <!-- Right: Sign-in form -->
+  <!-- Right: Sign-in / Register form -->
   <div class="right">
     <div class="card">
-      <div class="card-title">Welcome back</div>
-      <div class="card-sub">Sign in to your POET account</div>
+      <div class="card-title" id="cardTitle">Welcome back</div>
+      <div class="card-sub" id="cardSub">Sign in to your POET account</div>
 
-      <form id="loginForm" onsubmit="handleLogin(event)">
-        <div class="field">
-          <label for="email">Email</label>
-          <input id="email" type="email" placeholder="you@ssacompany.com" required />
-        </div>
-        <div class="field">
-          <div class="field-row">
-            <label for="password">Password</label>
-            <a href="#">Forgot password?</a>
+      <!-- Tabs -->
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('login')">Sign In</button>
+        <button class="tab-btn" onclick="switchTab('register')">Create Account</button>
+      </div>
+
+      <!-- Sign In Panel -->
+      <div class="form-panel active" id="loginPanel">
+        <form id="loginForm" onsubmit="handleLogin(event)">
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" type="email" placeholder="you@ssacompany.com" required />
           </div>
-          <input id="password" type="password" placeholder="••••••••" required />
-        </div>
-        <p id="errorMsg" class="error-msg"></p>
-        <button type="submit" class="submit-btn">Sign in</button>
-      </form>
+          <div class="field">
+            <div class="field-row">
+              <label for="password">Password</label>
+            </div>
+            <input id="password" type="password" placeholder="••••••••" required />
+          </div>
+          <p id="loginError" class="error-msg"></p>
+          <button type="submit" class="submit-btn">Sign in</button>
+        </form>
+      </div>
+
+      <!-- Create Account Panel -->
+      <div class="form-panel" id="registerPanel">
+        <form id="registerForm" onsubmit="handleRegister(event)">
+          <div class="field">
+            <label for="regName">Full Name</label>
+            <input id="regName" type="text" placeholder="Jane Smith" required />
+          </div>
+          <div class="field">
+            <label for="regEmail">Email</label>
+            <input id="regEmail" type="email" placeholder="you@ssacompany.com" required />
+          </div>
+          <div class="field">
+            <label for="regPassword">Password</label>
+            <input id="regPassword" type="password" placeholder="Min. 6 characters" required />
+          </div>
+          <div class="field">
+            <label for="regConfirm">Confirm Password</label>
+            <input id="regConfirm" type="password" placeholder="••••••••" required />
+          </div>
+          <p id="registerError" class="error-msg"></p>
+          <button type="submit" class="submit-btn">Create Account</button>
+        </form>
+      </div>
+
     </div>
   </div>
 
   <script>
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-btn').forEach((b, i) => {
+        b.classList.toggle('active', (tab === 'login' && i === 0) || (tab === 'register' && i === 1));
+      });
+      document.getElementById('loginPanel').classList.toggle('active', tab === 'login');
+      document.getElementById('registerPanel').classList.toggle('active', tab === 'register');
+      document.getElementById('cardTitle').textContent = tab === 'login' ? 'Welcome back' : 'Create your account';
+      document.getElementById('cardSub').textContent   = tab === 'login' ? 'Sign in to your POET account' : 'Get started with POET today';
+    }
+
     function handleLogin(e) {
       e.preventDefault();
-      const email    = document.getElementById('email').value.trim();
+      const email    = document.getElementById('email').value.trim().toLowerCase();
       const password = document.getElementById('password').value;
-      const errorMsg = document.getElementById('errorMsg');
-      if (email && password.length >= 6) {
+      const errorEl  = document.getElementById('loginError');
+      const accounts = JSON.parse(localStorage.getItem('poet_accounts') || '{}');
+      if (accounts[email] && accounts[email].password === password) {
         sessionStorage.setItem('poet_auth', 'true');
+        sessionStorage.setItem('poet_user', accounts[email].name);
         window.location.href = '/index.html';
+      } else if (email && password.length >= 6 && !accounts[email]) {
+        // Legacy: allow any valid email/password if no accounts exist yet
+        if (Object.keys(accounts).length === 0) {
+          sessionStorage.setItem('poet_auth', 'true');
+          window.location.href = '/index.html';
+        } else {
+          errorEl.textContent = 'Account not found. Please create an account first.';
+          errorEl.style.display = 'block';
+        }
       } else {
-        errorMsg.textContent = 'Invalid credentials. Please try again.';
-        errorMsg.style.display = 'block';
+        errorEl.textContent = 'Incorrect email or password.';
+        errorEl.style.display = 'block';
       }
+    }
+
+    function handleRegister(e) {
+      e.preventDefault();
+      const name     = document.getElementById('regName').value.trim();
+      const email    = document.getElementById('regEmail').value.trim().toLowerCase();
+      const password = document.getElementById('regPassword').value;
+      const confirm  = document.getElementById('regConfirm').value;
+      const errorEl  = document.getElementById('registerError');
+      if (password.length < 6) {
+        errorEl.textContent = 'Password must be at least 6 characters.';
+        errorEl.style.display = 'block'; return;
+      }
+      if (password !== confirm) {
+        errorEl.textContent = 'Passwords do not match.';
+        errorEl.style.display = 'block'; return;
+      }
+      const accounts = JSON.parse(localStorage.getItem('poet_accounts') || '{}');
+      if (accounts[email]) {
+        errorEl.textContent = 'An account with this email already exists.';
+        errorEl.style.display = 'block'; return;
+      }
+      accounts[email] = { name, password };
+      localStorage.setItem('poet_accounts', JSON.stringify(accounts));
+      sessionStorage.setItem('poet_auth', 'true');
+      sessionStorage.setItem('poet_user', name);
+      window.location.href = '/index.html';
     }
   </script>
 
