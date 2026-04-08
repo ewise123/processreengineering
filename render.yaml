@@ -11,7 +11,7 @@ services:
         sync: false
 
   - type: web
-    name: poet-frontend
+    name: SSA_POET
     runtime: static
     branch: Nidhi
     rootDir: Nidhi Projects/poet-webpage/public
