@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: processreengineering
+    runtime: python
+    branch: Nidhi
+    rootDir: Nidhi Projects/poet-webpage/backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+  - type: web
+    name: poet-frontend
+    runtime: static
+    branch: Nidhi
+    rootDir: Nidhi Projects/poet-webpage/public
+    buildCommand: ""
+    staticPublishPath: .
+    routes:
+      - type: rewrite
+        source: /
+        destination: /login.html

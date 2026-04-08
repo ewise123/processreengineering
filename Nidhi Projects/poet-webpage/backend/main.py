@@ -2035,6 +2035,11 @@ def _make_vdx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes:
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "POET API", "docs": "/docs"}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "POET API"}
