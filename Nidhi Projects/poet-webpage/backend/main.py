@@ -2344,6 +2344,7 @@ Formatting rules:
 - All financial figures, costs, and estimates MUST be expressed in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
 - ASSUMPTION REFERENCES: Every quantitative figure in the document (cycle times, durations, dollar amounts, FTE counts, error rates, frequencies, etc.) MUST be followed immediately by an inline superscript reference marker in the format <sup>[A1]</sup>, <sup>[A2]</sup>, <sup>[A3]</sup> etc. These markers must correspond exactly to numbered **Assumption [A1]:** entries in the Sources section. Number assumptions sequentially across the entire document.
 - Do NOT use strikethrough text (~~text~~). Never cross out, mark out, or use strikethrough formatting anywhere in the document.
+- Do NOT use ALL CAPS text anywhere in the document. Use normal sentence case or title case only.
 - Do NOT include any explanation or preamble outside the SOP itself — return only the SOP document"""
 
 # Ordered list of all supported SOP sections
@@ -2789,6 +2790,7 @@ Formatting rules:
 - All financial figures, costs, savings, ROI, and estimates MUST be expressed in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
 - ASSUMPTION REFERENCES: Every quantitative figure in the document (dollar amounts, cost savings, ROI, FTE counts, cycle times, processing times, error rates, payback periods, percentages, etc.) MUST be followed immediately by an inline superscript reference marker in the format <sup>[A1]</sup>, <sup>[A2]</sup>, <sup>[A3]</sup> etc. These markers must correspond exactly to numbered **Assumption [A1]:** entries in the Sources section. Number assumptions sequentially across the entire document.
 - Do NOT use strikethrough text (~~text~~). Never cross out, mark out, or use strikethrough formatting anywhere in the document.
+- Do NOT use ALL CAPS text anywhere in the document. Use normal sentence case or title case only.
 - Do NOT use markdown tables
 - Do NOT include any explanation outside the document itself — return only the business case"""
 
@@ -3013,6 +3015,7 @@ SCORECARD_PROMPT = """You are a senior process excellence consultant. Analyse th
 FORMAT RULES — follow exactly:
 - Use markdown with ## for section headings, ### for sub-headings, **bold** for labels
 - Do NOT use strikethrough text (~~text~~) under any circumstances
+- Do NOT use ALL CAPS text anywhere in the document. Use normal sentence case or title case only.
 - Do NOT include a title or preamble — start directly with the Legend section
 - All financial figures must be in US dollars ($)
 - For every metric cited, add a superscript reference marker inline: value<sup>[A1]</sup>
@@ -3139,6 +3142,7 @@ RACI_PROMPT = """You are a senior business analyst and process governance expert
 FORMAT RULES — follow exactly:
 - Use markdown with ## for section headings, **bold** for labels
 - Do NOT use strikethrough text (~~text~~) under any circumstances
+- Do NOT use ALL CAPS text anywhere in the document. Use normal sentence case or title case only.
 - Do NOT include a title or preamble — start directly with the first section
 - All financial figures must be in US dollars ($)
 - For every metric or assumption cited, add a superscript reference marker: value<sup>[A1]</sup>
@@ -3255,6 +3259,7 @@ CIA_PROMPT = """You are a senior change management and process transformation co
 FORMAT RULES — follow exactly:
 - Use markdown with ## for section headings, ### for sub-headings, **bold** for labels
 - Do NOT use strikethrough text (~~text~~) under any circumstances
+- Do NOT use ALL CAPS text anywhere in the document. Use normal sentence case or title case only.
 - Do NOT include a title or preamble — start directly with the first section
 - All financial figures must be in US dollars ($)
 - For every metric or assumption cited, add a superscript reference marker: value<sup>[A1]</sup>
