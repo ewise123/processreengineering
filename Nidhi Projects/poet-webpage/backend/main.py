@@ -288,6 +288,12 @@ def extract_process_structure(client: anthropic.Anthropic, document_text: str, b
     # Strip any accidental markdown fences
     raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
     raw = re.sub(r"\n?```$", "", raw).strip()
+    # Remove control characters that break JSON parsing
+    raw = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
+    # If Claude wrapped JSON in prose, extract the first {...} block
+    match = re.search(r"\{[\s\S]*\}", raw)
+    if match:
+        raw = match.group(0)
     try:
         return json.loads(raw)
     except json.JSONDecodeError as e:
