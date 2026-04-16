@@ -36,7 +36,7 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".txt", ".xlsx", ".xls", ".csv"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".txt", ".xlsx", ".xls", ".csv", ".png", ".jpg", ".jpeg"}
 MAX_FILE_SIZE_MB = 20
 
 
@@ -95,6 +95,37 @@ def extract_text_from_csv(file_bytes: bytes) -> str:
     return "\n".join(" | ".join(cell.strip() for cell in row if cell.strip()) for row in reader)
 
 
+def extract_text_from_image(file_bytes: bytes, media_type: str) -> str:
+    """Use Claude vision to extract text/content from an image file."""
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured.")
+    client = anthropic.Anthropic(api_key=api_key)
+    img_b64 = base64.b64encode(file_bytes).decode("utf-8")
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=4000,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media_type, "data": img_b64},
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "Extract all text, labels, data, and meaningful content from this image. "
+                        "If it is a process map or diagram, describe the steps, flow, and decisions. "
+                        "Return the content in plain text, preserving structure where possible."
+                    ),
+                },
+            ],
+        }],
+    )
+    return msg.content[0].text
+
+
 def extract_text(file_bytes: bytes, filename: str) -> str:
     ext = Path(filename).suffix.lower()
     if ext == ".pdf":
@@ -109,6 +140,10 @@ def extract_text(file_bytes: bytes, filename: str) -> str:
         return extract_text_from_excel(file_bytes)
     elif ext == ".csv":
         return extract_text_from_csv(file_bytes)
+    elif ext == ".png":
+        return extract_text_from_image(file_bytes, "image/png")
+    elif ext in (".jpg", ".jpeg"):
+        return extract_text_from_image(file_bytes, "image/jpeg")
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
