@@ -123,12 +123,20 @@
             </div>
 
             <!-- Assessment Dimensions -->
-            <div>
+            <div class="mb-3">
               <div class="flex items-center justify-between mb-2">
                 <label class="text-xs font-semibold text-slate-600">Assessment Dimensions <span class="text-red-500">*</span></label>
                 <span class="text-xs text-slate-400">select all that apply</span>
               </div>
               <div id="dimension-list" class="border border-slate-200 rounded-lg divide-y divide-slate-100 overflow-y-auto" style="max-height:200px"></div>
+            </div>
+
+            <!-- Optional: Glossary -->
+            <div>
+              <label class="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-slate-50 border border-slate-200 rounded-lg select-none">
+                <input type="checkbox" id="include-glossary" class="w-3.5 h-3.5 flex-shrink-0 accent-slate-900" />
+                <span class="text-xs text-slate-700">Include Acronym &amp; Term Dictionary</span>
+              </label>
             </div>
           </div>
 
@@ -330,6 +338,7 @@
       fd.append('process_name', processName);
       fd.append('industry', industry);
       fd.append('dimensions_json', JSON.stringify(dims));
+      fd.append('include_glossary', document.getElementById('include-glossary').checked ? 'true' : 'false');
 
       try {
         const res = await fetch(`${API_BASE}/api/generate-scorecard`, { method: 'POST', body: fd });

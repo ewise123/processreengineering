@@ -2419,6 +2419,12 @@ SOP_SECTIONS_META = [
      "**Assumption [A2]:** description). For each entry state: what the figure is, where it came from, "
      "the basis or benchmark used, and any caveats. Every inline [Ax] marker in the document MUST have a "
      "matching entry here. Do not omit any."),
+    ("glossary",               "Acronym & Term Dictionary",
+     "Provide a comprehensive dictionary of all acronyms, abbreviations, and industry-specific or technical terms "
+     "used in this document that may be unfamiliar to a general business reader. "
+     "For each entry use the format: **TERM / ACRONYM:** Full expansion and plain-English definition. "
+     "Order entries alphabetically. Include at minimum: all acronyms used in the document, "
+     "regulatory and compliance terms, system/tool names, and any domain-specific jargon."),
 ]
 
 # Map from id → (title, instructions) for quick lookup
@@ -2758,6 +2764,12 @@ BC_SECTIONS_META = [
      "(e.g. **Assumption [A1]:** description, **Assumption [A2]:** description). For each entry state: what the "
      "figure is, where it came from, the basis or benchmark used, and any caveats or limitations. Every inline "
      "[Ax] marker in the document MUST have a matching entry here. Do not omit any metric."),
+    ("glossary",               "Acronym & Term Dictionary",
+     "Provide a comprehensive dictionary of all acronyms, abbreviations, and industry-specific or technical terms "
+     "used in this document that may be unfamiliar to a general business reader. "
+     "For each entry use the format: **TERM / ACRONYM:** Full expansion and plain-English definition. "
+     "Order entries alphabetically. Include at minimum: all acronyms used in the document, "
+     "regulatory and compliance terms, system/tool names, and any domain-specific jargon."),
 ]
 
 BC_SECTIONS_MAP = {sid: (title, instr) for sid, title, instr in BC_SECTIONS_META}
@@ -3052,7 +3064,7 @@ Be specific and evidence-based — reference actual content from the uploaded do
 
 
 def _generate_scorecard(client: anthropic.Anthropic, document_text: str, process_name: str,
-                        industry: str, dimensions: list) -> str:
+                        industry: str, dimensions: list, include_glossary: bool = False) -> str:
     dim_labels = {
         'waste':           'Waste & Non-Value-Adding Activity (LEAN)',
         'handoffs':        'Handoffs & Waiting Time',
@@ -3065,10 +3077,17 @@ def _generate_scorecard(client: anthropic.Anthropic, document_text: str, process
     }
     dims_text = "\n".join(f"- {dim_labels.get(d, d)}" for d in dimensions)
     industry_note = f" The process operates in the {industry} sector." if industry else ""
+    glossary_note = (
+        "\n\nAt the end of the document, include a ## Acronym & Term Dictionary section listing "
+        "all acronyms, abbreviations, and industry-specific terms used, in alphabetical order, "
+        "using the format **TERM / ACRONYM:** plain-English definition."
+        if include_glossary else ""
+    )
     user_msg = (
         f"Process name: {process_name}.{industry_note}\n\n"
         f"Assess the following dimensions only:\n{dims_text}\n\n"
         f"Source documents:\n\n{document_text[:12000]}"
+        f"{glossary_note}"
     )
     msg = client.messages.create(
         model="claude-sonnet-4-6",
@@ -3081,10 +3100,11 @@ def _generate_scorecard(client: anthropic.Anthropic, document_text: str, process
 
 @app.post("/api/generate-scorecard")
 async def generate_scorecard_endpoint(
-    files:           List[UploadFile] = File(...),
-    process_name:    str = Form(...),
-    industry:        str = Form(""),
-    dimensions_json: str = Form("[]"),
+    files:            List[UploadFile] = File(...),
+    process_name:     str = Form(...),
+    industry:         str = Form(""),
+    dimensions_json:  str = Form("[]"),
+    include_glossary: str = Form("false"),
 ):
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required.")
@@ -3112,7 +3132,8 @@ async def generate_scorecard_endpoint(
         dimensions = ['waste', 'handoffs', 'automation', 'rework', 'standardisation', 'controls', 'data_quality', 'customer']
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        md = _generate_scorecard(client, "\n\n".join(all_texts), process_name, industry, dimensions)
+        md = _generate_scorecard(client, "\n\n".join(all_texts), process_name, industry, dimensions,
+                                 include_glossary=include_glossary.lower() == 'true')
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Scorecard generation failed: {e}")
     return JSONResponse({"status": "success", "sc_markdown": md})
@@ -3167,6 +3188,7 @@ STRUCTURE (include only selected sections):
 - ## Key Findings & Accountability Gaps — issues found (duplicate A, missing A, overloaded roles)
 - ## Recommendations — 3–5 prioritised actions to improve accountability clarity
 - ## Sources and Assumptions — numbered [A1], [A2]... with derivation detail
+- ## Acronym & Term Dictionary — if "glossary" is in the sections list, include an alphabetical dictionary of all acronyms, abbreviations, and industry-specific terms used in the document. Format each entry as **TERM / ACRONYM:** plain-English definition.
 
 GRANULARITY GUIDANCE:
 - high: 5–12 major activities (phase-level)
@@ -3283,6 +3305,7 @@ STRUCTURE (include only selected sections):
 - ## Risk & Change Readiness — top 3–5 change risks with likelihood, impact, and mitigation
 - ## Recommended Change Actions — prioritised action plan: communication, training, transition management
 - ## Sources and Assumptions — numbered [A1], [A2]... with derivation detail
+- ## Acronym & Term Dictionary — if "glossary" is in the sections list, include an alphabetical dictionary of all acronyms, abbreviations, and industry-specific terms used in the document. Format each entry as **TERM / ACRONYM:** plain-English definition.
 
 DEPTH GUIDANCE:
 - summary: 2–3 bullets per section, high-level only
