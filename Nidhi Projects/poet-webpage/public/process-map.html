@@ -1124,8 +1124,15 @@
           formData.append('bpmn_xml',     bpmnXml || '');
           formData.append('process_name', map.processName || 'Process Map');
 
+          // Quick connectivity check before sending the full payload
+        const ping = await fetch(`${API_BASE}/health`).catch(() => null);
+          if (!ping || !ping.ok) throw new Error(`Cannot reach backend at ${API_BASE} — make sure the server is running.`);
+
           const res = await fetch(`${API_BASE}/api/export`, { method: 'POST', body: formData });
-          if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || 'Export failed'); }
+          if (!res.ok) {
+            const e = await res.json().catch(() => ({}));
+            throw new Error(e.detail || `Server error ${res.status}`);
+          }
 
           const blob = await res.blob();
           const url  = URL.createObjectURL(blob);

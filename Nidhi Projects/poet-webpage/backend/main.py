@@ -2374,20 +2374,26 @@ async def export_diagram(
         raise HTTPException(status_code=400, detail="Invalid PNG data — could not decode base64.")
 
     fmt = format.lower().strip()
-    if fmt == "pptx":
-        content  = _make_pptx(png_bytes, process_name, bpmn_xml)
-        media    = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        filename = "process-map.pptx"
-    elif fmt == "docx":
-        content  = _make_docx(png_bytes, process_name, bpmn_xml)
-        media    = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        filename = "process-map.docx"
-    elif fmt == "vsdx":
-        content  = _make_vdx(png_bytes, process_name, bpmn_xml)
-        media    = "application/vnd.visio"
-        filename = "process-map.vdx"
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported export format: {fmt}")
+    try:
+        if fmt == "pptx":
+            content  = _make_pptx(png_bytes, process_name, bpmn_xml)
+            media    = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            filename = "process-map.pptx"
+        elif fmt == "docx":
+            content  = _make_docx(png_bytes, process_name, bpmn_xml)
+            media    = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            filename = "process-map.docx"
+        elif fmt == "vsdx":
+            content  = _make_vdx(png_bytes, process_name, bpmn_xml)
+            media    = "application/vnd.visio"
+            filename = "process-map.vdx"
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported export format: {fmt}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"Export error ({fmt}): {exc}\n{traceback.format_exc()}")
 
     return Response(
         content=content,
