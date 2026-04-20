@@ -988,17 +988,11 @@ def _make_pptx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes
             # No text in the lane rectangle itself — use a separate label text box
             # so the lane name stays in a controlled area at the left of the lane.
             if s['name']:
-                # Dedicated label strip at the left of the lane — fixed width
-                # so actor names never bleed into the process shape area.
-                # Width matches LANE_LBL_W (120 px) used in build_bpmn_xml layout.
-                lbl_w = bw(120)                     # 120 BPMN-px label column
-                lbl   = slide.shapes.add_shape(
-                    MSO_AUTO_SHAPE_TYPE.RECTANGLE, sx, sy, lbl_w, sh)
-                lbl.fill.solid()
-                lbl.fill.fore_color.rgb = RGBColor(0xC8, 0xD8, 0xEC)  # soft blue tint
-                lbl.line.color.rgb      = LANE_BORDER
-                lbl.line.width          = Emu(9525)
-                lf = lbl.text_frame
+                # Narrow textbox at the left of the lane — width matches
+                # LANE_LBL_W (120 px) so text is always clear of process shapes.
+                lbl_w = bw(120)
+                lbl   = slide.shapes.add_textbox(sx, sy, lbl_w, sh)
+                lf    = lbl.text_frame
                 lf.word_wrap = True
                 lf.auto_size = MSO_AUTO_SIZE.NONE
                 lf.text = s['name']
