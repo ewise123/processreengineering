@@ -405,11 +405,6 @@
         <div id="impl-plan-output" class="hidden">
           <div class="flex items-center justify-between mb-3">
             <p class="text-xs text-slate-400">Implementation Plan</p>
-            <button onclick="downloadImplPlan()"
-              class="inline-flex items-center gap-1.5 text-xs font-medium text-white bg-slate-900 hover:bg-slate-700 rounded-lg px-3 py-1.5 transition">
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-              Download as Word
-            </button>
           </div>
           <div class="bg-white border border-slate-200 rounded-xl shadow-sm px-10 py-10">
             <div id="impl-plan-body" class="sop-body max-w-3xl mx-auto"></div>
@@ -939,7 +934,7 @@
                 </div>
                 <select id="map-export-fmt-${i}" class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-slate-400 cursor-pointer">
                   <option value="pptx">PowerPoint (.pptx)</option>
-                  <option value="docx">Word (.docx)</option>
+                  <option value="png">PNG Image (.png)</option>
                   <option value="vsdx">Visio (.vsdx)</option>
                 </select>
                 <button id="map-export-btn-${i}" onclick="downloadExport(${i})"
@@ -1114,27 +1109,36 @@
         const { svg }          = await map.viewer.saveSVG();
         const { xml: bpmnXml } = await map.viewer.saveXML({ format: true });
         const pngBase64        = await svgToPng(svg);
+        const safeName         = (map.processName || 'Process Map').replace(/\s+/g, '-');
 
-        const formData = new FormData();
-        formData.append('format',       format);
-        formData.append('png_base64',   pngBase64);
-        formData.append('bpmn_xml',     bpmnXml || '');
-        formData.append('process_name', map.processName || 'Process Map');
+        // PNG: download directly from canvas — no backend round-trip needed
+        if (format === 'png') {
+          const a = document.createElement('a');
+          a.href     = 'data:image/png;base64,' + pngBase64;
+          a.download = `${safeName}.png`;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        } else {
+          const formData = new FormData();
+          formData.append('format',       format);
+          formData.append('png_base64',   pngBase64);
+          formData.append('bpmn_xml',     bpmnXml || '');
+          formData.append('process_name', map.processName || 'Process Map');
 
-        const res = await fetch(`${API_BASE}/api/export`, { method: 'POST', body: formData });
-        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || 'Export failed'); }
+          const res = await fetch(`${API_BASE}/api/export`, { method: 'POST', body: formData });
+          if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || 'Export failed'); }
 
-        const blob = await res.blob();
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement('a');
-        a.href     = url;
-        const disposition = res.headers.get('Content-Disposition') || '';
-        const serverName  = disposition.match(/filename="([^"]+)"/)?.[1];
-        const extMap      = { vsdx: 'vdx' };
-        const ext         = extMap[format] || format;
-        a.download = serverName || `${map.processName.replace(/\s+/g, '-')}.${ext}`;
-        document.body.appendChild(a); a.click(); document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+          const blob = await res.blob();
+          const url  = URL.createObjectURL(blob);
+          const a    = document.createElement('a');
+          a.href     = url;
+          const disposition = res.headers.get('Content-Disposition') || '';
+          const serverName  = disposition.match(/filename="([^"]+)"/)?.[1];
+          const extMap      = { vsdx: 'vdx' };
+          const ext         = extMap[format] || format;
+          a.download = serverName || `${safeName}.${ext}`;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
 
       } catch (err) {
         showError('Export failed: ' + err.message);
