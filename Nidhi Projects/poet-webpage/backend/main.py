@@ -381,7 +381,8 @@ def build_bpmn_xml(structure: dict) -> str:
 
     # ── Layout constants ──────────────────────────────────────────────────────
     POOL_HDR_W  = 30    # pool name strip width (vertical label on far left)
-    CONTENT_OFF = 100   # x-offset from P_X to the first element centre
+    LANE_LBL_W  = 120   # width reserved for lane label strip inside each lane
+    CONTENT_OFF = POOL_HDR_W + LANE_LBL_W + 60  # first element centre x-offset from P_X
     H_STEP      = 175   # horizontal distance between element centres
     LANE_H      = 150   # height of each swim lane
     P_X         = 50    # participant left x
