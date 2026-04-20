@@ -988,12 +988,19 @@ def _make_pptx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes
             # No text in the lane rectangle itself — use a separate label text box
             # so the lane name stays in a controlled area at the left of the lane.
             if s['name']:
-                # narrow label band at the left edge of the lane
-                lbl_w = max(bw(90), 457200)         # ≥ 90 bpmn-px or 0.5"
-                lbl   = slide.shapes.add_textbox(sx, sy, lbl_w, sh)
-                lf    = lbl.text_frame
+                # Dedicated label strip at the left of the lane — fixed width
+                # so actor names never bleed into the process shape area.
+                # Width matches LANE_LBL_W (120 px) used in build_bpmn_xml layout.
+                lbl_w = bw(120)                     # 120 BPMN-px label column
+                lbl   = slide.shapes.add_shape(
+                    MSO_AUTO_SHAPE_TYPE.RECTANGLE, sx, sy, lbl_w, sh)
+                lbl.fill.solid()
+                lbl.fill.fore_color.rgb = RGBColor(0xC8, 0xD8, 0xEC)  # soft blue tint
+                lbl.line.color.rgb      = LANE_BORDER
+                lbl.line.width          = Emu(9525)
+                lf = lbl.text_frame
                 lf.word_wrap = True
-                lf.auto_size = MSO_AUTO_SIZE.NONE   # fixed size, text wraps inside
+                lf.auto_size = MSO_AUTO_SIZE.NONE
                 lf.text = s['name']
                 for para in lf.paragraphs:
                     para.alignment = PP_ALIGN.LEFT
@@ -1904,14 +1911,12 @@ def _make_vdx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes:
 
         if name and not suppress_text:
             # VDX Size is in INCHES: 10 pt = 10/72 ≈ 0.1389 in
-            if 'lane' in t:
-                # Left-align + top-justify so actor name sits in the top-left corner
-                # of the lane band rather than floating in the centre.
-                w('<Para IX="0"><HorzAlign>0</HorzAlign><VerticalAlign>0</VerticalAlign></Para>')
-            else:
+            # Lanes: suppress inline text — label is drawn as a separate narrow
+            # shape (see lane label loop below) so it never overlaps process shapes.
+            if 'lane' not in t:
                 w('<Para IX="0"><HorzAlign>1</HorzAlign><VerticalAlign>1</VerticalAlign></Para>')
-            w('<Char IX="0"><Size>0.1389</Size><Color>#222222</Color></Char>')
-            w(f'<Text>{esc(name)}</Text>')
+                w('<Char IX="0"><Size>0.1389</Size><Color>#222222</Color></Char>')
+                w(f'<Text>{esc(name)}</Text>')
         w('</Shape>')
 
     # ── External text labels for gateways (separate shape, no border/fill) ────
@@ -2069,6 +2074,45 @@ def _make_vdx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes:
         w('</Shape>')
     except Exception:
         pass
+
+    # ── Lane label strips (separate narrow shapes, always left of process shapes) ─
+    # LANE_LBL_W_IN = 120 px / 96 DPI = 1.25 inches — matches LANE_LBL_W constant
+    # in build_bpmn_xml so there is guaranteed clear space to the right.
+    LANE_LBL_W_IN = 120.0 / DPI
+    for el_id, b in shape_bounds.items():
+        info = node_info.get(el_id, {})
+        if info.get('type', '').lower() != 'lane':
+            continue
+        lname = info.get('name', '')
+        if not lname:
+            continue
+        # Pin at the centre of the label strip (left of the lane)
+        lbl_pin_x = ix(b['x']) + LANE_LBL_W_IN / 2
+        lbl_pin_y = iy(b['y'] + b['h'] / 2)
+        lbl_h_in  = b['h'] / DPI
+        lbl_sid   = _ctr[0]; _ctr[0] += 1
+        w(f'<Shape ID="{lbl_sid}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">')
+        w('<XForm>')
+        w(f'<PinX>{lbl_pin_x:.4f}</PinX><PinY>{lbl_pin_y:.4f}</PinY>')
+        w(f'<Width>{LANE_LBL_W_IN:.4f}</Width><Height>{lbl_h_in:.4f}</Height>')
+        w(f'<LocPinX F="Width*0.5">{LANE_LBL_W_IN/2:.4f}</LocPinX>')
+        w(f'<LocPinY F="Height*0.5">{lbl_h_in/2:.4f}</LocPinY>')
+        w('<Angle>0</Angle><FlipX>0</FlipX><FlipY>0</FlipY>')
+        w('</XForm>')
+        w('<Fill><FillForegnd>#C8D8EC</FillForegnd><FillBkgnd>#C8D8EC</FillBkgnd>')
+        w('<FillPattern>1</FillPattern></Fill>')
+        w(f'<Line><LineWeight>0.01</LineWeight><LineColor>#7890AA</LineColor></Line>')
+        w('<Geom IX="0">')
+        w(f'<MoveTo IX="1"><X>0</X><Y>0</Y></MoveTo>')
+        w(f'<LineTo IX="2"><X>{LANE_LBL_W_IN:.4f}</X><Y>0</Y></LineTo>')
+        w(f'<LineTo IX="3"><X>{LANE_LBL_W_IN:.4f}</X><Y>{lbl_h_in:.4f}</Y></LineTo>')
+        w(f'<LineTo IX="4"><X>0</X><Y>{lbl_h_in:.4f}</Y></LineTo>')
+        w(f'<LineTo IX="5"><X>0</X><Y>0</Y></LineTo>')
+        w('</Geom>')
+        w('<Para IX="0"><HorzAlign>1</HorzAlign><VerticalAlign>1</VerticalAlign></Para>')
+        w('<Char IX="0"><Size>0.1111</Size><Color>#2C3E50</Color><Style>1</Style></Char>')
+        w(f'<Text>{esc(lname)}</Text>')
+        w('</Shape>')
 
     w('</Shapes>')
     w('</Page></Pages></VisioDocument>')
