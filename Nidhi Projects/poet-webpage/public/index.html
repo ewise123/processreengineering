@@ -32,7 +32,8 @@
     .card-tag   { font-size:10px; background:#f1f5f9; color:#475569; border-radius:4px; padding:1px 6px; }
     .card-link  { margin-top:10px; font-size:11px; font-weight:600; color:#475569; }
 
-    .phase-label { font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; padding:2px 10px; border-radius:20px; display:inline-block; margin-bottom:12px; }
+    .phase-label { font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; padding:2px 10px; border-radius:20px; display:inline-block; margin-bottom:8px; }
+    .phase-overview { font-size:12px; color:#475569; line-height:1.65; margin-bottom:14px; max-width:680px; }
     .ph1 { background:#dbeafe; color:#1e40af; }
     .ph2 { background:#d1fae5; color:#065f46; }
     .ph3 { background:#fef9c3; color:#713f12; }
@@ -116,7 +117,10 @@
 
     <!-- Phase 1 -->
     <div id="sp-ph1" class="phase-content active">
-      <div style="grid-column:1/-1"><span class="phase-label ph1">🧭 Phase 1 — Understand &amp; Diagnose</span></div>
+      <div style="grid-column:1/-1">
+        <span class="phase-label ph1">🧭 Phase 1 — Understand &amp; Diagnose</span>
+        <p class="phase-overview">Establish an evidence-based picture of the process before any changes are made. Map the as-is workflow at multiple levels of detail and score it against LEAN and ESOAR health dimensions — giving you a structured baseline and a quantified view of where inefficiencies, risks, and automation opportunities exist.</p>
+      </div>
       <div class="tool-card" onclick="window.location.href='/process-map.html'">
         <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg></div>
         <div class="card-num">Step 1</div>
@@ -137,7 +141,10 @@
 
     <!-- Phase 2 -->
     <div id="sp-ph2" class="phase-content">
-      <div style="grid-column:1/-1"><span class="phase-label ph2">🧠 Phase 2 — Optimize</span></div>
+      <div style="grid-column:1/-1">
+        <span class="phase-label ph2">🧠 Phase 2 — Optimize</span>
+        <p class="phase-overview">With the baseline in place, identify where and how the process can be improved. The ESOAR assessment systematically evaluates improvement options — from eliminating waste to full robotization — and builds the business case for change, helping prioritise which opportunities deliver the most value.</p>
+      </div>
       <div class="tool-card" onclick="window.location.href='/automation-options.html'">
         <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg></div>
         <div class="card-num">Step 3</div>
@@ -150,7 +157,10 @@
 
     <!-- Phase 3 -->
     <div id="sp-ph3" class="phase-content">
-      <div style="grid-column:1/-1"><span class="phase-label ph3">🔧 Phase 3 — Design</span></div>
+      <div style="grid-column:1/-1">
+        <span class="phase-label ph3">🔧 Phase 3 — Design</span>
+        <p class="phase-overview">Translate improvement priorities into a structured future-state design. Generate a to-be BPMN process map that reflects the optimised workflow and pair it with a phased implementation roadmap — giving stakeholders a clear picture of the target state and the steps required to get there.</p>
+      </div>
       <div class="tool-card" onclick="window.location.href='/process-map.html'">
         <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg></div>
         <div class="card-num">Step 4</div>
@@ -163,7 +173,10 @@
 
     <!-- Phase 4 -->
     <div id="sp-ph4" class="phase-content">
-      <div style="grid-column:1/-1"><span class="phase-label ph4">👥 Phase 4 — Govern</span></div>
+      <div style="grid-column:1/-1">
+        <span class="phase-label ph4">👥 Phase 4 — Govern</span>
+        <p class="phase-overview">Define who is responsible for each step of the redesigned process. The RACI Matrix Generator produces a clear accountability framework, surfaces ownership gaps, and ensures every task has an assigned role — establishing the governance structure before implementation begins.</p>
+      </div>
       <div class="tool-card" onclick="window.location.href='/raci-matrix.html'">
         <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18M10 3v18M14 3v18"/></svg></div>
         <div class="card-num">Step 5</div>
@@ -176,7 +189,10 @@
 
     <!-- Phase 5 -->
     <div id="sp-ph5" class="phase-content">
-      <div style="grid-column:1/-1"><span class="phase-label ph5">⚠️ Phase 5 — Change</span></div>
+      <div style="grid-column:1/-1">
+        <span class="phase-label ph5">⚠️ Phase 5 — Change</span>
+        <p class="phase-overview">Prepare the organisation for the transition. The Change Impact Assessment identifies which stakeholder groups are affected, the severity of impact, and the change actions required — enabling targeted communication, readiness planning, and a smoother path to adoption.</p>
+      </div>
       <div class="tool-card" onclick="window.location.href='/change-impact-assessment.html'">
         <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg></div>
         <div class="card-num">Step 6</div>
@@ -189,7 +205,10 @@
 
     <!-- Phase 6 -->
     <div id="sp-ph6" class="phase-content">
-      <div style="grid-column:1/-1"><span class="phase-label ph6">📄 Phase 6 — Document</span></div>
+      <div style="grid-column:1/-1">
+        <span class="phase-label ph6">📄 Phase 6 — Document</span>
+        <p class="phase-overview">Lock in the future state with formal documentation. Generate publication-ready SOPs and Business Cases that capture the redesigned process, its rationale, and expected benefits — ready for stakeholder sign-off, staff training, and operational handover.</p>
+      </div>
       <div class="tool-card" onclick="window.location.href='/process-document.html'">
         <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg></div>
         <div class="card-num">Step 7</div>
