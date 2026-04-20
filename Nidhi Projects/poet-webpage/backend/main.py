@@ -1847,9 +1847,9 @@ def _make_vdx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes:
         hhalf  = h_in / 2
         t      = typ.lower()
 
-        # Gateways and participants carry their label in a separate text box
-        # so the shape itself stays clean (no text inside the diamond / pool rect).
-        suppress_text = 'gateway' in t or 'participant' in t
+        # Gateways, participants and lanes carry their label in a separate shape
+        # so the wide lane rectangle never has text that can bleed over process shapes.
+        suppress_text = 'gateway' in t or 'participant' in t or t == 'lane'
 
         w(f'<Shape ID="{sid}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">')
         _xform(pin_xi, pin_yi, w_in, h_in)
@@ -1911,12 +1911,9 @@ def _make_vdx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes:
 
         if name and not suppress_text:
             # VDX Size is in INCHES: 10 pt = 10/72 ≈ 0.1389 in
-            # Lanes: suppress inline text — label is drawn as a separate narrow
-            # shape (see lane label loop below) so it never overlaps process shapes.
-            if 'lane' not in t:
-                w('<Para IX="0"><HorzAlign>1</HorzAlign><VerticalAlign>1</VerticalAlign></Para>')
-                w('<Char IX="0"><Size>0.1389</Size><Color>#222222</Color></Char>')
-                w(f'<Text>{esc(name)}</Text>')
+            w('<Para IX="0"><HorzAlign>1</HorzAlign><VerticalAlign>1</VerticalAlign></Para>')
+            w('<Char IX="0"><Size>0.1389</Size><Color>#222222</Color></Char>')
+            w(f'<Text>{esc(name)}</Text>')
         w('</Shape>')
 
     # ── External text labels for gateways (separate shape, no border/fill) ────
