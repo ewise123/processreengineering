@@ -25,6 +25,8 @@ from pptx import Presentation
 
 load_dotenv()
 
+from fastapi.staticfiles import StaticFiles
+
 app = FastAPI(title="POET API", version="1.0.0")
 
 app.add_middleware(
@@ -3489,3 +3491,10 @@ async def export_cia(
         raise HTTPException(status_code=500, detail=f"Export failed: {e}")
     return Response(content=content, media_type=media,
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+# ── Serve frontend static files (must come LAST — after all API routes) ───────
+import os as _os
+_PUBLIC = _os.path.join(_os.path.dirname(__file__), "..", "public")
+if _os.path.isdir(_PUBLIC):
+    app.mount("/", StaticFiles(directory=_PUBLIC, html=True), name="frontend")
