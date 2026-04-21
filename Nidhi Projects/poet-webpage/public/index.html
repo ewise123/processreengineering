@@ -22,7 +22,6 @@
 
     .tool-card { display:flex; flex-direction:column; text-align:left; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px; cursor:pointer; transition:all .2s; height:100%; }
     .tool-card:hover { border-color:#94a3b8; box-shadow:0 4px 12px rgba(0,0,0,.08); }
-    .card-icon  { width:32px; height:32px; border-radius:8px; background:#0f172a; display:flex; align-items:center; justify-content:center; margin-bottom:8px; flex-shrink:0; }
     .card-num   { font-size:10px; font-weight:600; color:#94a3b8; margin-bottom:2px; }
     .card-title { font-size:13px; font-weight:700; color:#0f172a; margin-bottom:4px; line-height:1.35; }
     .card-desc  { font-size:11px; color:#64748b; line-height:1.6; flex:1; }
@@ -109,11 +108,10 @@
     <!-- Phase 1 -->
     <div id="sp-ph1" class="phase-content active">
       <div style="grid-column:1/-1">
-        <span class="phase-label ph1">🧭 Phase 1 — Understand &amp; Diagnose</span>
+        <span class="phase-label ph1">Phase 1 — Understand &amp; Diagnose</span>
         <p class="phase-overview">Establish an evidence-based picture of the process before any changes are made. Map the as-is workflow at multiple levels of detail and score it against LEAN and ESOAR health dimensions — giving you a structured baseline and a quantified view of where inefficiencies, risks, and automation opportunities exist.</p>
       </div>
       <div class="tool-card" onclick="window.location.href='/process-map.html?mode=current'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg></div>
         <div class="card-num">Step 1</div>
         <div class="card-title">BPMN Process Map (Current State)</div>
         <div class="card-desc">Map the as-is process at L1–L4 detail to establish a factual baseline.</div>
@@ -121,7 +119,6 @@
         <div class="card-link">Get started →</div>
       </div>
       <div class="tool-card" onclick="window.location.href='/process-health-scorecard.html'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg></div>
         <div class="card-num">Step 2</div>
         <div class="card-title">Process Health Scorecard</div>
         <div class="card-desc">RAG-rated assessment to quantify inefficiencies, risk exposure, and automation potential.</div>
@@ -133,11 +130,10 @@
     <!-- Phase 2 -->
     <div id="sp-ph2" class="phase-content">
       <div style="grid-column:1/-1">
-        <span class="phase-label ph2">🧠 Phase 2 — Optimize</span>
+        <span class="phase-label ph2">Phase 2 — Optimize</span>
         <p class="phase-overview">With the baseline in place, identify where and how the process can be improved. The ESOAR assessment systematically evaluates improvement options — from eliminating waste to full robotization — and builds the business case for change, helping prioritise which opportunities deliver the most value.</p>
       </div>
       <div class="tool-card" onclick="window.location.href='/automation-options.html'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg></div>
         <div class="card-num">Step 3</div>
         <div class="card-title">Assess Optimization Options (ESOAR)</div>
         <div class="card-desc">Identify and prioritize improvement opportunities across Eliminate, Standardize, Optimize, Automate, and Robotize dimensions.</div>
@@ -149,11 +145,10 @@
     <!-- Phase 3 -->
     <div id="sp-ph3" class="phase-content">
       <div style="grid-column:1/-1">
-        <span class="phase-label ph3">🔧 Phase 3 — Design</span>
+        <span class="phase-label ph3">Phase 3 — Design</span>
         <p class="phase-overview">Translate improvement priorities into a structured future-state design. Generate a to-be BPMN process map that reflects the optimised workflow and pair it with a phased implementation roadmap — giving stakeholders a clear picture of the target state and the steps required to get there.</p>
       </div>
       <div class="tool-card" onclick="window.location.href='/process-map.html?mode=full'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg></div>
         <div class="card-num">Step 4</div>
         <div class="card-title">Future State BPMN + Implementation Plan</div>
         <div class="card-desc">Design the to-be process and generate a phased implementation roadmap to bridge the gap.</div>
@@ -165,11 +160,10 @@
     <!-- Phase 4 -->
     <div id="sp-ph4" class="phase-content">
       <div style="grid-column:1/-1">
-        <span class="phase-label ph4">👥 Phase 4 — Govern</span>
+        <span class="phase-label ph4">Phase 4 — Govern</span>
         <p class="phase-overview">Define who is responsible for each step of the redesigned process. The RACI Matrix Generator produces a clear accountability framework, surfaces ownership gaps, and ensures every task has an assigned role — establishing the governance structure before implementation begins.</p>
       </div>
       <div class="tool-card" onclick="window.location.href='/raci-matrix.html'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18M10 3v18M14 3v18"/></svg></div>
         <div class="card-num">Step 5</div>
         <div class="card-title">RACI Matrix Generator</div>
         <div class="card-desc">Define roles, accountability, and ownership across the redesigned process with gap analysis.</div>
@@ -181,11 +175,10 @@
     <!-- Phase 5 -->
     <div id="sp-ph5" class="phase-content">
       <div style="grid-column:1/-1">
-        <span class="phase-label ph5">⚠️ Phase 5 — Change</span>
+        <span class="phase-label ph5">Phase 5 — Change</span>
         <p class="phase-overview">Prepare the organisation for the transition. The Change Impact Assessment identifies which stakeholder groups are affected, the severity of impact, and the change actions required — enabling targeted communication, readiness planning, and a smoother path to adoption.</p>
       </div>
       <div class="tool-card" onclick="window.location.href='/change-impact-assessment.html'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg></div>
         <div class="card-num">Step 6</div>
         <div class="card-title">Change Impact Assessment</div>
         <div class="card-desc">Assess stakeholder impact, readiness, and recommended change actions across the transition.</div>
@@ -197,11 +190,10 @@
     <!-- Phase 6 -->
     <div id="sp-ph6" class="phase-content">
       <div style="grid-column:1/-1">
-        <span class="phase-label ph6">📄 Phase 6 — Document</span>
+        <span class="phase-label ph6">Phase 6 — Document</span>
         <p class="phase-overview">Lock in the future state with formal documentation. Generate publication-ready SOPs and Business Cases that capture the redesigned process, its rationale, and expected benefits — ready for stakeholder sign-off, staff training, and operational handover.</p>
       </div>
       <div class="tool-card" onclick="window.location.href='/process-document.html'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg></div>
         <div class="card-num">Step 7</div>
         <div class="card-title">SOP &amp; Business Case Generator</div>
         <div class="card-desc">Produce structured SOPs and Business Cases to lock in and communicate the future state.</div>
@@ -213,37 +205,31 @@
     <!-- All Tools -->
     <div id="sp-all" class="phase-content">
       <div class="tool-card" onclick="window.location.href='/process-map.html?mode=full'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg></div>
         <div class="card-title">BPMN Process Map &amp; Implementation Plan</div>
         <div class="card-desc">Current &amp; future state maps at L1–L4 with a structured implementation plan.</div>
         <div class="card-link">Get started →</div>
       </div>
       <div class="tool-card" onclick="window.location.href='/process-health-scorecard.html'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg></div>
         <div class="card-title">Process Health Scorecard</div>
         <div class="card-desc">RAG-rated health assessment across LEAN &amp; ESOAR dimensions.</div>
         <div class="card-link">Get started →</div>
       </div>
       <div class="tool-card" onclick="window.location.href='/automation-options.html'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg></div>
         <div class="card-title">Assess Optimization Options</div>
         <div class="card-desc">Identify improvement opportunities using the ESOAR framework.</div>
         <div class="card-link">Get started →</div>
       </div>
       <div class="tool-card" onclick="window.location.href='/raci-matrix.html'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18M10 3v18M14 3v18"/></svg></div>
         <div class="card-title">RACI Matrix Generator</div>
         <div class="card-desc">Auto-generate RACI matrix with accountability gap analysis.</div>
         <div class="card-link">Get started →</div>
       </div>
       <div class="tool-card" onclick="window.location.href='/change-impact-assessment.html'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg></div>
         <div class="card-title">Change Impact Assessment</div>
         <div class="card-desc">Structured change impact report by stakeholder group.</div>
         <div class="card-link">Get started →</div>
       </div>
       <div class="tool-card" onclick="window.location.href='/process-document.html'">
-        <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg></div>
         <div class="card-title">SOP &amp; Business Case Generator</div>
         <div class="card-desc">Generate structured SOPs and Business Cases from source documents.</div>
         <div class="card-link">Get started →</div>
