@@ -19,11 +19,12 @@
     .raci-body strong { color: #0f172a; }
     .raci-body hr { border: none; border-top: 1px solid #e2e8f0; margin: 0.5rem 0 1.25rem; }
     /* RACI table styles */
-    .raci-body table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-bottom: 1rem; }
-    .raci-body th { background: #0f172a; color: #fff; padding: 6px 10px; text-align: left; font-size: 0.75rem; font-weight: 600; }
-    .raci-body td { padding: 5px 10px; border: 1px solid #e2e8f0; vertical-align: top; }
+    .raci-body .table-wrap { width: 100%; overflow-x: auto; margin-bottom: 1rem; border-radius: 8px; }
+    .raci-body table { width: 100%; border-collapse: collapse; font-size: 0.75rem; table-layout: auto; }
+    .raci-body th { background: #0f172a; color: #fff; padding: 6px 8px; text-align: left; font-size: 0.7rem; font-weight: 600; white-space: nowrap; }
+    .raci-body td { padding: 5px 8px; border: 1px solid #e2e8f0; vertical-align: top; word-break: break-word; overflow-wrap: break-word; max-width: 220px; }
     .raci-body tr:nth-child(even) td { background: #f8fafc; }
-    .raci-body td:first-child { font-weight: 600; color: #1e293b; }
+    .raci-body td:first-child { font-weight: 600; color: #1e293b; min-width: 160px; }
   </style>
   <script>
     if (!sessionStorage.getItem('poet_auth')) {
@@ -212,7 +213,7 @@
   </main>
 
   <script>
-    const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
       ? 'http://localhost:8000' : 'https://processreengineering.onrender.com';
     let selectedFiles = [];
     let currentRaciMarkdown = null;
@@ -302,6 +303,14 @@
       document.getElementById('status-bar').classList.remove('hidden');
       document.getElementById('generate-btn').disabled = true;
 
+      if (selectedFiles.length === 0) {
+        document.getElementById('error-text').textContent = 'Please upload at least one document before generating.';
+        document.getElementById('error-bar').classList.remove('hidden');
+        document.getElementById('status-bar').classList.add('hidden');
+        document.getElementById('generate-btn').disabled = false;
+        return;
+      }
+
       const fd = new FormData();
       selectedFiles.forEach(f => fd.append('files', f));
       fd.append('process_name', processName);
@@ -309,10 +318,17 @@
       fd.append('sections_json', JSON.stringify(sections));
 
       try {
+        const ping = await fetch(`${API_BASE}/health`).catch(() => null);
+        if (!ping || !ping.ok) throw new Error(`Cannot reach backend at ${API_BASE} — make sure the server is running on port 8080.`);
+
         const res = await fetch(`${API_BASE}/api/generate-raci`, { method: 'POST', body: fd });
         if (!res.ok) {
-          const err = await res.json().catch(() => ({ detail: res.statusText }));
-          throw new Error(err.detail || res.statusText);
+          const errBody = await res.json().catch(() => null);
+          const detail  = errBody?.detail;
+          const msg = Array.isArray(detail)
+            ? detail.map(e => e.msg || JSON.stringify(e)).join('; ')
+            : (detail || `HTTP ${res.status} ${res.statusText}`);
+          throw new Error(msg);
         }
         const data = await res.json();
         currentRaciMarkdown = data.raci_markdown;
@@ -321,7 +337,9 @@
         document.getElementById('status-bar').classList.add('hidden');
 
         if (fmt === 'screen') {
-          document.getElementById('raci-output').innerHTML = marked.parse(currentRaciMarkdown);
+          const _rawHtml = marked.parse(currentRaciMarkdown);
+          // Wrap every <table> in a scrollable container so it never bleeds past the page
+          document.getElementById('raci-output').innerHTML = _rawHtml.replace(/<table/g, '<div class="table-wrap"><table').replace(/<\/table>/g, '</table></div>');
           document.getElementById('form-section').classList.add('hidden');
           document.getElementById('output-section').classList.remove('hidden');
         } else {

@@ -432,7 +432,7 @@
   </style>
 
   <script>
-    const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
       ? 'http://localhost:8000' : 'https://processreengineering.onrender.com';
     let currentStateFiles   = [];
     let futureStateFiles    = [];
@@ -440,6 +440,31 @@
     let generatedMaps       = [];
     let activeMapIdx        = 0;
     let implPlanMarkdown    = null;
+
+    // ── Mode enforcement: default = current-state-only; ?mode=full unlocks all ─
+    const _urlMode = new URLSearchParams(window.location.search).get('mode');
+    const currentStateOnly = _urlMode !== 'full';
+
+    if (currentStateOnly) {
+      // Update page subtitle
+      const sub = document.querySelector('.bg-gradient-to-r p');
+      if (sub) sub.textContent = 'Upload process documentation to generate a current state BPMN process map.';
+      // Update breadcrumb title
+      const crumb = document.querySelector('.text-sm.font-semibold.text-slate-700');
+      if (crumb) crumb.textContent = 'Create a Current State BPMN Process Map';
+      // Hide Future State and Implementation Plan output cards entirely
+      const cardFuture = document.getElementById('card-future');
+      const cardImpl   = document.getElementById('card-impl');
+      if (cardFuture) cardFuture.style.display = 'none';
+      if (cardImpl)   cardImpl.style.display   = 'none';
+      // Lock checkboxes: current locked on, future/impl locked off
+      const cbCurrent = document.getElementById('want-current');
+      const cbFuture  = document.getElementById('want-future');
+      const cbImpl    = document.getElementById('want-impl');
+      if (cbCurrent) { cbCurrent.checked = true;  cbCurrent.disabled = true; }
+      if (cbFuture)  { cbFuture.checked  = false; cbFuture.disabled  = true; }
+      if (cbImpl)    { cbImpl.checked    = false;  cbImpl.disabled    = true; }
+    }
 
     // ── Auth ──────────────────────────────────────────────────────────────────
     function signOut() {
@@ -451,6 +476,11 @@
     function onOutputToggle() {
       // Allow checkboxes to update before reading them
       setTimeout(() => {
+        // In current-state-only mode, keep future/impl unchecked
+        if (currentStateOnly) {
+          document.getElementById('want-future').checked = false;
+          document.getElementById('want-impl').checked   = false;
+        }
         const cur  = document.getElementById('want-current').checked;
         const fut  = document.getElementById('want-future').checked;
         const both = cur && fut;

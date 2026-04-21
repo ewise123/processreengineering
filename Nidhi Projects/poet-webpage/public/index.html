@@ -13,11 +13,9 @@
     .phase-card:hover { border-color:#94a3b8; box-shadow:0 2px 8px rgba(0,0,0,.07); }
     .phase-card.active { background:#0f172a; border-color:#0f172a; }
     .phase-card.active .pc-num  { color:#94a3b8; }
-    .phase-card.active .pc-emoji { color:#fff; }
     .phase-card.active .pc-label { color:#fff; }
-    .pc-num   { font-size:9px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#94a3b8; margin-bottom:2px; }
-    .pc-emoji { font-size:16px; margin-bottom:2px; }
-    .pc-label { font-size:10px; font-weight:700; color:#1e293b; line-height:1.3; }
+    .pc-num   { font-size:9px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#94a3b8; margin-bottom:4px; }
+    .pc-label { font-size:13px; font-weight:700; color:#1e293b; line-height:1.3; }
 
     .phase-content { display:none; }
     .phase-content.active { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:12px; align-items:start; }
@@ -80,37 +78,30 @@
     <div class="phase-card-strip">
       <div class="phase-card active" onclick="showPhase('ph1', this)">
         <div class="pc-num">Phase 1</div>
-        <div class="pc-emoji">🧭</div>
         <div class="pc-label">Understand &amp; Diagnose</div>
       </div>
       <div class="phase-card" onclick="showPhase('ph2', this)">
         <div class="pc-num">Phase 2</div>
-        <div class="pc-emoji">🧠</div>
         <div class="pc-label">Optimize</div>
       </div>
       <div class="phase-card" onclick="showPhase('ph3', this)">
         <div class="pc-num">Phase 3</div>
-        <div class="pc-emoji">🔧</div>
         <div class="pc-label">Design</div>
       </div>
       <div class="phase-card" onclick="showPhase('ph4', this)">
         <div class="pc-num">Phase 4</div>
-        <div class="pc-emoji">👥</div>
         <div class="pc-label">Govern</div>
       </div>
       <div class="phase-card" onclick="showPhase('ph5', this)">
         <div class="pc-num">Phase 5</div>
-        <div class="pc-emoji">⚠️</div>
         <div class="pc-label">Change</div>
       </div>
       <div class="phase-card" onclick="showPhase('ph6', this)">
         <div class="pc-num">Phase 6</div>
-        <div class="pc-emoji">📄</div>
         <div class="pc-label">Document</div>
       </div>
       <div class="phase-card" onclick="showPhase('all', this)">
         <div class="pc-num">Overview</div>
-        <div class="pc-emoji">📋</div>
         <div class="pc-label">All Tools</div>
       </div>
     </div>
@@ -121,7 +112,7 @@
         <span class="phase-label ph1">🧭 Phase 1 — Understand &amp; Diagnose</span>
         <p class="phase-overview">Establish an evidence-based picture of the process before any changes are made. Map the as-is workflow at multiple levels of detail and score it against LEAN and ESOAR health dimensions — giving you a structured baseline and a quantified view of where inefficiencies, risks, and automation opportunities exist.</p>
       </div>
-      <div class="tool-card" onclick="window.location.href='/process-map.html'">
+      <div class="tool-card" onclick="window.location.href='/process-map.html?mode=current'">
         <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg></div>
         <div class="card-num">Step 1</div>
         <div class="card-title">BPMN Process Map (Current State)</div>
@@ -161,7 +152,7 @@
         <span class="phase-label ph3">🔧 Phase 3 — Design</span>
         <p class="phase-overview">Translate improvement priorities into a structured future-state design. Generate a to-be BPMN process map that reflects the optimised workflow and pair it with a phased implementation roadmap — giving stakeholders a clear picture of the target state and the steps required to get there.</p>
       </div>
-      <div class="tool-card" onclick="window.location.href='/process-map.html'">
+      <div class="tool-card" onclick="window.location.href='/process-map.html?mode=full'">
         <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg></div>
         <div class="card-num">Step 4</div>
         <div class="card-title">Future State BPMN + Implementation Plan</div>
@@ -221,7 +212,7 @@
 
     <!-- All Tools -->
     <div id="sp-all" class="phase-content">
-      <div class="tool-card" onclick="window.location.href='/process-map.html'">
+      <div class="tool-card" onclick="window.location.href='/process-map.html?mode=full'">
         <div class="card-icon"><svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg></div>
         <div class="card-title">BPMN Process Map &amp; Implementation Plan</div>
         <div class="card-desc">Current &amp; future state maps at L1–L4 with a structured implementation plan.</div>

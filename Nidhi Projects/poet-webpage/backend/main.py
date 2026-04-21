@@ -25,8 +25,6 @@ from pptx import Presentation
 
 load_dotenv()
 
-from fastapi.staticfiles import StaticFiles
-
 app = FastAPI(title="POET API", version="1.0.0")
 
 app.add_middleware(
@@ -1046,7 +1044,7 @@ def _make_pptx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes
                 for para in flf.paragraphs:
                     para.alignment = PP_ALIGN.LEFT
                     for run in para.runs:
-                        run.font.size      = Pt(7)
+                        run.font.size      = Pt(8)
                         run.font.italic    = True
                         run.font.color.rgb = RGBColor(0x44, 0x44, 0x44)
 
@@ -1111,7 +1109,7 @@ def _make_pptx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes
                     for para in lf.paragraphs:
                         para.alignment = PP_ALIGN.CENTER
                         for r2 in para.runs:
-                            r2.font.size      = Pt(7)
+                            r2.font.size      = Pt(8)
                             r2.font.color.rgb = RGBColor(0x1A, 0x1A, 0x1A)
             else:
                 # Tasks / subprocesses: text inside, auto-shrink to fit shape
@@ -1349,6 +1347,10 @@ def _make_docx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes
             )
 
         # ── 1. Lane / pool backgrounds (behindDoc=1, low relativeHeight) ──────
+        # Lane actor names are rendered in a SEPARATE narrow label box (120 px
+        # wide) rather than inside the full-width lane rectangle. This prevents
+        # the actor name text from extending into the start-event circle area.
+        LANE_LBL_W_PX = 120   # must match LANE_LBL_W in build_bpmn_xml
         lanes_ordered = [s for s in cont_shapes if s['type'].lower() == 'lane']
         for s in cont_shapes:
             typ = s['type'].lower()
@@ -1357,14 +1359,29 @@ def _make_docx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes
             if typ == 'participant':
                 fill_hex = 'FFFFFF'
                 rh       = 1000
+                # Participant: render with pool name in full rect (no overlap risk)
+                xml = _anchor(sid, x_e, y_e, w_e, h_e, 'rect', fill_hex,
+                              s['name'], behind=True, rh=rh, text_align='left')
+                run._r.append(etree.fromstring(xml.encode('utf-8')))
+                sid += 1
             else:
                 li       = lanes_ordered.index(s) if s in lanes_ordered else 0
                 fill_hex = LANE_FILLS[li % 2]
                 rh       = 2000 + li
-            xml = _anchor(sid, x_e, y_e, w_e, h_e, 'rect', fill_hex,
-                          s['name'], behind=True, rh=rh, text_align='left')
-            run._r.append(etree.fromstring(xml.encode('utf-8')))
-            sid += 1
+                # Lane: render background rect with NO text to avoid overlap
+                xml = _anchor(sid, x_e, y_e, w_e, h_e, 'rect', fill_hex,
+                              '', behind=True, rh=rh, text_align='left')
+                run._r.append(etree.fromstring(xml.encode('utf-8')))
+                sid += 1
+                # Separate narrow label box — actor name stays within 120 px,
+                # always clear of the first process shape (start event).
+                if s.get('name'):
+                    lbl_w_e = ew(LANE_LBL_W_PX)
+                    lbl_xml = _anchor(sid, x_e, y_e, lbl_w_e, h_e, 'rect',
+                                      fill_hex, s['name'], behind=True,
+                                      rh=rh + 1, text_align='left')
+                    run._r.append(etree.fromstring(lbl_xml.encode('utf-8')))
+                    sid += 1
 
         # ── 2. Connectors — one shape per waypoint segment ────────────────────
         # Drawing each segment individually ensures bent/routed BPMN paths
@@ -2102,6 +2119,9 @@ def _make_vdx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes:
         w(f'<LineTo IX="4"><X>0</X><Y>{lbl_h_in:.4f}</Y></LineTo>')
         w(f'<LineTo IX="5"><X>0</X><Y>0</Y></LineTo>')
         w('</Geom>')
+        # Clip text to the label box so it never spills into the process area
+        w('<TextBlock><TextMarginLeft>0.04</TextMarginLeft>')
+        w('<TextMarginRight>0.04</TextMarginRight></TextBlock>')
         w('<Para IX="0"><HorzAlign>1</HorzAlign><VerticalAlign>1</VerticalAlign></Para>')
         w('<Char IX="0"><Size>0.1111</Size><Color>#2C3E50</Color><Style>1</Style></Char>')
         w(f'<Text>{esc(lname)}</Text>')
@@ -2116,7 +2136,8 @@ def _make_vdx(png_bytes: bytes, process_name: str, bpmn_xml: str = '') -> bytes:
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "POET API", "docs": "/docs"}
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/index.html")
 
 
 @app.get("/health")
@@ -2552,22 +2573,55 @@ async def _stream_sop(api_key: str, combined_text: str,
 
 
 def _add_runs(paragraph, text: str):
-    """Add a paragraph's text, converting **bold** and <sup> spans to styled runs."""
-    # Tokenise into segments: plain, bold (**...**), superscript (<sup>...</sup>)
+    """Add a paragraph's text, converting **bold** and <sup> spans to styled runs.
+
+    Handles <sup> nested inside **bold** (e.g. **Phase 1<sup>[A1]</sup>:**).
+    Also strips any remaining stray HTML tags.
+    """
+    # Strip any HTML other than <sup> (e.g. <br>, <em>) — keep <sup> for superscript
+    text = re.sub(r'<(?!/?sup\b)[^>]+>', '', text)
+
     token_re = re.compile(r'\*\*(.+?)\*\*|<sup>(.*?)</sup>', re.DOTALL)
     cursor = 0
     for m in token_re.finditer(text):
         if m.start() > cursor:
             paragraph.add_run(text[cursor:m.start()])
-        if m.group(1) is not None:          # **bold**
-            run = paragraph.add_run(m.group(1))
-            run.bold = True
+        if m.group(1) is not None:          # **bold** — may contain nested <sup>
+            bold_text = m.group(1)
+            sup_re = re.compile(r'<sup>(.*?)</sup>', re.DOTALL)
+            sc = 0
+            for sm in sup_re.finditer(bold_text):
+                if sm.start() > sc:
+                    r = paragraph.add_run(bold_text[sc:sm.start()])
+                    r.bold = True
+                r = paragraph.add_run(sm.group(1))
+                r.bold = True
+                r.font.superscript = True
+                sc = sm.end()
+            if sc < len(bold_text):
+                r = paragraph.add_run(bold_text[sc:])
+                r.bold = True
         else:                               # <sup>...</sup>
             run = paragraph.add_run(m.group(2))
             run.font.superscript = True
         cursor = m.end()
     if cursor < len(text):
         paragraph.add_run(text[cursor:])
+
+
+def _set_tab_stop(paragraph, position):
+    """Add a left-aligned tab stop at `position` (an Inches/Pt/Emu value) to a paragraph."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    # position is in EMU (python-docx Length); Word XML tab pos is in twentieths-of-a-point (twips)
+    twips = int(position / 914400 * 1440)
+    pPr = paragraph._p.get_or_add_pPr()
+    tabs = OxmlElement('w:tabs')
+    tab = OxmlElement('w:tab')
+    tab.set(qn('w:val'), 'left')
+    tab.set(qn('w:pos'), str(twips))
+    tabs.append(tab)
+    pPr.append(tabs)
 
 
 def _fix_caps_line(line: str) -> str:
@@ -2613,7 +2667,57 @@ def _preprocess_sop_markdown(md: str) -> str:
             line = re.sub(r'([^\n])\s+(\*\*[A-Za-z][^*\n]{1,50}:\*\*)', r'\1\n   \2', line)
             line = re.sub(r'([^\n])\s+(\*\*[A-Za-z][^*\n]{1,50}:\*\*)', r'\1\n   \2', line)
         out.append(_fix_caps_line(line))
-    return '\n'.join(out)
+    return _move_legend_to_end(_strip_blockquotes('\n'.join(out)))
+
+
+def _move_legend_to_end(md: str) -> str:
+    """Move a '## Legend' section to the very end of the document."""
+    lines = md.split('\n')
+    legend_start = None
+    legend_end   = None
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if re.match(r'^##\s+Legend\b', s, re.IGNORECASE) and legend_start is None:
+            legend_start = i
+        elif legend_start is not None and i > legend_start and re.match(r'^##\s+', s):
+            legend_end = i
+            break
+    if legend_start is None:
+        return md
+    if legend_end is None:
+        legend_end = len(lines)
+    legend_block = lines[legend_start:legend_end]
+    rest = lines[:legend_start] + lines[legend_end:]
+    while rest and not rest[-1].strip():
+        rest.pop()
+    return '\n'.join(rest + ['', ''] + legend_block)
+
+
+def _strip_blockquotes(md: str) -> str:
+    """Remove leading '>' blockquote markers from lines (LLM sometimes adds them)."""
+    return '\n'.join(
+        re.sub(r'^>\s?', '', ln) if ln.strip().startswith('>') else ln
+        for ln in md.split('\n')
+    )
+
+
+def _parse_md_table(lines: list) -> tuple:
+    """Parse a list of markdown pipe-table lines → (headers: list[str], rows: list[list[str]])."""
+    headers, rows = [], []
+    for line in lines:
+        cells = [c.strip() for c in line.strip().strip('|').split('|')]
+        # Separator row — skip
+        if all(re.match(r'^[-: ]+$', c) for c in cells if c):
+            continue
+        if not headers:
+            headers = cells
+        else:
+            rows.append(cells)
+    return headers, rows
+
+
+def _is_table_line(s: str) -> bool:
+    return s.startswith('|') and '|' in s[1:]
 
 
 def _make_sop_docx(sop_markdown: str, sop_title: str) -> bytes:
@@ -2624,54 +2728,219 @@ def _make_sop_docx(sop_markdown: str, sop_title: str) -> bytes:
 
     doc = DocxDocument()
 
+    # ── Page setup — 1-inch margins, Letter ──────────────────────────────────
+    for sec in doc.sections:
+        sec.page_width   = int(8.5 * 914400)
+        sec.page_height  = int(11.0 * 914400)
+        sec.left_margin  = sec.right_margin  = int(1.0 * 914400)
+        sec.top_margin   = sec.bottom_margin = int(1.0 * 914400)
+
     # ── Base (Normal) style ───────────────────────────────────────────────────
     normal = doc.styles['Normal']
     normal.font.name = 'Calibri'
     normal.font.size = Pt(11)
-    normal.paragraph_format.space_after = Pt(6)
+    normal.paragraph_format.space_after      = Pt(6)
+    normal.paragraph_format.line_spacing     = Pt(14)
 
-    # ── Heading styles — professional palette ─────────────────────────────────
+    # ── Heading styles — executive palette ───────────────────────────────────
     h1 = doc.styles['Heading 1']
     h1.font.name  = 'Calibri'
     h1.font.size  = Pt(18)
     h1.font.bold  = True
-    h1.font.color.rgb = RGBColor(0x1F, 0x2D, 0x3D)
-    h1.paragraph_format.space_before = Pt(0)
-    h1.paragraph_format.space_after  = Pt(8)
+    h1.font.color.rgb = RGBColor(0x1E, 0x40, 0xAF)
+    h1.paragraph_format.space_before    = Pt(20)
+    h1.paragraph_format.space_after     = Pt(6)
+    h1.paragraph_format.keep_with_next  = True
 
     h2 = doc.styles['Heading 2']
     h2.font.name  = 'Calibri'
-    h2.font.size  = Pt(12)
+    h2.font.size  = Pt(14)
     h2.font.bold  = True
-    h2.font.color.rgb = RGBColor(0x2D, 0x4A, 0x6B)
-    h2.paragraph_format.space_before = Pt(18)
-    h2.paragraph_format.space_after  = Pt(4)
+    h2.font.color.rgb = RGBColor(0x1E, 0x29, 0x3B)
+    h2.paragraph_format.space_before    = Pt(16)
+    h2.paragraph_format.space_after     = Pt(4)
+    h2.paragraph_format.keep_with_next  = True
 
     try:
         h3 = doc.styles['Heading 3']
         h3.font.name  = 'Calibri'
-        h3.font.size  = Pt(11)
+        h3.font.size  = Pt(12)
         h3.font.bold  = True
-        h3.font.color.rgb = RGBColor(0x44, 0x55, 0x70)
-        h3.paragraph_format.space_before = Pt(12)
-        h3.paragraph_format.space_after  = Pt(2)
+        h3.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
+        h3.paragraph_format.space_before   = Pt(12)
+        h3.paragraph_format.space_after    = Pt(3)
+        h3.paragraph_format.keep_with_next = True
     except KeyError:
         pass
 
-    # ── List styles — consistent font, tighter spacing, clean indentation ─────
+    # ── List styles — reset indentation so all text aligns to left margin ────
     for style_name in ['List Number', 'List Bullet', 'List Continue',
                         'List Number 2', 'List Bullet 2']:
         try:
             ls = doc.styles[style_name]
             ls.font.name = 'Calibri'
             ls.font.size = Pt(11)
-            ls.paragraph_format.space_after = Pt(3)
+            ls.paragraph_format.space_after   = Pt(3)
+            ls.paragraph_format.line_spacing  = Pt(14)
+            ls.paragraph_format.left_indent   = Inches(0)
+            ls.paragraph_format.first_line_indent = Inches(0)
         except KeyError:
             pass
 
+    # ── Title page ────────────────────────────────────────────────────────────
+    from datetime import date as _date
+    from docx.oxml.ns import qn as _qn
+    from docx.oxml import OxmlElement as _OxmlElement
+
+    # Dark navy block spanning full text width
+    title_para = doc.add_paragraph()
+    title_para.alignment = 1  # CENTER
+    pPr = title_para._p.get_or_add_pPr()
+    pBdr = _OxmlElement('w:pBdr')
+    for side in ('top', 'left', 'bottom', 'right'):
+        bd = _OxmlElement(f'w:{side}')
+        bd.set(_qn('w:val'), 'none')
+        pBdr.append(bd)
+    pPr.append(pBdr)
+    title_para.paragraph_format.space_before = Pt(72)
+    title_para.paragraph_format.space_after  = Pt(6)
+    run = title_para.add_run(sop_title or 'Document')
+    run.font.name  = 'Calibri'
+    run.font.size  = Pt(28)
+    run.font.bold  = True
+    run.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
+
+    # Thin blue divider
+    div = doc.add_paragraph()
+    div.paragraph_format.space_before = Pt(4)
+    div.paragraph_format.space_after  = Pt(4)
+    div_pPr = div._p.get_or_add_pPr()
+    div_bdr = _OxmlElement('w:pBdr')
+    btm = _OxmlElement('w:bottom')
+    btm.set(_qn('w:val'), 'single')
+    btm.set(_qn('w:sz'), '4')
+    btm.set(_qn('w:space'), '1')
+    btm.set(_qn('w:color'), '1E40AF')
+    div_bdr.append(btm)
+    div_pPr.append(div_bdr)
+
+    # Date line
+    date_para = doc.add_paragraph()
+    date_para.alignment = 1  # CENTER
+    date_para.paragraph_format.space_before = Pt(8)
+    date_para.paragraph_format.space_after  = Pt(4)
+    drun = date_para.add_run(_date.today().strftime('%B %d, %Y'))
+    drun.font.name  = 'Calibri'
+    drun.font.size  = Pt(12)
+    drun.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
+
+    doc.add_page_break()
+
+    # ── Helper: render a markdown table block as a Word table ─────────────────
+    def _flush_word_table(tbl_lines):
+        from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
+        from docx.enum.table import WD_TABLE_ALIGNMENT
+        from docx.shared import RGBColor as DocxRGB
+
+        headers, rows = _parse_md_table(tbl_lines)
+        if not headers:
+            return
+        n_cols = len(headers)
+        n_rows = 1 + len(rows)
+
+        tbl = doc.add_table(rows=n_rows, cols=n_cols)
+        tbl.style = 'Table Grid'
+        tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
+        tbl.autofit = False  # we set widths manually
+
+        # Category-based column widths (hardcoded to prevent drift)
+        _page_w_in  = 6.5   # usable page width in inches (8.5" letter − 2×1" margins)
+        def _wt(h):
+            hlen = len(re.sub(r'\*\*(.+?)\*\*', r'\1', h).strip())
+            if hlen <= 3:   return 1
+            if hlen <= 8:   return 3
+            return 6
+        if n_cols == 2:
+            _cws = [_page_w_in * 0.28, _page_w_in * 0.72]
+        elif n_cols <= 5:
+            _wts = [_wt(h) for h in headers]
+            _tot = sum(_wts)
+            _cws = [_page_w_in * w / _tot for w in _wts]
+        else:
+            _first = _page_w_in * 0.22
+            _other = (_page_w_in - _first) / max(n_cols - 1, 1)
+            _cws   = [_first] + [_other] * (n_cols - 1)
+        for j, col_w in enumerate(_cws):
+            for cell in tbl.columns[j].cells:
+                cell.width = Inches(col_w)
+
+        # Header row — dark navy background, white bold text
+        hdr_row = tbl.rows[0]
+        for j, h in enumerate(headers[:n_cols]):
+            cell = hdr_row.cells[j]
+            cell.text = ''
+            para = cell.paragraphs[0]
+            run = para.add_run(re.sub(r'\*\*(.+?)\*\*', r'\1', h))
+            run.bold = True
+            run.font.size = Pt(8)
+            run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+            # Dark navy cell shading
+            tc = cell._tc
+            tcPr = tc.get_or_add_tcPr()
+            shd = OxmlElement('w:shd')
+            shd.set(qn('w:val'), 'clear')
+            shd.set(qn('w:color'), 'auto')
+            shd.set(qn('w:fill'), '0F172A')
+            tcPr.append(shd)
+
+        # Data rows
+        for i, row_cells in enumerate(rows):
+            tr = tbl.rows[i + 1]
+            is_section = (
+                len(row_cells) > 1 and
+                all(c == '' for c in row_cells[1:]) and
+                row_cells[0].startswith('**')
+            )
+            fill_hex = 'E2E8F0' if is_section else ('F8FAFC' if i % 2 == 0 else 'FFFFFF')
+            for j in range(n_cols):
+                cell = tr.cells[j]
+                cell.text = ''
+                txt = row_cells[j] if j < len(row_cells) else ''
+                txt = re.sub(r'\*\*(.+?)\*\*', r'\1', txt)
+                para = cell.paragraphs[0]
+                run = para.add_run(txt)
+                run.font.size = Pt(8)
+                run.bold = is_section
+                tc = cell._tc
+                tcPr = tc.get_or_add_tcPr()
+                shd = OxmlElement('w:shd')
+                shd.set(qn('w:val'), 'clear')
+                shd.set(qn('w:color'), 'auto')
+                shd.set(qn('w:fill'), fill_hex)
+                tcPr.append(shd)
+
+        doc.add_paragraph()  # spacing after table
+
     # ── Parse and render each line ────────────────────────────────────────────
+    pending_table = []
+    _skipped_first_h1 = False
+
+    def flush_pending_table():
+        if pending_table:
+            _flush_word_table(pending_table)
+            pending_table.clear()
+
     for line in sop_markdown.split('\n'):
         s = line.strip()
+
+        # Accumulate table lines
+        if _is_table_line(s):
+            pending_table.append(s)
+            continue
+
+        # Flush any accumulated table before processing non-table line
+        flush_pending_table()
 
         # Skip blank lines and lone list-marker artefacts
         if not s or s in ('-', '*', '–', '•'):
@@ -2681,44 +2950,73 @@ def _make_sop_docx(sop_markdown: str, sop_title: str) -> bytes:
             doc.add_paragraph()
             continue
 
-        # H1: # Title
+        # H1: # Title — skip first occurrence (duplicates title page)
         if s.startswith('# ') and not s.startswith('## '):
-            doc.add_heading(s[2:].strip(), level=1)
+            if not _skipped_first_h1:
+                _skipped_first_h1 = True
+            else:
+                doc.add_heading(s[2:].strip(), level=1)
 
         # H2: ## Section
         elif s.startswith('## ') and not s.startswith('### '):
             doc.add_heading(s[3:].strip(), level=2)
 
-        # H3: ### Sub-section (strip literal ### artefacts)
+        # H3: ### Sub-section
         elif s.startswith('### '):
             doc.add_heading(s[4:].strip(), level=3)
 
-        # Stray ### with no space after (artefact) — promote to H3 text
         elif s.startswith('###'):
             text = s.lstrip('#').strip()
             if text:
                 doc.add_heading(text, level=3)
 
-        # Numbered list: 1. item
+        # Numbered list — bold blue number, tab-stop aligned hanging indent
         elif re.match(r'^\d+\.\s', s):
-            text = re.sub(r'^\d+\.\s+', '', s)
-            p = doc.add_paragraph(style='List Number')
+            num_match = re.match(r'^(\d+)\.\s+(.*)', s)
+            num_label = (num_match.group(1) + '.\t') if num_match else '1.\t'
+            text      = num_match.group(2) if num_match else re.sub(r'^\d+\.\s+', '', s)
+            p = doc.add_paragraph()
+            pf = p.paragraph_format
+            pf.left_indent        = Inches(0.28)
+            pf.first_line_indent  = Inches(-0.28)
+            pf.space_before       = Pt(8)
+            pf.space_after        = Pt(4)
+            pf.line_spacing       = Pt(14)
+            _set_tab_stop(p, Inches(0.28))
+            nr = p.add_run(num_label)
+            nr.font.name = 'Calibri'; nr.font.size = Pt(11)
+            nr.font.bold = True
+            nr.font.color.rgb = RGBColor(0x1E, 0x40, 0xAF)
             _add_runs(p, text)
 
-        # Bullet list: - item  or  * item
+        # Bullet list — tab-stop aligned hanging indent so all wrapped lines flush
         elif s.startswith('- ') or s.startswith('* '):
-            p = doc.add_paragraph(style='List Bullet')
+            p = doc.add_paragraph()
+            pf = p.paragraph_format
+            pf.left_indent        = Inches(0.22)
+            pf.first_line_indent  = Inches(-0.22)
+            pf.space_before       = Pt(4)
+            pf.space_after        = Pt(4)
+            pf.line_spacing       = Pt(14)
+            _set_tab_stop(p, Inches(0.22))
+            br = p.add_run('•\t')
+            br.font.name = 'Calibri'; br.font.size = Pt(11)
+            br.font.color.rgb = RGBColor(0x1E, 0x40, 0xAF)
             _add_runs(p, s[2:])
 
-        # Continuation sub-field line (indented **Label:** text) — from preprocessing
+        # Continuation sub-field line — use Normal to avoid inherited indent
         elif s.startswith('**') and ':' in s:
-            p = doc.add_paragraph(style='List Continue')
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Inches(0)
             _add_runs(p, s)
 
-        # Normal paragraph (may contain inline bold)
+        # Normal paragraph
         else:
             p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Inches(0)
             _add_runs(p, s)
+
+    flush_pending_table()  # flush any trailing table
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -2942,74 +3240,259 @@ def _make_bc_pptx(bc_markdown: str, process_name: str) -> bytes:
     from pptx.util import Inches, Pt
     from pptx.dml.color import RGBColor as PptxRGB
 
+    bc_markdown = _move_legend_to_end(bc_markdown)
+
     prs = PptxPresentation()
     prs.slide_width  = Inches(13.33)
     prs.slide_height = Inches(7.5)
 
     blank_layout = prs.slide_layouts[6]  # blank
-    title_layout = prs.slide_layouts[0]  # title slide
+
+    # ── Cover slide (always generated from process_name, not from markdown H1) ─
+    cover = prs.slides.add_slide(blank_layout)
+    cover.background.fill.solid()
+    cover.background.fill.fore_color.rgb = PptxRGB(0x0F, 0x17, 0x2A)
+    top_bar = cover.shapes.add_shape(1, Inches(0), Inches(0), Inches(13.33), Inches(0.12))
+    top_bar.fill.solid(); top_bar.fill.fore_color.rgb = PptxRGB(0x1E, 0x40, 0xAF)
+    top_bar.line.fill.background()
+    ttx = cover.shapes.add_textbox(Inches(0.9), Inches(2.5), Inches(11.5), Inches(1.6))
+    ttf = ttx.text_frame; ttf.word_wrap = True
+    trn = ttf.paragraphs[0].add_run()
+    trn.text = process_name
+    trn.font.bold = True; trn.font.size = Pt(36)
+    trn.font.color.rgb = PptxRGB(0xFF, 0xFF, 0xFF)
+    stx = cover.shapes.add_textbox(Inches(0.9), Inches(4.2), Inches(11.5), Inches(0.8))
+    stf = stx.text_frame
+    srn = stf.paragraphs[0].add_run()
+    srn.text = date.today().strftime('%B %d, %Y')
+    srn.font.size = Pt(14); srn.font.color.rgb = PptxRGB(0x93, 0xC5, 0xFD)
+    bot_bar = cover.shapes.add_shape(1, Inches(0), Inches(7.38), Inches(13.33), Inches(0.12))
+    bot_bar.fill.solid(); bot_bar.fill.fore_color.rgb = PptxRGB(0x1E, 0x40, 0xAF)
+    bot_bar.line.fill.background()
 
     lines   = bc_markdown.split('\n')
     current_title   = None
     current_content = []
 
-    def flush_slide():
-        if current_title is None:
+    # ── PPT table layout constants ─────────────────────────────────────────────
+    EMU             = 914400          # EMUs per inch
+    HDR_H_EMU       = int(0.38*EMU)  # fixed header row height
+    ROW_H_EMU       = int(0.28*EMU)  # fixed data row height
+    TBL_TOP_IN      = 1.05           # table top y (inches)
+    ROWS_PER_PAGE   = 12             # hard limit — guaranteed to fit on one slide
+
+    def _set_row_height(tbl, row_idx, h_emu):
+        """Force a fixed row height using the python-pptx public API."""
+        tbl.rows[row_idx].height = h_emu
+
+    def _make_tbl_slide(slide_title, headers, data_rows, page_num, total_pages):
+        """Add one slide containing a paginated table chunk with fixed row heights."""
+        from pptx.util import Pt as PPt
+        sl  = prs.slides.add_slide(blank_layout)
+        label = slide_title if total_pages == 1 else f"{slide_title}  ({page_num}/{total_pages})"
+
+        # Subtle background
+        bg = sl.background; bg.fill.solid()
+        bg.fill.fore_color.rgb = PptxRGB(0xF8, 0xFA, 0xFC)
+
+        # Left accent bar
+        sl.shapes.add_shape(1, Inches(0), Inches(0), Inches(0.07), Inches(7.5)).fill.solid()
+        sl.shapes[-1].fill.fore_color.rgb = PptxRGB(0x1E, 0x40, 0xAF)
+        sl.shapes[-1].line.fill.background()
+
+        # Title
+        tx = sl.shapes.add_textbox(Inches(0.3), Inches(0.1), Inches(12.73), Inches(0.7))
+        tf = tx.text_frame; tf.word_wrap = False
+        rn = tf.paragraphs[0].add_run()
+        rn.text = label; rn.font.bold = True; rn.font.size = Pt(16)
+        rn.font.color.rgb = PptxRGB(0x0F, 0x17, 0x2A)
+
+        # Divider
+        div = sl.shapes.add_shape(1, Inches(0.3), Inches(0.82), Inches(12.73), Inches(0.025))
+        div.fill.solid(); div.fill.fore_color.rgb = PptxRGB(0x1E, 0x40, 0xAF)
+        div.line.fill.background()
+
+        n_cols  = len(headers)
+        n_rows  = 1 + len(data_rows)
+        tbl_h   = HDR_H_EMU + ROW_H_EMU * len(data_rows)
+        tbl_shp = sl.shapes.add_table(n_rows, n_cols,
+                                       Inches(0.3), Inches(TBL_TOP_IN),
+                                       Inches(12.73), tbl_h)
+        tbl = tbl_shp.table
+
+        # Fix row heights explicitly so the table never overflows
+        _set_row_height(tbl, 0, HDR_H_EMU)
+        for i in range(1, n_rows):
+            _set_row_height(tbl, i, ROW_H_EMU)
+
+        # Column widths: category-based weights (hardcoded to prevent drift)
+        total_emu_w = int(12.73 * EMU)
+        def _col_weight(h):
+            hlen = len(re.sub(r'\*\*(.+?)\*\*', r'\1', h).strip())
+            if hlen <= 3:   return 1   # "#", "R", "A" etc — very narrow
+            if hlen <= 8:   return 3   # short labels
+            return 6                   # long labels get more space
+        if n_cols == 2:
+            # 2-col: narrow first col (e.g. "#" or "Ref"), wide second
+            col_ws = [int(total_emu_w * 0.28), int(total_emu_w * 0.72)]
+        elif n_cols <= 5:
+            _wts   = [_col_weight(h) for h in headers]
+            _tot   = sum(_wts)
+            col_ws = [int(total_emu_w * w / _tot) for w in _wts]
+        else:
+            # Wide tables (RACI etc): first col slightly wider, rest equal
+            first_w = int(total_emu_w * 0.22)
+            other_w = (total_emu_w - first_w) // max(n_cols - 1, 1)
+            col_ws  = [first_w] + [other_w] * (n_cols - 1)
+        col_ws[-1] = total_emu_w - sum(col_ws[:-1])  # fix rounding
+        for j in range(n_cols):
+            tbl.columns[j].width = col_ws[j]
+
+        # Header row
+        for j, h in enumerate(headers[:n_cols]):
+            cell = tbl.cell(0, j)
+            cell.fill.solid(); cell.fill.fore_color.rgb = PptxRGB(0x0F, 0x17, 0x2A)
+            tf2 = cell.text_frame; tf2.word_wrap = True
+            rn2 = tf2.paragraphs[0].add_run()
+            rn2.text = re.sub(r'\*\*(.+?)\*\*', r'\1', h)
+            rn2.font.bold = True; rn2.font.size = PPt(8)
+            rn2.font.color.rgb = PptxRGB(0xFF, 0xFF, 0xFF)
+
+        # Data rows
+        for i, row_cells in enumerate(data_rows):
+            is_sec = (len(row_cells) > 1 and
+                      all(c == '' for c in row_cells[1:]) and
+                      row_cells[0].startswith('**'))
+            bg = (PptxRGB(0xCB, 0xD5, 0xE1) if is_sec else
+                  (PptxRGB(0xF1, 0xF5, 0xF9) if i % 2 == 0 else PptxRGB(0xFF, 0xFF, 0xFF)))
+            for j in range(n_cols):
+                cell = tbl.cell(i + 1, j)
+                cell.fill.solid(); cell.fill.fore_color.rgb = bg
+                tf2 = cell.text_frame; tf2.word_wrap = True
+                txt = row_cells[j] if j < len(row_cells) else ''
+                txt = re.sub(r'\*\*(.+?)\*\*', r'\1', txt)
+                rn2 = tf2.paragraphs[0].add_run()
+                rn2.text = txt
+                rn2.font.size = PPt(8); rn2.font.bold = is_sec
+                rn2.font.color.rgb = PptxRGB(0x1E, 0x29, 0x3B)
+
+    def _render_pptx_table(title, tbl_lines):
+        """Parse markdown table and paginate across as many slides as needed."""
+        headers, rows = _parse_md_table(tbl_lines)
+        if not headers or not rows:
             return
-        slide = prs.slides.add_slide(blank_layout)
-        # Title box
-        tx = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12.3), Inches(0.9))
-        tf = tx.text_frame
-        tf.word_wrap = True
-        p = tf.paragraphs[0]
-        run = p.add_run()
-        run.text = current_title
-        run.font.bold = True
-        run.font.size = Pt(22)
-        run.font.color.rgb = PptxRGB(0x0f, 0x17, 0x2a)
-        # Divider line (thin rectangle)
-        slide.shapes.add_shape(1, Inches(0.5), Inches(1.1), Inches(12.3), Inches(0.03))
-        # Content box
-        cx = slide.shapes.add_textbox(Inches(0.5), Inches(1.25), Inches(12.3), Inches(5.8))
-        cf = cx.text_frame
-        cf.word_wrap = True
+        chunks = [rows[i:i + ROWS_PER_PAGE] for i in range(0, len(rows), ROWS_PER_PAGE)]
+        total  = len(chunks)
+        for pg, chunk in enumerate(chunks, start=1):
+            _make_tbl_slide(title, headers, chunk, pg, total)
+
+    def _make_text_slide(title, content_lines):
+        """Create a single polished text slide. Returns the slide object."""
+        from pptx.enum.text import MSO_AUTO_SIZE
+        sl = prs.slides.add_slide(blank_layout)
+
+        # Subtle light background
+        bg = sl.background; bg.fill.solid()
+        bg.fill.fore_color.rgb = PptxRGB(0xF8, 0xFA, 0xFC)
+
+        # Accent bar on left edge
+        sl.shapes.add_shape(1, Inches(0), Inches(0), Inches(0.07), Inches(7.5)).fill.solid()
+        sl.shapes[-1].fill.fore_color.rgb = PptxRGB(0x1E, 0x40, 0xAF)
+        sl.shapes[-1].line.fill.background()
+
+        # Title
+        tx = sl.shapes.add_textbox(Inches(0.5), Inches(0.28), Inches(12.3), Inches(0.75))
+        tf = tx.text_frame; tf.word_wrap = True
+        tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+        rn = tf.paragraphs[0].add_run()
+        rn.text = re.sub(r'\*\*(.+?)\*\*', r'\1', title)
+        rn.font.bold = True; rn.font.size = Pt(20)
+        rn.font.color.rgb = PptxRGB(0x0F, 0x17, 0x2A)
+
+        # Divider line
+        div = sl.shapes.add_shape(1, Inches(0.5), Inches(1.08), Inches(12.3), Inches(0.025))
+        div.fill.solid(); div.fill.fore_color.rgb = PptxRGB(0x1E, 0x40, 0xAF)
+        div.line.fill.background()
+
+        # Content
+        cx = sl.shapes.add_textbox(Inches(0.5), Inches(1.2), Inches(12.3), Inches(5.9))
+        cf = cx.text_frame; cf.word_wrap = True
+        cf.auto_size = MSO_AUTO_SIZE.NONE
         first = True
-        for line in current_content:
+        for line in content_lines:
             s = line.strip()
             if not s:
                 continue
-            if first:
-                para = cf.paragraphs[0]
-                first = False
+            para = cf.paragraphs[0] if first else cf.add_paragraph()
+            first = False
+            is_bullet = s.startswith('- ') or s.startswith('• ') or s.startswith('* ')
+            is_h3     = s.startswith('### ') or s.startswith('## ')
+            if is_bullet:
+                s = '• ' + re.sub(r'^[-•\*]\s+', '', s)
+            elif is_h3:
+                s = re.sub(r'^#+\s*', '', s)
+            # Strip HTML tags — <sup>[A1]</sup> → [A1], all others removed
+            s = re.sub(r'<sup>(.*?)</sup>', r'\1', s)
+            s = re.sub(r'<[^>]+>', '', s)
+            s = re.sub(r'\*\*(.+?)\*\*', r'\1', s)
+            rn2 = para.add_run()
+            rn2.text = s
+            if is_h3:
+                rn2.font.bold = True; rn2.font.size = Pt(13)
+                rn2.font.color.rgb = PptxRGB(0x1E, 0x40, 0xAF)
+                para.space_before = Pt(10)
+                para.space_after  = Pt(4)
+            elif is_bullet:
+                rn2.font.size = Pt(10)
+                rn2.font.color.rgb = PptxRGB(0x1E, 0x29, 0x3B)
+                para.space_before = Pt(5)
+                para.space_after  = Pt(5)
             else:
-                para = cf.add_paragraph()
-            # Bullet point
-            if s.startswith('- '):
-                s = '• ' + s[2:]
-            elif re.match(r'^\d+\.\s', s):
-                pass  # keep numbered
-            run2 = para.add_run()
-            run2.text = re.sub(r'\*\*(.+?)\*\*', r'\1', s)  # strip bold markers
-            run2.font.size = Pt(13)
-            run2.font.color.rgb = PptxRGB(0x33, 0x41, 0x55)
+                rn2.font.size = Pt(10)
+                rn2.font.color.rgb = PptxRGB(0x1E, 0x29, 0x3B)
+                para.space_before = Pt(3)
+                para.space_after  = Pt(3)
+            para.line_spacing = 1.15
+        return sl
+
+    def flush_slide():
+        if current_title is None:
+            return
+        # Skip if nothing to render (e.g., section header with no content, or after pagination)
+        if not any(l.strip() for l in current_content):
+            return
+
+        text_lines  = [l for l in current_content if not _is_table_line(l.strip()) and l.strip()]
+        table_block = [l for l in current_content if _is_table_line(l.strip())]
+
+        if table_block:
+            if text_lines:
+                _make_text_slide(current_title, text_lines)
+            _render_pptx_table(current_title, table_block)
+        else:
+            _make_text_slide(current_title, current_content)
+
+    LINES_PER_SLIDE = 16  # max content lines per slide before paginating
 
     for line in lines:
         s = line.strip()
         if s.startswith('# ') and not s.startswith('## '):
-            # Cover slide
-            slide = prs.slides.add_slide(title_layout)
-            slide.shapes.title.text = s[2:]
-            if slide.placeholders[1]:
-                slide.placeholders[1].text = f"Process Optimisation Business Case\n{date.today().strftime('%B %Y')}"
-        elif s.startswith('## '):
+            # Cover already added above from process_name — skip any H1 in markdown
+            continue
+        elif s.startswith('## ') or s.startswith('### '):
             flush_slide()
-            current_title   = s[3:]
+            current_title   = re.sub(r'^#+\s*', '', s)
             current_content = []
         elif s == '---':
             continue
         else:
             if current_title is not None:
                 current_content.append(s)
+                # Paginate when content grows too long
+                if len([l for l in current_content if l.strip()]) >= LINES_PER_SLIDE:
+                    _make_text_slide(current_title, current_content)
+                    current_content = []
+                    current_title   = current_title  # keep same title for continuation
 
     flush_slide()
 
@@ -3113,18 +3596,12 @@ FORMAT RULES — follow exactly:
 - Use markdown with ## for section headings, ### for sub-headings, **bold** for labels
 - Do NOT use strikethrough text (~~text~~) under any circumstances
 - Do NOT use ALL CAPS text anywhere in the document. Use normal sentence case or title case only.
-- Do NOT include a title or preamble — start directly with the Legend section
+- Do NOT include a title or preamble — start directly with the first section
 - All financial figures must be in US dollars ($)
 - For every metric cited, add a superscript reference marker inline: value<sup>[A1]</sup>
-- At the end, include a "## Sources and Assumptions" section listing every [A1], [A2]... marker with: what it is, how it was derived, what data/source was used, and any caveats
+- The Legend section MUST appear as the very last section in the document, after Sources and Assumptions
 
 STRUCTURE — include only the selected dimensions:
-0. ## Legend — ALWAYS include this as the very first section. Explain every status indicator used in the document:
-   **RED** — Significant problems identified. Urgent attention and remediation required. Process is materially inefficient, high-risk, or broken in this area.
-   **AMBER** — Notable issues present. Improvement is recommended. Process functions but has clear gaps, inefficiencies, or risks that should be addressed.
-   **GREEN** — Performing well. Minor improvements may be beneficial but no urgent action required.
-   **HIGH / MEDIUM / LOW** (where used) — Indicates the priority or severity of an improvement opportunity: High = address immediately, Medium = plan within current cycle, Low = monitor or address when capacity allows.
-   Include a note that all ratings are based on evidence from the uploaded source documents and consultant judgement where document data is limited.
 1. ## Executive Health Summary — overall RAG rating (Red / Amber / Green), 3–5 sentence narrative
 2. ## Scorecard by Dimension — for each selected dimension:
    ### [Dimension Name] — Rating: [RED / AMBER / GREEN]
@@ -3133,6 +3610,12 @@ STRUCTURE — include only the selected dimensions:
    - Recommended improvement action
 3. ## Priority Improvement Opportunities — top 3–5 ranked opportunities with estimated impact and priority (HIGH / MEDIUM / LOW)
 4. ## Sources and Assumptions — numbered list [A1], [A2]... with derivation detail
+5. ## Legend — ALWAYS include this as the very last section. Do NOT use bullet points or list markers for legend items — write each as a plain paragraph line:
+**RED** — Significant problems identified. Urgent attention and remediation required. Process is materially inefficient, high-risk, or broken in this area.
+**AMBER** — Notable issues present. Improvement is recommended. Process functions but has clear gaps, inefficiencies, or risks that should be addressed.
+**GREEN** — Performing well. Minor improvements may be beneficial but no urgent action required.
+**High / Medium / Low** (where used) — Indicates the priority or severity of an improvement opportunity: High = address immediately, Medium = plan within current cycle, Low = monitor or address when capacity allows.
+All ratings are based on evidence from the uploaded source documents and consultant judgement where document data is limited.
 
 RATING CRITERIA:
 - GREEN: performing well, minor improvements only
@@ -3215,6 +3698,7 @@ async def generate_scorecard_endpoint(
                                  include_glossary=include_glossary.lower() == 'true')
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Scorecard generation failed: {e}")
+    md = _move_legend_to_end(_strip_blockquotes(md))
     return JSONResponse({"status": "success", "sc_markdown": md})
 
 
@@ -3246,28 +3730,54 @@ async def export_scorecard(
 RACI_PROMPT = """You are a senior business analyst and process governance expert. Analyse the uploaded process documentation and produce a professional RACI Matrix document.
 
 FORMAT RULES — follow exactly:
-- Use markdown with ## for section headings, **bold** for labels
+- Use markdown with ## for section headings
 - Do NOT use strikethrough text (~~text~~) under any circumstances
 - Do NOT use ALL CAPS text anywhere in the document. Use normal sentence case or title case only.
 - Do NOT include a title or preamble — start directly with the first section
-- All financial figures must be in US dollars ($)
-- For every metric or assumption cited, add a superscript reference marker: value<sup>[A1]</sup>
-- At the end, include a "## Sources and Assumptions" section listing every [A1], [A2]... marker
+- ALL sections must be formatted as markdown tables — no prose paragraphs, no bullet lists
+- Do NOT output any unstructured text blocks anywhere in the document
 
-RACI MATRIX FORMAT — render as a markdown table:
+RACI MATRIX FORMAT:
 | Activity | Role 1 | Role 2 | Role 3 | ... |
 |---|---|---|---|---|
+| **Section Name** | | | | |
 | Activity name | R | A | C | ... |
 
 Use only: R (Responsible), A (Accountable), C (Consulted), I (Informed). Each row must have exactly one A.
+Group activities under bold section-header rows (all non-Activity cells empty).
+
+ROLE GLOSSARY FORMAT — render as a markdown table:
+| Role | Description | Typical Job Titles |
+|---|---|---|
+| Role name | One-sentence description of responsibilities | Title 1, Title 2 |
+
+KEY FINDINGS FORMAT — render as a markdown table:
+| Finding | Affected Role(s) | Recommended Action |
+|---|---|---|
+| Issue description | Role name | Action to take |
+
+RECOMMENDATIONS FORMAT — render as a markdown table:
+| # | Recommendation | Priority | Rationale |
+|---|---|---|---|
+| 1 | Action to take | High / Medium / Low | Why this matters |
+
+SOURCES AND ASSUMPTIONS FORMAT — render as a markdown table:
+| Ref | Assumption / Source | Basis |
+|---|---|---|
+| A1 | Statement of assumption | Where it came from |
+
+ACRONYM DICTIONARY FORMAT — render as a markdown table:
+| Term / Acronym | Definition |
+|---|---|
+| TERM | Plain-English definition |
 
 STRUCTURE (include only selected sections):
-- ## RACI Matrix — the full table
-- ## Role Glossary — each role: name, description, typical job titles
-- ## Key Findings & Accountability Gaps — issues found (duplicate A, missing A, overloaded roles)
-- ## Recommendations — 3–5 prioritised actions to improve accountability clarity
-- ## Sources and Assumptions — numbered [A1], [A2]... with derivation detail
-- ## Acronym & Term Dictionary — if "glossary" is in the sections list, include an alphabetical dictionary of all acronyms, abbreviations, and industry-specific terms used in the document. Format each entry as **TERM / ACRONYM:** plain-English definition.
+- ## RACI Matrix
+- ## Role Glossary
+- ## Key Findings & Accountability Gaps
+- ## Recommendations
+- ## Sources and Assumptions
+- ## Acronym & Term Dictionary — only if "glossary" is in the sections list
 
 GRANULARITY GUIDANCE:
 - high: 5–12 major activities (phase-level)
@@ -3494,7 +4004,25 @@ async def export_cia(
 
 
 # ── Serve frontend static files (must come LAST — after all API routes) ───────
-import os as _os
-_PUBLIC = _os.path.join(_os.path.dirname(__file__), "..", "public")
-if _os.path.isdir(_PUBLIC):
-    app.mount("/", StaticFiles(directory=_PUBLIC, html=True), name="frontend")
+from pathlib import Path as _Path
+from fastapi.responses import FileResponse as _FileResponse
+_PUBLIC = (_Path(__file__).resolve().parent.parent / "public").resolve()
+
+@app.get("/{filename:path}")
+async def serve_frontend(filename: str):
+    """Serve any file from the public/ folder so the frontend works on localhost."""
+    if not filename or filename == "/":
+        filename = "index.html"
+    target = (_PUBLIC / filename).resolve()
+    # Security: ensure resolved path is inside _PUBLIC (use Path.is_relative_to for Windows safety)
+    try:
+        target.relative_to(_PUBLIC)
+    except ValueError:
+        raise HTTPException(status_code=403)
+    if target.is_file():
+        return _FileResponse(str(target))
+    # Fall back to index.html for SPA-style navigation
+    index = _PUBLIC / "index.html"
+    if index.is_file():
+        return _FileResponse(str(index))
+    raise HTTPException(status_code=404)
