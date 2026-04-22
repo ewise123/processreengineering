@@ -119,20 +119,6 @@
                 class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400" />
             </div>
 
-            <!-- Variations -->
-            <div class="mb-3">
-              <label class="block text-xs font-semibold text-slate-600 mb-1.5">Output Variations</label>
-              <div class="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
-                <button type="button" id="var-btn-1" onclick="setVariations(1)"
-                  class="flex-1 px-3 py-2 bg-slate-900 text-white transition">1 — Standard</button>
-                <button type="button" id="var-btn-2" onclick="setVariations(2)"
-                  class="flex-1 px-3 py-2 bg-white text-slate-600 hover:bg-slate-50 border-l border-slate-200 transition">2 — + Concise</button>
-                <button type="button" id="var-btn-3" onclick="setVariations(3)"
-                  class="flex-1 px-3 py-2 bg-white text-slate-600 hover:bg-slate-50 border-l border-slate-200 transition">3 — + Executive</button>
-              </div>
-              <p class="text-xs text-slate-400 mt-1.5">Generate multiple versions and toggle between them to pick your preferred output.</p>
-            </div>
-
             <!-- Sections to Include -->
             <div>
               <div class="flex items-center justify-between mb-2">
@@ -231,19 +217,11 @@
     const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
       ? 'http://localhost:8000' : 'https://processreengineering.onrender.com';
     let selectedFiles   = [];
-    let sopVariations   = [];   // [{label, styleHint, markdown}, ...]
+    let sopVariations   = [];
     let activeVarIdx    = 0;
-    let numVariations   = 1;
     let currentSopTitle = null;
 
-    const VARIATION_DEFS = [
-      { label: 'Standard',  styleHint: '' },
-      { label: 'Concise',   styleHint: 'Write this SOP in a concise, action-oriented style. Use brief bullet points and keep each section short. Focus on what practitioners need to execute the process efficiently.' },
-      { label: 'Executive', styleHint: 'Write this SOP as an executive-level document for senior management. Use strategic language, focus on governance and oversight, and keep procedural detail high-level.' },
-    ];
-
     function setVariations(n) {
-      numVariations = n;
       [1,2,3].forEach(i => {
         const btn = document.getElementById(`var-btn-${i}`);
         if (!btn) return;
@@ -422,73 +400,63 @@
       document.getElementById('error-bar').classList.add('hidden');
     }
 
-    // ── Generate SOP (multi-variation) ────────────────────────────────────────
+    // ── Generate SOP ─────────────────────────────────────────────────────────
     async function generateSop() {
       if (!selectedFiles.length) return;
 
       const sopTitle = document.getElementById('sop-title').value.trim();
       const sections = getSelectedSections();
-      const varDefs  = VARIATION_DEFS.slice(0, numVariations);
 
       hideError();
       document.getElementById('generate-btn').disabled = true;
       currentSopTitle = sopTitle;
-      sopVariations   = varDefs.map(v => ({ label: v.label, styleHint: v.styleHint, markdown: null }));
+      sopVariations   = [{ label: 'Standard', styleHint: '', markdown: null }];
       activeVarIdx    = 0;
 
-      // Build output skeleton immediately
       buildOutputPanels();
       document.getElementById('form-section').classList.add('hidden');
       document.getElementById('output-section').classList.remove('hidden');
       window.scrollTo({ top: 0, behavior: 'smooth' });
 
-      for (let i = 0; i < varDefs.length; i++) {
-        const v       = varDefs[i];
-        const panelEl = document.getElementById(`sop-panel-${i}`);
-        panelEl.innerHTML = `<div class="bg-white border border-slate-200 rounded-xl shadow-sm px-10 py-10">
-          <p class="text-slate-400 text-sm animate-pulse">Writing ${escHtml(v.label)} version…</p></div>`;
+      const panelEl = document.getElementById('sop-panel-0');
+      panelEl.innerHTML = `<div class="bg-white border border-slate-200 rounded-xl shadow-sm px-10 py-10">
+        <p class="text-slate-400 text-sm animate-pulse">Writing your SOP…</p></div>`;
 
-        showStatus(
-          `Generating option ${i + 1} of ${varDefs.length}: ${v.label}`,
-          'Claude is writing your Standard Operating Procedure'
-        );
+      showStatus('Generating SOP…', 'Claude is writing your Standard Operating Procedure');
 
-        const formData = new FormData();
-        selectedFiles.forEach(f => formData.append('files', f));
-        formData.append('sop_title',     sopTitle);
-        formData.append('sections_json', JSON.stringify(sections));
-        formData.append('style_hint',    v.styleHint);
+      const formData = new FormData();
+      selectedFiles.forEach(f => formData.append('files', f));
+      formData.append('sop_title',     sopTitle);
+      formData.append('sections_json', JSON.stringify(sections));
+      formData.append('style_hint',    '');
 
-        try {
-          const response = await fetch(`${API_BASE}/api/generate-sop`, { method: 'POST', body: formData });
-          if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(err.detail || 'Generation failed');
-          }
-
-          const outputEl = panelEl.querySelector('.sop-body') || (() => {
-            panelEl.innerHTML = `<div class="bg-white border border-slate-200 rounded-xl shadow-sm px-10 py-10">
-              <div class="sop-body max-w-3xl mx-auto"></div></div>`;
-            return panelEl.querySelector('.sop-body');
-          })();
-
-          const reader  = response.body.getReader();
-          const decoder = new TextDecoder();
-          let accumulated = '';
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            accumulated += decoder.decode(value, { stream: true });
-          }
-          accumulated = accumulated.replace(/~~(.+?)~~/gs, '$1');
-          sopVariations[i].markdown = accumulated;
-          outputEl.innerHTML = marked.parse(preprocessSopMarkdown(accumulated));
-
-        } catch (err) {
-          sopVariations[i].markdown = null;
-          panelEl.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl px-5 py-4">
-            <p class="text-sm text-red-700">Failed to generate ${escHtml(v.label)} version: ${escHtml(err.message)}</p></div>`;
+      try {
+        const response = await fetch(`${API_BASE}/api/generate-sop`, { method: 'POST', body: formData });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.detail || 'Generation failed');
         }
+
+        panelEl.innerHTML = `<div class="bg-white border border-slate-200 rounded-xl shadow-sm px-10 py-10">
+          <div class="sop-body max-w-3xl mx-auto"></div></div>`;
+        const outputEl = panelEl.querySelector('.sop-body');
+
+        const reader  = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          accumulated += decoder.decode(value, { stream: true });
+        }
+        accumulated = accumulated.replace(/~~(.+?)~~/gs, '$1');
+        sopVariations[0].markdown = accumulated;
+        outputEl.innerHTML = marked.parse(preprocessSopMarkdown(accumulated));
+
+      } catch (err) {
+        sopVariations[0].markdown = null;
+        panelEl.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl px-5 py-4">
+          <p class="text-sm text-red-700">Failed to generate SOP: ${escHtml(err.message)}</p></div>`;
       }
 
       hideStatus();
@@ -544,7 +512,6 @@
       document.getElementById('sop-tabs').innerHTML   = '';
       document.getElementById('sop-panels').innerHTML = '';
       applyPreset('standard');
-      setVariations(1);
       updateGenerateBtn();
       hideError();
       hideStatus();
