@@ -2391,7 +2391,7 @@ def _generate_implementation_plan(api_key: str, document_text: str,
     impl_client = anthropic.Anthropic(api_key=api_key)
     msg = impl_client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=8000,
+        max_tokens=16000,
         system=system_prompt,
         messages=[{"role": "user", "content": user_msg}]
     )
