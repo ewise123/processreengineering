@@ -841,8 +841,9 @@
       try {
         const res = await fetch(`${API_BASE}/api/generate-implementation-plan`, { method: 'POST', body: formData });
         if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || 'Failed'); }
-        const data = await res.json();
-        implPlanMarkdown = data.markdown || '';
+        const raw = await res.text();
+        try { const d = JSON.parse(raw); implPlanMarkdown = d.markdown || raw; }
+        catch { implPlanMarkdown = raw; }
         outputEl.innerHTML = marked.parse(implPlanMarkdown);
       } catch (err) {
         outputEl.innerHTML = `<p class="text-red-500 text-sm">Failed: ${escHtml(err.message)}</p>`;
