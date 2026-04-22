@@ -2319,6 +2319,7 @@ Rules:
 - Do NOT use markdown tables — use bullet lists or numbered lists instead
 - Do NOT add a title or preamble — start directly with the first ## section heading
 - All financial figures, costs, savings, and estimates MUST be expressed in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
+- Use American English spelling throughout (e.g., "analyze" not "analyse", "optimize" not "optimise", "standardize" not "standardise", "color" not "colour", "organization" not "organisation").
 - ASSUMPTION REFERENCES: Every quantitative figure (timelines, durations, cost estimates, FTE counts, percentages, effort hours, etc.) MUST be followed immediately by an inline superscript reference marker: <sup>[A1]</sup>, <sup>[A2]</sup>, etc. Number sequentially across the document.
 - CRITICAL: Do NOT generate a Sources and Assumptions section. Do NOT add any section not listed above. The Sources and Assumptions section is produced separately and must not appear here.
 - Return only the implementation plan document"""
@@ -2371,6 +2372,8 @@ Format rules:
 - Start your response directly with the first ## heading
 - Do NOT use markdown tables
 - Do NOT use ALL CAPS
+- All financial figures, costs, and estimates MUST be expressed in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
+- Use American English spelling throughout (e.g., "analyze" not "analyse", "optimize" not "optimise", "standardize" not "standardise", "color" not "colour", "organization" not "organisation").
 
 {sections_block}"""
 
@@ -2581,6 +2584,7 @@ Formatting rules:
 - Do NOT use markdown tables
 - NEVER write text in ALL CAPS. Every single word in the document must be in normal mixed case (e.g. "Trigger:", not "TRIGGER:"). This applies to labels, headings, content, and every other part of the document without exception. Use **bold** for emphasis only.
 - All financial figures, costs, and estimates MUST be expressed in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
+- Use American English spelling throughout (e.g., "analyze" not "analyse", "optimize" not "optimise", "standardize" not "standardise", "color" not "colour", "organization" not "organisation").
 - ASSUMPTION REFERENCES: Every quantitative figure in the document (cycle times, durations, dollar amounts, FTE counts, error rates, frequencies, etc.) MUST be followed immediately by an inline superscript reference marker in the format <sup>[A1]</sup>, <sup>[A2]</sup>, <sup>[A3]</sup> etc. These markers must correspond exactly to numbered **Assumption [A1]:** entries in the Sources section. Number assumptions sequentially across the entire document.
 - Do NOT use strikethrough text (~~text~~). Never cross out, mark out, or use strikethrough formatting anywhere in the document.
 - Do NOT use ALL CAPS text anywhere in the document. Use normal sentence case or title case only.
@@ -3316,6 +3320,7 @@ Formatting rules:
 - Use bullet lists (- ) for non-sequential items
 - Use **Bold:** format for key-value pairs and financial figures
 - All financial figures, costs, savings, ROI, and estimates MUST be expressed in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
+- Use American English spelling throughout (e.g., "analyze" not "analyse", "optimize" not "optimise", "standardize" not "standardise", "color" not "colour", "organization" not "organisation").
 - ASSUMPTION REFERENCES: Every quantitative figure in the document (dollar amounts, cost savings, ROI, FTE counts, cycle times, processing times, error rates, payback periods, percentages, etc.) MUST be followed immediately by an inline superscript reference marker in the format <sup>[A1]</sup>, <sup>[A2]</sup>, <sup>[A3]</sup> etc. These markers must correspond exactly to numbered **Assumption [A1]:** entries in the Sources section. Number assumptions sequentially across the entire document.
 - Do NOT use strikethrough text (~~text~~). Never cross out, mark out, or use strikethrough formatting anywhere in the document.
 - Do NOT use ALL CAPS text anywhere in the document. Use normal sentence case or title case only.
@@ -3730,7 +3735,8 @@ FORMAT RULES — follow exactly:
 - Do NOT use strikethrough text (~~text~~) under any circumstances
 - Do NOT use ALL CAPS text anywhere in the document. Use normal sentence case or title case only.
 - Do NOT include a title or preamble — start directly with the first section
-- All financial figures must be in US dollars ($)
+- All financial figures must be in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
+- Use American English spelling throughout (e.g., "analyze" not "analyse", "optimize" not "optimise", "standardize" not "standardise", "color" not "colour", "organization" not "organisation").
 - For every metric cited, add a superscript reference marker inline: value<sup>[A1]</sup>
 - The Legend section MUST appear as the very last section in the document, after Sources and Assumptions
 
@@ -3867,6 +3873,8 @@ FORMAT RULES — follow exactly:
 - Do NOT use strikethrough text (~~text~~) under any circumstances
 - Do NOT use ALL CAPS text anywhere in the document. Use normal sentence case or title case only.
 - Do NOT include a title or preamble — start directly with the first section
+- All financial figures must be in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
+- Use American English spelling throughout (e.g., "analyze" not "analyse", "optimize" not "optimise", "standardize" not "standardise", "color" not "colour", "organization" not "organisation").
 - ALL sections must be formatted as markdown tables — no prose paragraphs, no bullet lists
 - Do NOT output any unstructured text blocks anywhere in the document
 
@@ -4011,7 +4019,8 @@ FORMAT RULES — follow exactly:
 - Do NOT use strikethrough text (~~text~~) under any circumstances
 - Do NOT use ALL CAPS text anywhere in the document. Use normal sentence case or title case only.
 - Do NOT include a title or preamble — start directly with the first section
-- All financial figures must be in US dollars ($)
+- All financial figures must be in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
+- Use American English spelling throughout (e.g., "analyze" not "analyse", "optimize" not "optimise", "standardize" not "standardise", "color" not "colour", "organization" not "organisation").
 - For every metric or assumption cited, add a superscript reference marker: value<sup>[A1]</sup>
 - At the end, include a "## Sources and Assumptions" section listing every [A1], [A2]... marker with derivation, source, and caveats
 
