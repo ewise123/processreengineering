@@ -2366,36 +2366,68 @@ def _generate_implementation_plan(api_key: str, document_text: str,
                                     selected_parameters: list = None) -> str:
     if not selected_sections:
         selected_sections = DEFAULT_IMPL_PLAN_SECTIONS
-    system_prompt = _build_impl_plan_prompt(selected_sections)
-    params_block = ""
-    if selected_parameters:
-        param_lines = []
-        for pid in selected_parameters:
-            if pid in IMPL_PARAMETERS:
-                label, desc = IMPL_PARAMETERS[pid]
-                param_lines.append(f"- **{label}:** {desc}")
-        if param_lines:
-            params_block = (
-                "\n\nThe plan must specifically address the following implementation parameters "
-                "throughout the content — weave them into every relevant section:\n"
-                + "\n".join(param_lines)
-            )
-    user_msg = (
-        f"Generate an implementation plan to transition from the current state to the future state "
-        f"for the following process:\n\n"
-        f"- Current State Process: {current_process}\n"
-        f"- Future State Process: {future_process}\n\n"
-        f"Source documents:\n\n{document_text[:12000]}"
-        f"{params_block}"
-    )
+
+    # Sections always generated in a dedicated second call so they are never crowded out
+    DEDICATED_SECTIONS = {'value_add', 'sources'}
+    main_sections = [s for s in selected_sections if s not in DEDICATED_SECTIONS]
+    tail_sections = [s for s in selected_sections if s in DEDICATED_SECTIONS]
+
     impl_client = anthropic.Anthropic(api_key=api_key)
-    msg = impl_client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=16000,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_msg}]
-    )
-    return msg.content[0].text
+    parts = []
+
+    # ── Call 1: main body sections ────────────────────────────────────────────
+    if main_sections:
+        system_prompt = _build_impl_plan_prompt(main_sections)
+        params_block = ""
+        if selected_parameters:
+            param_lines = []
+            for pid in selected_parameters:
+                if pid in IMPL_PARAMETERS:
+                    label, desc = IMPL_PARAMETERS[pid]
+                    param_lines.append(f"- **{label}:** {desc}")
+            if param_lines:
+                params_block = (
+                    "\n\nThe plan must specifically address the following implementation parameters "
+                    "throughout the content — weave them into every relevant section:\n"
+                    + "\n".join(param_lines)
+                )
+        user_msg = (
+            f"Generate an implementation plan to transition from the current state to the future state "
+            f"for the following process:\n\n"
+            f"- Current State Process: {current_process}\n"
+            f"- Future State Process: {future_process}\n\n"
+            f"Source documents:\n\n{document_text[:12000]}"
+            f"{params_block}"
+        )
+        msg = impl_client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=8000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_msg}]
+        )
+        parts.append(msg.content[0].text.strip())
+
+    # ── Call 2: value_add and/or sources (always in their own call) ───────────
+    if tail_sections:
+        tail_prompt = _build_impl_plan_prompt(tail_sections)
+        tail_user = (
+            f"You have just produced the main body of an implementation plan for the following process:\n\n"
+            f"- Current State Process: {current_process}\n"
+            f"- Future State Process: {future_process}\n\n"
+            f"Source documents:\n\n{document_text[:12000]}\n\n"
+            f"Main plan produced so far:\n\n{parts[0] if parts else ''}\n\n"
+            f"Now generate ONLY the remaining sections listed below. "
+            f"Do not repeat any content already written. Start directly with the first ## heading."
+        )
+        msg2 = impl_client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=8000,
+            system=tail_prompt,
+            messages=[{"role": "user", "content": tail_user}]
+        )
+        parts.append(msg2.content[0].text.strip())
+
+    return "\n\n".join(parts)
 
 
 @app.post("/api/generate-implementation-plan")
