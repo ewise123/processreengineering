@@ -2287,6 +2287,17 @@ Rules for this section:
 - Do not repeat the same point in different words
 - Write in a concise, polished consulting tone as if preparing client-facing transformation material
 - Express value in terms of: cycle time reduction, reduced rework, fewer handoffs, improved standardisation, better control environment, improved data quality, higher operational efficiency, lower cost to serve, reduced risk / compliance exposure, improved employee experience, improved customer experience, scalability / readiness for automation or AI"""),
+    ("sources",                "Sources and Assumptions",
+     "This section must cover two things:\n"
+     "1. Source documents — list all documents, references, policies, and data files used to produce this implementation plan. "
+     "For each source include the document name and, where identifiable, its version, date, or owning team. "
+     "Use **Source:** description format for each entry.\n"
+     "2. Metric assumptions — for every quantitative figure cited in this document (timelines, durations, cost estimates, "
+     "FTE counts, percentages, effort hours, etc.), list a corresponding numbered assumption entry "
+     "using the EXACT marker that appears inline in the document body (e.g. **Assumption [A1]:** description, "
+     "**Assumption [A2]:** description). For each entry state: what the figure is, where it came from, "
+     "the basis or benchmark used, and any caveats. Every inline [Ax] marker in the document MUST have a "
+     "matching entry here. Do not omit any."),
 ]
 
 IMPL_PLAN_SECTIONS_MAP = {sid: (title, desc) for sid, title, desc in IMPL_PLAN_SECTIONS}
@@ -2308,6 +2319,7 @@ Rules:
 - Do NOT use markdown tables — use bullet lists or numbered lists instead
 - Do NOT add a title or preamble — start directly with the first ## section heading
 - All financial figures, costs, savings, and estimates MUST be expressed in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
+- ASSUMPTION REFERENCES: Every quantitative figure in the document (timelines, durations, cost estimates, FTE counts, percentages, effort hours, etc.) MUST be followed immediately by an inline superscript reference marker in the format <sup>[A1]</sup>, <sup>[A2]</sup>, <sup>[A3]</sup> etc. These markers must correspond exactly to numbered **Assumption [A1]:** entries in the Sources and Assumptions section. Number assumptions sequentially across the entire document.
 - Return only the implementation plan document"""
 
 
@@ -2348,10 +2360,10 @@ IMPL_PARAMETERS = {
 }
 
 
-async def _stream_implementation_plan(api_key: str, document_text: str,
-                                       current_process: str, future_process: str,
-                                       selected_sections: list = None,
-                                       selected_parameters: list = None):
+def _generate_implementation_plan(api_key: str, document_text: str,
+                                    current_process: str, future_process: str,
+                                    selected_sections: list = None,
+                                    selected_parameters: list = None) -> str:
     if not selected_sections:
         selected_sections = DEFAULT_IMPL_PLAN_SECTIONS
     system_prompt = _build_impl_plan_prompt(selected_sections)
@@ -2376,15 +2388,14 @@ async def _stream_implementation_plan(api_key: str, document_text: str,
         f"Source documents:\n\n{document_text[:12000]}"
         f"{params_block}"
     )
-    async_client = anthropic.AsyncAnthropic(api_key=api_key)
-    async with async_client.messages.stream(
+    impl_client = anthropic.Anthropic(api_key=api_key)
+    msg = impl_client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=8000,
         system=system_prompt,
         messages=[{"role": "user", "content": user_msg}]
-    ) as stream:
-        async for text in stream.text_stream:
-            yield text
+    )
+    return msg.content[0].text
 
 
 @app.post("/api/generate-implementation-plan")
@@ -2403,14 +2414,15 @@ async def generate_implementation_plan(
     selected_parameters = json.loads(parameters_json) if parameters_json.strip() else []
     if not selected_sections:
         selected_sections = DEFAULT_IMPL_PLAN_SECTIONS
-    from fastapi.responses import StreamingResponse as _SR
-    return _SR(
-        _stream_implementation_plan(
-            api_key, document_text, current_process, future_process,
-            selected_sections, selected_parameters
-        ),
-        media_type="text/plain; charset=utf-8",
+    if 'sources' not in selected_sections:
+        selected_sections = selected_sections + ['sources']
+    import asyncio
+    markdown = await asyncio.to_thread(
+        _generate_implementation_plan,
+        api_key, document_text, current_process, future_process,
+        selected_sections, selected_parameters
     )
+    return {"markdown": markdown}
 
 
 @app.post("/api/export")
