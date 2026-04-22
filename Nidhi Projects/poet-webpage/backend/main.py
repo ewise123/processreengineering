@@ -2461,7 +2461,31 @@ def _generate_implementation_plan(api_key: str, document_text: str,
             import traceback
             print(f"[IMPL PLAN] Call 2 failed: {e}\n{traceback.format_exc()}")
 
-    return "\n\n".join(parts)
+    combined = "\n\n".join(parts)
+
+    # Always move Sources and Assumptions to the very end
+    combined = _impl_sources_to_end(combined)
+    return combined
+
+
+def _impl_sources_to_end(md: str) -> str:
+    """Extract every ## Sources and Assumptions block and append a single merged one at the end."""
+    import re
+    # Split on any ## heading
+    sections = re.split(r'(?=^## )', md, flags=re.MULTILINE)
+    sources_blocks = []
+    other_blocks = []
+    for block in sections:
+        if re.match(r'^## Sources and Assumptions', block.strip(), re.IGNORECASE):
+            sources_blocks.append(block.strip())
+        else:
+            other_blocks.append(block)
+    if not sources_blocks:
+        return md
+    # Use the last (most complete) sources block; discard duplicates
+    result = "\n\n".join(b for b in other_blocks if b.strip())
+    result = result.rstrip() + "\n\n" + sources_blocks[-1]
+    return result
 
 
 @app.post("/api/generate-implementation-plan")
