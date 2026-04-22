@@ -2319,7 +2319,8 @@ Rules:
 - Do NOT use markdown tables — use bullet lists or numbered lists instead
 - Do NOT add a title or preamble — start directly with the first ## section heading
 - All financial figures, costs, savings, and estimates MUST be expressed in US Dollars (USD, $). Never use GBP, £, EUR, or any other currency.
-- ASSUMPTION REFERENCES: Every quantitative figure in the document (timelines, durations, cost estimates, FTE counts, percentages, effort hours, etc.) MUST be followed immediately by an inline superscript reference marker in the format <sup>[A1]</sup>, <sup>[A2]</sup>, <sup>[A3]</sup> etc. These markers must correspond exactly to numbered **Assumption [A1]:** entries in the Sources and Assumptions section. Number assumptions sequentially across the entire document.
+- ASSUMPTION REFERENCES: Every quantitative figure (timelines, durations, cost estimates, FTE counts, percentages, effort hours, etc.) MUST be followed immediately by an inline superscript reference marker: <sup>[A1]</sup>, <sup>[A2]</sup>, etc. Number sequentially across the document.
+- CRITICAL: Do NOT generate a Sources and Assumptions section. Do NOT add any section not listed above. The Sources and Assumptions section is produced separately and must not appear here.
 - Return only the implementation plan document"""
 
 
@@ -2451,7 +2452,9 @@ def _generate_implementation_plan(api_key: str, document_text: str,
                 system=tail_sys,
                 messages=[{"role": "user", "content": tail_user}]
             )
+            print(f"[IMPL PLAN] Call 2 stop_reason={msg2.stop_reason} content_blocks={len(msg2.content)}")
             tail_text = msg2.content[0].text.strip() if msg2.content else ""
+            print(f"[IMPL PLAN] Call 2 tail_text length={len(tail_text)} preview={repr(tail_text[:200])}")
             if tail_text:
                 parts.append(tail_text)
         except Exception as e:
@@ -2479,12 +2482,14 @@ async def generate_implementation_plan(
         selected_sections = DEFAULT_IMPL_PLAN_SECTIONS
     if 'sources' not in selected_sections:
         selected_sections = selected_sections + ['sources']
+    print(f"[ENDPOINT] sections received: {selected_sections}")
     import asyncio
     markdown = await asyncio.to_thread(
         _generate_implementation_plan,
         api_key, document_text, current_process, future_process,
         selected_sections, selected_parameters
     )
+    print(f"[ENDPOINT] markdown total length: {len(markdown)}, ends with: {repr(markdown[-100:])}")
     return {"markdown": markdown}
 
 
