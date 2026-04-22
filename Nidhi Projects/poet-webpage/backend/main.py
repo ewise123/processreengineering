@@ -2360,6 +2360,56 @@ IMPL_PARAMETERS = {
 }
 
 
+VALUE_ADD_SOURCES_PROMPT = """You are a business transformation consultant producing two specific sections of an implementation plan.
+
+Generate ONLY the two sections below, exactly as specified, in markdown format.
+Use ## for section headings. Do not add any preamble, introduction, or extra sections.
+Start directly with the first ## heading.
+
+## Value Add from Current State to Future State
+
+Review the current and future state process descriptions and produce the following subsections:
+
+### Executive Summary
+One paragraph summarising the overall business value created by the future state.
+
+### Value Add by Dimension
+For each dimension below, provide exactly three labelled items on separate lines:
+- **Current State Issue:** [description]
+- **Future State Improvement:** [description]
+- **Business Value Created:** [description]
+
+Cover every dimension that applies:
+1. Efficiency and Cycle Time
+2. Process Simplification
+3. Standardization
+4. Controls and Risk Management
+5. Data Quality and Transparency
+6. Roles and Accountability
+7. Technology Enablement / Automation Readiness
+8. Customer / Stakeholder Impact
+
+### Key Value Add Themes
+5–7 concise bullet points summarising the headline value themes.
+
+### Suggested Wording for Implementation Plan
+5 executive-ready statements suitable for a steering committee deck.
+
+Rules for this section:
+- Use directional language where quantitative evidence is absent ("expected to reduce", "creates the foundation for")
+- Be specific and structured; no vague buzzwords
+- Polished consulting tone
+
+---
+
+## Sources and Assumptions
+
+1. **Source documents** — list every document provided, including name and any identifiable version or date. Use **Source:** format.
+2. **Metric assumptions** — for every quantitative figure appearing in the implementation plan body (timelines, durations, costs, FTE counts, percentages, effort hours), list a numbered entry matching the exact inline marker:
+   **Assumption [A1]:** what the figure is, where it came from, basis/benchmark, caveats.
+   Every [Ax] marker used in the plan MUST have a matching entry. Do not omit any."""
+
+
 def _generate_implementation_plan(api_key: str, document_text: str,
                                     current_process: str, future_process: str,
                                     selected_sections: list = None,
@@ -2367,10 +2417,10 @@ def _generate_implementation_plan(api_key: str, document_text: str,
     if not selected_sections:
         selected_sections = DEFAULT_IMPL_PLAN_SECTIONS
 
-    # Sections always generated in a dedicated second call so they are never crowded out
     DEDICATED_SECTIONS = {'value_add', 'sources'}
     main_sections = [s for s in selected_sections if s not in DEDICATED_SECTIONS]
-    tail_sections = [s for s in selected_sections if s in DEDICATED_SECTIONS]
+    want_value_add = 'value_add' in selected_sections
+    want_sources   = 'sources'    in selected_sections
 
     impl_client = anthropic.Anthropic(api_key=api_key)
     parts = []
@@ -2407,25 +2457,36 @@ def _generate_implementation_plan(api_key: str, document_text: str,
         )
         parts.append(msg.content[0].text.strip())
 
-    # ── Call 2: value_add and/or sources (always in their own call) ───────────
-    if tail_sections:
-        tail_prompt = _build_impl_plan_prompt(tail_sections)
+    # ── Call 2: value_add + sources with their own dedicated prompt ───────────
+    if want_value_add or want_sources:
         tail_user = (
-            f"You have just produced the main body of an implementation plan for the following process:\n\n"
+            f"Process details:\n"
             f"- Current State Process: {current_process}\n"
             f"- Future State Process: {future_process}\n\n"
-            f"Source documents:\n\n{document_text[:12000]}\n\n"
-            f"Main plan produced so far:\n\n{parts[0] if parts else ''}\n\n"
-            f"Now generate ONLY the remaining sections listed below. "
-            f"Do not repeat any content already written. Start directly with the first ## heading."
+            f"Source documents:\n\n{document_text[:8000]}\n\n"
+            f"Implementation plan produced so far (for assumption reference):\n\n"
+            f"{parts[0][:4000] if parts else '(none)'}"
         )
+
+        # Trim prompt to only the sections actually requested
+        tail_sys = VALUE_ADD_SOURCES_PROMPT
+        if not want_value_add:
+            # Keep only Sources and Assumptions section
+            tail_sys = tail_sys[tail_sys.index('## Sources and Assumptions'):]
+            tail_sys = "You are a business transformation consultant.\n\nGenerate ONLY the section below in markdown. Start directly with the ## heading.\n\n" + tail_sys
+        elif not want_sources:
+            # Keep only Value Add section
+            tail_sys = tail_sys[:tail_sys.index('---')].strip()
+
         msg2 = impl_client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=8000,
-            system=tail_prompt,
+            system=tail_sys,
             messages=[{"role": "user", "content": tail_user}]
         )
-        parts.append(msg2.content[0].text.strip())
+        tail_text = msg2.content[0].text.strip() if msg2.content else ""
+        if tail_text:
+            parts.append(tail_text)
 
     return "\n\n".join(parts)
 
