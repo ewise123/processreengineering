@@ -125,21 +125,6 @@
                 <label class="text-xs font-semibold text-slate-600">Sections to Include <span class="text-red-500">*</span></label>
                 <span id="section-count" class="text-xs text-slate-400"></span>
               </div>
-              <!-- Quick presets -->
-              <div class="flex gap-2 mb-3 flex-wrap">
-                <button id="preset-minimal" onclick="applyPreset('minimal')"
-                  class="px-2.5 py-1 text-xs font-medium border border-slate-200 rounded-md text-slate-600 hover:border-slate-400 bg-white transition">
-                  Minimal
-                </button>
-                <button id="preset-standard" onclick="applyPreset('standard')"
-                  class="px-2.5 py-1 text-xs font-semibold border border-slate-900 bg-slate-900 text-white rounded-md transition">
-                  Standard
-                </button>
-                <button id="preset-full" onclick="applyPreset('full')"
-                  class="px-2.5 py-1 text-xs font-medium border border-slate-200 rounded-md text-slate-600 hover:border-slate-400 bg-white transition">
-                  Full SOP Document
-                </button>
-              </div>
               <!-- Scrollable section checklist -->
               <div id="section-list" class="border border-slate-200 rounded-lg overflow-y-auto divide-y divide-slate-100" style="max-height:160px"></div>
             </div>
@@ -257,13 +242,6 @@
       { id: 'sources',                 label: 'Sources and Assumptions', required: true },
       { id: 'glossary',               label: 'Acronym & Term Dictionary', required: false },
     ];
-    const PRESETS = {
-      minimal:  ['purpose', 'scope', 'procedures'],
-      standard: ['purpose', 'scope', 'definitions', 'roles_responsibilities', 'procedures',
-                 'exception_handling', 'documentation_retention'],
-      full:     SOP_SECTIONS.map(s => s.id),
-    };
-
     function buildSectionList() {
       document.getElementById('section-list').innerHTML = SOP_SECTIONS.map(s => `
         <label class="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-slate-50 select-none">
@@ -279,19 +257,16 @@
       updateSectionCount();
     }
 
-    function applyPreset(name) {
-      const ids = PRESETS[name] || [];
+    function selectAllSections() {
       SOP_SECTIONS.forEach(s => {
         const cb = document.getElementById('sec-' + s.id);
-        if (cb && !cb.disabled) cb.checked = ids.includes(s.id);
+        if (cb && !cb.disabled) cb.checked = true;
       });
       updateSectionCount();
-      highlightPreset(name);
     }
 
     function onSectionChange() {
       updateSectionCount();
-      highlightPreset(null); // clear preset highlight when manually changed
     }
 
     function getSelectedSections() {
@@ -304,16 +279,6 @@
     function updateSectionCount() {
       const n = getSelectedSections().length;
       document.getElementById('section-count').textContent = n + ' selected';
-    }
-
-    function highlightPreset(active) {
-      ['minimal', 'standard', 'full'].forEach(p => {
-        const btn = document.getElementById('preset-' + p);
-        if (!btn) return;
-        btn.className = p === active
-          ? 'px-2.5 py-1 text-xs font-semibold border border-slate-900 bg-slate-900 text-white rounded-md transition'
-          : 'px-2.5 py-1 text-xs font-medium border border-slate-200 rounded-md text-slate-600 hover:border-slate-400 bg-white transition';
-      });
     }
 
     // ── Drag & drop ───────────────────────────────────────────────────────────
@@ -511,7 +476,7 @@
       document.getElementById('sop-title').value  = '';
       document.getElementById('sop-tabs').innerHTML   = '';
       document.getElementById('sop-panels').innerHTML = '';
-      applyPreset('standard');
+      selectAllSections();
       updateGenerateBtn();
       hideError();
       hideStatus();
@@ -522,7 +487,7 @@
 
     // ── Init ─────────────────────────────────────────────────────────────────
     buildSectionList();
-    applyPreset('standard');
+    selectAllSections();
 
     // ── Download Word (active variation) ──────────────────────────────────────
     async function downloadWord() {
