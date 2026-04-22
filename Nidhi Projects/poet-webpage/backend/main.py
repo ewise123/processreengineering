@@ -2258,6 +2258,35 @@ IMPL_PLAN_SECTIONS = [
      "How to measure a successful transition."),
     ("change_management",      "Change Management",
      "Stakeholder communication, training needs, and adoption strategy."),
+    ("value_add",              "Value Add from Current State to Future State",
+     """Review the current and future state process descriptions and identify the key differences. Translate those differences into tangible business value statements following this exact structure:
+
+### Executive Summary
+One paragraph summarising the overall business value created by the future state.
+
+### Value Add by Dimension
+For each relevant dimension below provide three items: Current State Issue, Future State Improvement, and Business Value Created. Cover all that apply:
+1. Efficiency and Cycle Time
+2. Process Simplification
+3. Standardization
+4. Controls and Risk Management
+5. Data Quality and Transparency
+6. Roles and Accountability
+7. Technology Enablement / Automation Readiness
+8. Customer / Stakeholder Impact
+
+### Key Value Add Themes
+Top 5–7 value themes in bullet form.
+
+### Suggested Wording for Implementation Plan
+5 concise, executive-ready statements that can be inserted directly into an implementation plan or steering committee deck.
+
+Rules for this section:
+- Do not make unsupported numerical claims. Where quantitative evidence is not provided, use directional language: "expected to reduce", "likely to improve", "creates the foundation for", "enables more consistent"
+- Be specific and structured; avoid vague buzzwords
+- Do not repeat the same point in different words
+- Write in a concise, polished consulting tone as if preparing client-facing transformation material
+- Express value in terms of: cycle time reduction, reduced rework, fewer handoffs, improved standardisation, better control environment, improved data quality, higher operational efficiency, lower cost to serve, reduced risk / compliance exposure, improved employee experience, improved customer experience, scalability / readiness for automation or AI"""),
 ]
 
 IMPL_PLAN_SECTIONS_MAP = {sid: (title, desc) for sid, title, desc in IMPL_PLAN_SECTIONS}
