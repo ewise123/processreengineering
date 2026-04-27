@@ -129,7 +129,41 @@ def main_smoke() -> int:
     else:
         print("  [skip] detect-conflicts — set ANTHROPIC_API_KEY to exercise")
 
-    # 9. Cleanup
+    # 9. Generate process map (requires ANTHROPIC_API_KEY + claims to exist)
+    if os.getenv("ANTHROPIC_API_KEY"):
+        r = client.post(
+            f"/api/v2/projects/{project_id}/generate-process-map",
+            json={
+                "name": "Accounts Payable Process",
+                "level": "2",
+                "focus": "Accounts Payable",
+                "map_type": "current_state",
+            },
+        )
+        # 422 is acceptable here only if no claims exist (e.g. extract-claims was skipped)
+        if r.status_code == 422:
+            print(f"  [skip] generate-process-map — {r.json().get('detail')}")
+        else:
+            assert r.status_code == 201, r.text
+            res = r.json()
+            print(
+                f"  Generated map: {res['lane_count']} lane(s), {res['node_count']} node(s), "
+                f"{res['edge_count']} edge(s), {res['node_link_count']} claim link(s), "
+                f"BPMN XML size {res['bpmn_xml_size']}"
+            )
+            r = client.get(
+                f"/api/v2/projects/{project_id}/process-maps/{res['model_id']}/versions/{res['version_id']}"
+            )
+            assert r.status_code == 200, r.text
+            graph = r.json()
+            print(
+                f"  Fetched graph: version {graph['version']['version_number']}, "
+                f"{len(graph['lanes'])} lanes, {len(graph['nodes'])} nodes, {len(graph['edges'])} edges"
+            )
+    else:
+        print("  [skip] generate-process-map — set ANTHROPIC_API_KEY to exercise")
+
+    # 10. Cleanup
     r = client.delete(f"/api/v2/projects/{project_id}")
     assert r.status_code == 204, r.text
     print("Soft-deleted project. Smoke test passed.")
