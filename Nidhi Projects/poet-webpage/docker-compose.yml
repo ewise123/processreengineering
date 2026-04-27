@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: poet-postgres
+    environment:
+      POSTGRES_USER: poet
+      POSTGRES_PASSWORD: poet
+      POSTGRES_DB: poet
+    ports:
+      - "5433:5432"
+    volumes:
+      - poet-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U poet -d poet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  poet-pgdata:
