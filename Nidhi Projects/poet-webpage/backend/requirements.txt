@@ -16,3 +16,6 @@ alembic==1.14.0
 psycopg[binary]==3.2.3
 pgvector==0.3.6
 uuid-utils==0.10.0
+
+# Phase 2 — knowledge layer
+openai==1.54.4
