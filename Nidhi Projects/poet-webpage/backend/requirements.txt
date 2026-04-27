@@ -9,3 +9,10 @@ python-pptx==1.0.2
 Pillow==11.0.0
 python-dotenv==1.0.1
 openpyxl==3.1.5
+
+# Phase 1 — persistence layer
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg[binary]==3.2.3
+pgvector==0.3.6
+uuid-utils==0.10.0
