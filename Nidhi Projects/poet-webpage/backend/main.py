@@ -27,6 +27,10 @@ load_dotenv()
 
 app = FastAPI(title="POET API", version="1.0.0")
 
+# === v2 API (Phase 1.5+) — registered before the catch-all at end of file ===
+from app.api.v2 import router as _v2_router  # noqa: E402
+app.include_router(_v2_router, prefix="/api/v2")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
