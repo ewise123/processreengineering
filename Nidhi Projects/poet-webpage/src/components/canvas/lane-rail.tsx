@@ -245,6 +245,7 @@ export function LaneRail({
                     transform: "rotate(-90deg)",
                     transformOrigin: "center",
                     width: `${Math.max(120, height - 24)}px`,
+                    flexShrink: 0,
                     fontSize: 10,
                     fontWeight: 600,
                     padding: "3px 6px",
@@ -262,14 +263,17 @@ export function LaneRail({
                   style={{
                     transform: "rotate(-90deg)",
                     transformOrigin: "center",
+                    // CRITICAL: without flex-shrink:0 the flex parent's
+                    // 44px width forces the child to shrink to 44px, and
+                    // text-overflow:ellipsis kicks in there instead of at
+                    // our maxWidth.
+                    flexShrink: 0,
                     fontSize: 10,
                     fontWeight: 600,
                     color: "#475569",
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
-                    // World-height-based cap with a generous floor so default
-                    // 150px lanes can fit ~25-char labels at any zoom level.
                     maxWidth: `${Math.max(200, lane.h - 8)}px`,
                     cursor: "text",
                     userSelect: "none",
