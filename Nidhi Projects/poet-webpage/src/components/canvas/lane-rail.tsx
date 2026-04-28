@@ -263,10 +263,8 @@ export function LaneRail({
                   style={{
                     transform: "rotate(-90deg)",
                     transformOrigin: "center",
-                    // CRITICAL: without flex-shrink:0 the flex parent's
-                    // 44px width forces the child to shrink to 44px, and
-                    // text-overflow:ellipsis kicks in there instead of at
-                    // our maxWidth.
+                    // flex-shrink:0 prevents the 44px-wide flex parent from
+                    // collapsing the label to its own width.
                     flexShrink: 0,
                     fontSize: 10,
                     fontWeight: 600,
@@ -274,7 +272,12 @@ export function LaneRail({
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
-                    maxWidth: `${Math.max(200, lane.h - 8)}px`,
+                    // Cap = lane SCREEN height minus a small inset. After
+                    // rotation, the label's visual extent runs along the
+                    // lane axis, so this guarantees it never bleeds into
+                    // adjacent lanes regardless of zoom. Resize the lane
+                    // taller for longer labels.
+                    maxWidth: `${Math.max(40, height - 16)}px`,
                     cursor: "text",
                     userSelect: "none",
                   }}
