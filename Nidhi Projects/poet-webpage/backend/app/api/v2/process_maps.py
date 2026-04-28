@@ -491,6 +491,16 @@ def add_lane(
     if model is None or model.project_id != project.id:
         raise HTTPException(status_code=404, detail="Model not found")
 
+    # Atomically shift later lanes' order_index up by 1 so the inserted
+    # row is unique at its target index (no duplicate or gap).
+    db.execute(
+        update(ProcessLane)
+        .where(
+            ProcessLane.version_id == version_id,
+            ProcessLane.order_index >= payload.order_index,
+        )
+        .values(order_index=ProcessLane.order_index + 1)
+    )
     lane = ProcessLane(
         version_id=version_id,
         name=payload.name,
@@ -537,6 +547,19 @@ def delete_lane(
         .values(lane_id=fallback.id)
     )
     db.delete(lane)
+    db.flush()
+    # Compact remaining lanes' order_index so the persisted ordering stays
+    # consecutive (0..N-1) without gaps after the delete.
+    remaining = list(
+        db.scalars(
+            select(ProcessLane)
+            .where(ProcessLane.version_id == version.id)
+            .order_by(ProcessLane.order_index, ProcessLane.id)
+        ).all()
+    )
+    for i, l in enumerate(remaining):
+        if l.order_index != i:
+            l.order_index = i
     db.commit()
 
 

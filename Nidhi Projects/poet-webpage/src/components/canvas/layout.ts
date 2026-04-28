@@ -65,6 +65,7 @@ export function buildCanvasState(graph: ProcessGraph): {
   // Compute Y positions cumulatively from each lane's height_px (defaulting
   // to LANE_HEIGHT when older data has no stored height).
   const lanes: CanvasLane[] = [];
+  const laneHeightById = new Map<string, number>();
   let runningY = 0;
   for (let i = 0; i < sortedLanes.length; i++) {
     const l = sortedLanes[i];
@@ -76,6 +77,7 @@ export function buildCanvasState(graph: ProcessGraph): {
       y: runningY,
       h,
     });
+    laneHeightById.set(l.id, h);
     runningY += h;
   }
 
@@ -108,10 +110,12 @@ export function buildCanvasState(graph: ProcessGraph): {
       typeof persisted.x === "number"
         ? persisted.x
         : Math.max(LANE_PADDING_LEFT, (dPos?.x ?? 0) - size.w / 2);
+    const fallbackLaneHeight =
+      (n.lane_id ? laneHeightById.get(n.lane_id) : undefined) ?? LANE_HEIGHT;
     const relativeY =
       typeof persisted.relative_y === "number"
         ? persisted.relative_y
-        : LANE_HEIGHT / 2 - size.h / 2;
+        : fallbackLaneHeight / 2 - size.h / 2;
     return {
       id: n.id,
       kind,

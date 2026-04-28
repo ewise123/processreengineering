@@ -32,9 +32,9 @@ export function useGraphPersistence({ projectId }: { projectId: UUID }) {
     if (inFlightRef.current) {
       await inFlightRef.current.catch(() => {});
     }
-    const nodes = Array.from(dirtyNodesRef.current.entries());
-    const lanes = Array.from(dirtyLanesRef.current.entries());
-    if (nodes.length === 0 && lanes.length === 0) return;
+    const nodeEntries = Array.from(dirtyNodesRef.current.entries());
+    const laneEntries = Array.from(dirtyLanesRef.current.entries());
+    if (nodeEntries.length === 0 && laneEntries.length === 0) return;
 
     dirtyNodesRef.current.clear();
     dirtyLanesRef.current.clear();
@@ -42,8 +42,8 @@ export function useGraphPersistence({ projectId }: { projectId: UUID }) {
     setError(null);
 
     const work = Promise.all([
-      ...nodes.map(([id, body]) => api.updateNode(projectId, id, body)),
-      ...lanes.map(([id, body]) => api.updateLane(projectId, id, body)),
+      ...nodeEntries.map(([id, body]) => api.updateNode(projectId, id, body)),
+      ...laneEntries.map(([id, body]) => api.updateLane(projectId, id, body)),
     ]);
     inFlightRef.current = work;
 
@@ -53,6 +53,16 @@ export function useGraphPersistence({ projectId }: { projectId: UUID }) {
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setStatus("idle"), SAVED_DISPLAY_MS);
     } catch (e) {
+      // Re-queue failed payloads under any newer edits so the next flush
+      // retries them. Newer in-memory edits win on conflict.
+      for (const [id, body] of nodeEntries) {
+        const latest = dirtyNodesRef.current.get(id) ?? {};
+        dirtyNodesRef.current.set(id, { ...body, ...latest });
+      }
+      for (const [id, body] of laneEntries) {
+        const latest = dirtyLanesRef.current.get(id) ?? {};
+        dirtyLanesRef.current.set(id, { ...body, ...latest });
+      }
       setStatus("error");
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -61,6 +71,12 @@ export function useGraphPersistence({ projectId }: { projectId: UUID }) {
   }, [projectId]);
 
   const scheduleFlush = useCallback(() => {
+    // Cancel a pending "saved → idle" timer so a stale tick can't overwrite
+    // a freshly-dirty status.
+    if (savedTimerRef.current) {
+      clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = null;
+    }
     setStatus("dirty");
     if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
     flushTimerRef.current = setTimeout(() => {

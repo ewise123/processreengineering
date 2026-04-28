@@ -87,7 +87,7 @@ export function BpmnCanvas({
   const lanesRef = useRef(lanes);
   lanesRef.current = lanes;
 
-  const { status, error, markNode, markLane } = useGraphPersistence({
+  const { status, error, markNode, markLane, flush } = useGraphPersistence({
     projectId,
   });
 
@@ -319,7 +319,9 @@ export function BpmnCanvas({
 
   const addLaneAt = useCallback(
     async (atIndex: number) => {
-      const curr = lanesRef.current;
+      // Flush pending lane patches before mutating the lane set so we don't
+      // commit stale order_index updates against shifted IDs.
+      await flush();
       try {
         const created = await api.createLane(projectId, modelId, versionId, {
           name: "New lane",
@@ -333,40 +335,38 @@ export function BpmnCanvas({
           y: 0,
           h: created.height_px,
         };
+        // Read the latest lanes AFTER await so concurrent UI edits aren't
+        // overwritten with a stale snapshot.
+        const curr = lanesRef.current;
         const inserted = [
           ...curr.slice(0, atIndex),
           newLane,
           ...curr.slice(atIndex),
         ];
-        const next = recomputeY(inserted);
-        setLanes(next);
-        // Re-PATCH order_index for everyone after the insertion point so
-        // server numbering stays consecutive.
-        for (let i = atIndex + 1; i < next.length; i++) {
-          markLane(next[i].id, { order_index: i });
-        }
+        setLanes(recomputeY(inserted));
+        // Server now atomically shifts later lanes' order_index inside the
+        // create transaction, so no follow-up PATCH calls are needed.
       } catch (e) {
         console.error("Failed to add lane", e);
       }
     },
-    [projectId, modelId, versionId, markLane]
+    [projectId, modelId, versionId, flush]
   );
 
   const deleteLane = useCallback(
     async (laneId: string) => {
-      const curr = lanesRef.current;
-      if (curr.length <= 1) return;
-      const idx = curr.findIndex((l) => l.id === laneId);
-      if (idx === -1) return;
-      const fallback = curr.find((l) => l.id !== laneId);
-      if (!fallback) return;
+      if (lanesRef.current.length <= 1) return;
+      // Flush pending PATCHes so we don't fire a 404 against a deleted lane.
+      await flush();
       try {
         await api.deleteLane(projectId, laneId);
-        const remaining = curr.filter((l) => l.id !== laneId);
-        const next = recomputeY(remaining);
-        setLanes(next);
-        // Re-assign any nodes that were in the deleted lane to fallback locally
-        // (server already did this — we mirror it for instant UI consistency).
+        const latest = lanesRef.current;
+        const remaining = latest.filter((l) => l.id !== laneId);
+        if (remaining.length === 0) return;
+        const fallback = remaining[0];
+        setLanes(recomputeY(remaining));
+        // Mirror server-side reassignment so the UI stays consistent without
+        // refetching the graph.
         setNodes((nodesNow) =>
           nodesNow.map((n) =>
             n.laneId === laneId
@@ -374,16 +374,13 @@ export function BpmnCanvas({
               : n
           )
         );
-        // Re-PATCH order_index for shifted lanes
-        next.forEach((l, i) => {
-          const prevIdx = curr.findIndex((c) => c.id === l.id);
-          if (prevIdx !== i) markLane(l.id, { order_index: i });
-        });
+        // Server resequences remaining lanes' order_index in the same
+        // transaction, so no follow-up PATCH calls are needed.
       } catch (e) {
         console.error("Failed to delete lane", e);
       }
     },
-    [projectId, markLane]
+    [projectId, flush]
   );
 
   return (
