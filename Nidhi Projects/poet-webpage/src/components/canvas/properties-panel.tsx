@@ -63,6 +63,7 @@ export function PropertiesPanel({
   const totalCitations = claims.reduce((acc, c) => acc + c.citations.length, 0);
   const issues = issuesData?.issues ?? [];
   const [issuesExpanded, setIssuesExpanded] = useState(true);
+  const [provenanceExpanded, setProvenanceExpanded] = useState(true);
 
   return (
     <div
@@ -205,34 +206,48 @@ export function PropertiesPanel({
 
       {/* Provenance */}
       <div className="border-t border-slate-100 px-3 py-2.5">
-        <div className="mb-1.5 flex items-center justify-between">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+        <button
+          type="button"
+          onClick={() => setProvenanceExpanded((v) => !v)}
+          className="flex w-full items-center justify-between"
+          aria-expanded={provenanceExpanded}
+        >
+          <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+            {provenanceExpanded ? (
+              <ChevronDown size={10} />
+            ) : (
+              <ChevronRight size={10} />
+            )}
             Provenance
           </div>
           <span className="text-[10px] text-slate-400 tabular-nums">
             {claims.length} claim{claims.length === 1 ? "" : "s"} ·{" "}
             {totalCitations} cite{totalCitations === 1 ? "" : "s"}
           </span>
-        </div>
-        {isLoading && (
-          <div className="text-[11px] italic text-slate-400">Loading…</div>
-        )}
-        {!isLoading && claims.length === 0 && (
-          <div className="text-[11px] italic text-slate-400">
-            No source citations for this node.
+        </button>
+        {provenanceExpanded && (
+          <div className="mt-1.5">
+            {isLoading && (
+              <div className="text-[11px] italic text-slate-400">Loading…</div>
+            )}
+            {!isLoading && claims.length === 0 && (
+              <div className="text-[11px] italic text-slate-400">
+                No source citations for this node.
+              </div>
+            )}
+            <ul className="space-y-1.5">
+              {claims.flatMap((claim) =>
+                claim.citations.map((cit) => (
+                  <CitationCard
+                    key={cit.citation_id}
+                    kind={claim.kind}
+                    citation={cit}
+                  />
+                ))
+              )}
+            </ul>
           </div>
         )}
-        <ul className="space-y-1.5">
-          {claims.flatMap((claim) =>
-            claim.citations.map((cit) => (
-              <CitationCard
-                key={cit.citation_id}
-                kind={claim.kind}
-                citation={cit}
-              />
-            ))
-          )}
-        </ul>
       </div>
 
       {/* Stakeholder Review (design surface only — Phase 3d wires it) */}
