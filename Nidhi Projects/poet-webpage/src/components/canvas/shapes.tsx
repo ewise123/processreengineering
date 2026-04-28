@@ -47,36 +47,67 @@ export function buildEdgePath(
   const dy = tc.y - fc.y;
   const horizontal = Math.abs(dx) >= Math.abs(dy);
   if (horizontal) {
-    const exitX = dx >= 0 ? from.x + from.w : from.x;
-    const entryX = dx >= 0 ? to.x : to.x + to.w;
+    const naturalExitX = dx >= 0 ? from.x + from.w : from.x;
+    const naturalEntryX = dx >= 0 ? to.x : to.x + to.w;
     const exitY = fc.y;
-    const entryY = tc.y;
-    const midX =
+    const naturalMidX = (naturalExitX + naturalEntryX) / 2;
+    const bendX =
       typeof overrides?.bendX === "number"
         ? overrides.bendX
-        : (exitX + entryX) / 2;
+        : naturalMidX;
+    // Source exit side flips to face whichever side of source the bend is on,
+    // so the path never re-enters source.
+    const exitX = bendX >= fc.x ? from.x + from.w : from.x;
+    // If the user dragged the bend so it's inside the target's horizontal
+    // span, snap entry to top or bottom (whichever the source is on the
+    // other side of). Arrow lands perpendicular to that face.
+    if (bendX > to.x && bendX < to.x + to.w) {
+      const enterFromTop = exitY <= tc.y;
+      const entryY = enterFromTop ? to.y : to.y + to.h;
+      return {
+        d: `M ${exitX} ${exitY} L ${bendX} ${exitY} L ${bendX} ${entryY}`,
+        midX: bendX,
+        midY: (exitY + entryY) / 2,
+        orientation: "horizontal",
+        midSegment: { x1: bendX, y1: exitY, x2: bendX, y2: entryY },
+      };
+    }
+    const entryX = bendX < to.x ? to.x : to.x + to.w;
+    const entryY = tc.y;
     return {
-      d: `M ${exitX} ${exitY} L ${midX} ${exitY} L ${midX} ${entryY} L ${entryX} ${entryY}`,
-      midX,
+      d: `M ${exitX} ${exitY} L ${bendX} ${exitY} L ${bendX} ${entryY} L ${entryX} ${entryY}`,
+      midX: bendX,
       midY: (exitY + entryY) / 2,
       orientation: "horizontal",
-      midSegment: { x1: midX, y1: exitY, x2: midX, y2: entryY },
+      midSegment: { x1: bendX, y1: exitY, x2: bendX, y2: entryY },
     };
   }
-  const exitY = dy >= 0 ? from.y + from.h : from.y;
-  const entryY = dy >= 0 ? to.y : to.y + to.h;
+  const naturalExitY = dy >= 0 ? from.y + from.h : from.y;
+  const naturalEntryY = dy >= 0 ? to.y : to.y + to.h;
   const exitX = fc.x;
+  const naturalMidY = (naturalExitY + naturalEntryY) / 2;
+  const bendY =
+    typeof overrides?.bendY === "number" ? overrides.bendY : naturalMidY;
+  const exitY = bendY >= fc.y ? from.y + from.h : from.y;
+  if (bendY > to.y && bendY < to.y + to.h) {
+    const enterFromLeft = exitX <= tc.x;
+    const entryX = enterFromLeft ? to.x : to.x + to.w;
+    return {
+      d: `M ${exitX} ${exitY} L ${exitX} ${bendY} L ${entryX} ${bendY}`,
+      midX: (exitX + entryX) / 2,
+      midY: bendY,
+      orientation: "vertical",
+      midSegment: { x1: exitX, y1: bendY, x2: entryX, y2: bendY },
+    };
+  }
+  const entryY = bendY < to.y ? to.y : to.y + to.h;
   const entryX = tc.x;
-  const midY =
-    typeof overrides?.bendY === "number"
-      ? overrides.bendY
-      : (exitY + entryY) / 2;
   return {
-    d: `M ${exitX} ${exitY} L ${exitX} ${midY} L ${entryX} ${midY} L ${entryX} ${entryY}`,
+    d: `M ${exitX} ${exitY} L ${exitX} ${bendY} L ${entryX} ${bendY} L ${entryX} ${entryY}`,
     midX: (exitX + entryX) / 2,
-    midY,
+    midY: bendY,
     orientation: "vertical",
-    midSegment: { x1: exitX, y1: midY, x2: entryX, y2: midY },
+    midSegment: { x1: exitX, y1: bendY, x2: entryX, y2: bendY },
   };
 }
 
