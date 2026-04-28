@@ -59,6 +59,7 @@ export function BpmnCanvas({
   initialEdges,
   initialLanes,
   onSaveStatusChange,
+  onSelectionChange,
 }: {
   projectId: UUID;
   modelId: UUID;
@@ -67,6 +68,17 @@ export function BpmnCanvas({
   initialEdges: CanvasEdge[];
   initialLanes: CanvasLane[];
   onSaveStatusChange?: (status: SaveStatus, error: string | null) => void;
+  onSelectionChange?: (
+    selected:
+      | {
+          id: string;
+          kind: "node" | "edge";
+          name?: string;
+          nodeKind?: string;
+          laneId?: string | null;
+        }
+      | null
+  ) => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState(initialNodes);
@@ -95,6 +107,27 @@ export function BpmnCanvas({
   useEffect(() => {
     onSaveStatusChange?.(status, error);
   }, [status, error, onSaveStatusChange]);
+
+  // Notify parent of selection so it can drive side panels.
+  useEffect(() => {
+    if (!onSelectionChange) return;
+    if (selectedId == null) {
+      onSelectionChange(null);
+      return;
+    }
+    const node = nodesRef.current.find((n) => n.id === selectedId);
+    if (node) {
+      onSelectionChange({
+        id: selectedId,
+        kind: "node",
+        name: node.label,
+        nodeKind: node.kind,
+        laneId: node.laneId,
+      });
+      return;
+    }
+    onSelectionChange({ id: selectedId, kind: "edge" });
+  }, [selectedId, onSelectionChange]);
 
   const worldWidth = useMemo(() => {
     const maxX = nodes.reduce((m, n) => Math.max(m, n.x + n.w), 0);

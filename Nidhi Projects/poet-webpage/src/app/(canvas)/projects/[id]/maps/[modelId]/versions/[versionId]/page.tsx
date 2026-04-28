@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { BpmnCanvas } from "@/components/canvas/bpmn-canvas";
+import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
@@ -36,6 +37,16 @@ const STATUS_COLOR: Record<SaveStatus, string> = {
   error: "#dc2626",
 };
 
+type Selected =
+  | {
+      id: string;
+      kind: "node" | "edge";
+      name?: string;
+      nodeKind?: string;
+      laneId?: string | null;
+    }
+  | null;
+
 export default function CanvasPage() {
   const params = useParams<{
     id: string;
@@ -45,6 +56,7 @@ export default function CanvasPage() {
   const [showXml, setShowXml] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Selected>(null);
 
   const handleSaveStatusChange = useCallback(
     (status: SaveStatus, error: string | null) => {
@@ -53,6 +65,10 @@ export default function CanvasPage() {
     },
     []
   );
+
+  const handleSelectionChange = useCallback((s: Selected) => {
+    setSelected(s);
+  }, []);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["graph", params.id, params.modelId, params.versionId],
@@ -65,8 +81,11 @@ export default function CanvasPage() {
     [data]
   );
 
+  const selectedNode = selected?.kind === "node" ? selected : null;
+
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      {/* Top floating bar */}
       <div
         style={{
           position: "absolute",
@@ -122,7 +141,12 @@ export default function CanvasPage() {
           )}
         </div>
         <div
-          style={{ pointerEvents: "auto", display: "flex", alignItems: "center", gap: 8 }}
+          style={{
+            pointerEvents: "auto",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
         >
           <SaveIndicator status={saveStatus} error={saveError} />
           <Button
@@ -131,7 +155,7 @@ export default function CanvasPage() {
             disabled={!data?.version.bpmn_xml}
             onClick={() => setShowXml(true)}
           >
-            Show BPMN XML
+            BPMN XML
           </Button>
         </div>
       </div>
@@ -173,7 +197,30 @@ export default function CanvasPage() {
           initialEdges={initial.edges}
           initialLanes={initial.lanes}
           onSaveStatusChange={handleSaveStatusChange}
+          onSelectionChange={handleSelectionChange}
         />
+      )}
+
+      {/* Per-selection Properties panel — auto-shown when a node is selected.
+          Matches the prototype's poet-props layout: floating right, single panel. */}
+      {selectedNode && data && (
+        <div
+          style={{
+            position: "absolute",
+            right: 12,
+            top: 60,
+            bottom: 60,
+            zIndex: 25,
+            display: "flex",
+          }}
+        >
+          <PropertiesPanel
+            projectId={params.id}
+            selected={selectedNode}
+            lanes={data.lanes}
+            onClose={() => setSelected(null)}
+          />
+        </div>
       )}
 
       <div
@@ -192,7 +239,8 @@ export default function CanvasPage() {
           zIndex: 20,
         }}
       >
-        Drag nodes between lanes · Hover a lane for the kebab menu (rename / insert / delete) · Wheel pans, Cmd+wheel zooms · Edits auto-save
+        Click a node for properties + provenance · Drag nodes / lanes to edit ·
+        Wheel pans, Cmd+wheel zooms · Edits auto-save
       </div>
 
       <Dialog open={showXml} onOpenChange={setShowXml}>

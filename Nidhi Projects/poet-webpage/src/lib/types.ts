@@ -142,6 +142,33 @@ export interface NodeUpdate {
   relative_y?: number;
 }
 
+export interface CitationDetail {
+  citation_id: UUID;
+  chunk_id: UUID;
+  quote: string;
+  confidence: number | null;
+  input_id: UUID;
+  input_name: string;
+  input_type: string;
+  section_kind: string;
+  section_ref: Record<string, unknown>;
+}
+
+export interface ClaimWithCitations {
+  id: UUID;
+  kind: string;
+  subject: string;
+  normalized: Record<string, unknown>;
+  confidence: number | null;
+  link_kind: string;
+  citations: CitationDetail[];
+}
+
+export interface NodeCitations {
+  node_id: UUID;
+  claims: ClaimWithCitations[];
+}
+
 export interface ProcessNode {
   id: UUID;
   type: string;
