@@ -552,13 +552,23 @@ function BpmnCanvas({
       const curr = lanesRef.current;
       const oldIdx = curr.findIndex((l) => l.id === laneId);
       if (oldIdx === -1) return;
-      moveLaneLocal(laneId, targetIdx);
-      const newIdx = lanesRef.current.findIndex((l) => l.id === laneId);
+      // moveLaneLocal's targetIdx semantics: after removing the lane, insert
+      // at target where target = targetIdx > oldIdx ? targetIdx - 1 : targetIdx.
+      // Compute the final landing index from the inputs (lanesRef is stale
+      // immediately after setLanes — can't read it back).
+      const removedLen = curr.length - 1;
+      const adjusted = targetIdx > oldIdx ? targetIdx - 1 : targetIdx;
+      const newIdx = Math.max(0, Math.min(removedLen, adjusted));
       if (newIdx === oldIdx) return;
+      moveLaneLocal(laneId, targetIdx);
+      // To restore: lane is currently at newIdx, needs to reach oldIdx.
+      //   moved-down (newIdx > oldIdx): pass oldIdx (no -1 adjustment).
+      //   moved-up   (newIdx < oldIdx): pass oldIdx + 1 (target gets -1).
+      const undoTargetIdx = newIdx > oldIdx ? oldIdx : oldIdx + 1;
       record({
         description: "Move lane",
         do: () => moveLaneLocal(laneId, targetIdx),
-        undo: () => moveLaneLocal(laneId, oldIdx),
+        undo: () => moveLaneLocal(laneId, undoTargetIdx),
       });
     },
     [moveLaneLocal, record]
