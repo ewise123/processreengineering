@@ -33,29 +33,28 @@ export function LaneRail({
 
   const railTop = () => railRef.current?.getBoundingClientRect().top ?? 0;
 
-  // Reorder drag
+  // Reorder drag — read latest dragState via the closure (effect re-binds on
+  // change). Keep onMoveLane OUTSIDE setDragState's updater to avoid the
+  // "setState during another component's render" warning.
   useEffect(() => {
     if (!dragState) return;
     const onMove = (e: MouseEvent) => {
       setDragState((s) => (s ? { ...s, currentY: e.clientY } : s));
     };
     const onUp = (e: MouseEvent) => {
-      setDragState((curr) => {
-        if (!curr) return null;
-        const worldY =
-          (e.clientY - curr.railTop) / viewport.scale -
-          viewport.ty / viewport.scale;
-        let targetIdx = lanes.length;
-        for (let i = 0; i < lanes.length; i++) {
-          const midY = lanes[i].y + lanes[i].h / 2;
-          if (worldY < midY) {
-            targetIdx = i;
-            break;
-          }
+      const worldY =
+        (e.clientY - dragState.railTop) / viewport.scale -
+        viewport.ty / viewport.scale;
+      let targetIdx = lanes.length;
+      for (let i = 0; i < lanes.length; i++) {
+        const midY = lanes[i].y + lanes[i].h / 2;
+        if (worldY < midY) {
+          targetIdx = i;
+          break;
         }
-        onMoveLane(curr.laneId, targetIdx);
-        return null;
-      });
+      }
+      setDragState(null);
+      onMoveLane(dragState.laneId, targetIdx);
     };
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
@@ -142,10 +141,11 @@ export function LaneRail({
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                overflow: "visible",
+                overflow: "hidden",
               }}
             >
               <div
+                title={lane.label}
                 style={{
                   transform: "rotate(-90deg)",
                   transformOrigin: "center",
@@ -153,6 +153,13 @@ export function LaneRail({
                   fontWeight: 600,
                   color: "#475569",
                   whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  // After rotation, visual width along the lane equals the
+                  // label's pre-rotation horizontal extent. Cap it to the
+                  // lane's screen height (minus a small inset) so long names
+                  // truncate with an ellipsis instead of overflowing.
+                  maxWidth: `${Math.max(40, height - 28)}px`,
                   userSelect: "none",
                 }}
               >

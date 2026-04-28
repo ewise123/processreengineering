@@ -2,11 +2,11 @@
 
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type MouseEvent,
-  type WheelEvent,
 } from "react";
 
 import { LaneRail } from "./lane-rail";
@@ -18,7 +18,8 @@ import type {
   Viewport,
 } from "./types";
 
-const WORLD_WIDTH = 1700;
+const WORLD_WIDTH_MIN = 1700;
+const WORLD_RIGHT_PADDING = 240;
 const MIN_LANE_HEIGHT = 90;
 
 type Drag =
@@ -46,6 +47,17 @@ export function BpmnCanvas({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
 
+  // Keep latest viewport accessible inside the native wheel handler so
+  // we can attach the listener once with passive:false.
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+
+  // World extent must enclose every node, otherwise lanes look truncated.
+  const worldWidth = useMemo(() => {
+    const maxX = nodes.reduce((m, n) => Math.max(m, n.x + n.w), 0);
+    return Math.max(WORLD_WIDTH_MIN, maxX + WORLD_RIGHT_PADDING);
+  }, [nodes]);
+
   const worldHeight = useMemo(() => {
     const maxBottom = lanes.reduce((m, l) => Math.max(m, l.y + l.h), 0);
     return Math.max(620, maxBottom);
@@ -63,33 +75,34 @@ export function BpmnCanvas({
     [viewport]
   );
 
-  const onWheel = (e: WheelEvent<SVGSVGElement>) => {
-    e.preventDefault();
-    if (!svgRef.current) return;
-    const rect = svgRef.current.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    if (e.ctrlKey || e.metaKey) {
-      const delta = -e.deltaY * 0.002;
-      const newScale = Math.max(
-        0.3,
-        Math.min(2.5, viewport.scale * (1 + delta))
-      );
-      const wx = (mx - viewport.tx) / viewport.scale;
-      const wy = (my - viewport.ty) / viewport.scale;
-      setViewport({
-        scale: newScale,
-        tx: mx - wx * newScale,
-        ty: my - wy * newScale,
-      });
-    } else {
-      setViewport({
-        ...viewport,
-        tx: viewport.tx - e.deltaX,
-        ty: viewport.ty - e.deltaY,
-      });
-    }
-  };
+  // Native wheel handler with passive:false so preventDefault actually stops
+  // the browser from page-zooming on Cmd/Ctrl+wheel.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const v = viewportRef.current;
+      if (e.ctrlKey || e.metaKey) {
+        const delta = -e.deltaY * 0.002;
+        const newScale = Math.max(0.3, Math.min(2.5, v.scale * (1 + delta)));
+        const wx = (mx - v.tx) / v.scale;
+        const wy = (my - v.ty) / v.scale;
+        setViewport({
+          scale: newScale,
+          tx: mx - wx * newScale,
+          ty: my - wy * newScale,
+        });
+      } else {
+        setViewport({ ...v, tx: v.tx - e.deltaX, ty: v.ty - e.deltaY });
+      }
+    };
+    svg.addEventListener("wheel", handler, { passive: false });
+    return () => svg.removeEventListener("wheel", handler);
+  }, []);
 
   const onNodeMouseDown = (e: MouseEvent, id: string) => {
     e.stopPropagation();
@@ -176,7 +189,6 @@ export function BpmnCanvas({
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <svg
         ref={svgRef}
-        onWheel={onWheel}
         onMouseDown={onSvgMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
@@ -219,7 +231,7 @@ export function BpmnCanvas({
             data-bg="1"
             x={-1000}
             y={-1000}
-            width={WORLD_WIDTH + 2000}
+            width={worldWidth + 2000}
             height={worldHeight + 2000}
             fill="url(#poet-grid)"
           />
@@ -229,7 +241,7 @@ export function BpmnCanvas({
               <rect
                 x={0}
                 y={lane.y}
-                width={WORLD_WIDTH}
+                width={worldWidth}
                 height={lane.h}
                 fill={lane.color}
                 opacity={0.35}
@@ -245,7 +257,7 @@ export function BpmnCanvas({
               <line
                 x1={0}
                 y1={lane.y + lane.h}
-                x2={WORLD_WIDTH}
+                x2={worldWidth}
                 y2={lane.y + lane.h}
                 stroke="#e2e8f0"
                 strokeDasharray="4 4"
