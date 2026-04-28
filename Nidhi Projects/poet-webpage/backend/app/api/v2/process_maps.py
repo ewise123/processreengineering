@@ -14,9 +14,7 @@ from app.enums import (
     NodeType,
     ProcessVersionStatus,
 )
-from app.models.claim import Claim
 from app.models.identity import User
-from app.models.input import Chunk, DocumentSection
 from app.models.process import (
     EdgeClaimLink,
     NodeClaimLink,
@@ -27,9 +25,14 @@ from app.models.process import (
     ProcessVersion,
 )
 from app.models.project import Project
+from app.models.claim import Claim, ClaimCitation
+from app.models.input import Chunk, DocumentSection, Input
 from app.schemas.process_map import (
+    CitationDetail,
+    ClaimWithCitations,
     LaneCreate,
     LaneUpdate,
+    NodeCitationsRead,
     NodeUpdate,
     ProcessEdgeRead,
     ProcessGraphRead,
@@ -511,6 +514,93 @@ def add_lane(
     db.commit()
     db.refresh(lane)
     return lane
+
+
+@router.get("/nodes/{node_id}/citations", response_model=NodeCitationsRead)
+def get_node_citations(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    node_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> NodeCitationsRead:
+    node = db.get(ProcessNode, node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    _check_node_in_project(node, project.id, db)
+
+    # Step 1: claims directly linked to this node, with their link_kind
+    link_rows = list(
+        db.execute(
+            select(NodeClaimLink.claim_id, NodeClaimLink.link_kind).where(
+                NodeClaimLink.node_id == node_id
+            )
+        ).all()
+    )
+    if not link_rows:
+        return NodeCitationsRead(node_id=node_id, claims=[])
+
+    claim_ids = [row[0] for row in link_rows]
+    link_kind_by_claim = {row[0]: row[1] for row in link_rows}
+
+    claims = list(
+        db.scalars(
+            select(Claim).where(Claim.id.in_(claim_ids)).order_by(Claim.kind, Claim.created_at)
+        ).all()
+    )
+
+    # Step 2: citations + their input/section context, in one join
+    citation_rows = list(
+        db.execute(
+            select(
+                ClaimCitation.id,
+                ClaimCitation.claim_id,
+                ClaimCitation.chunk_id,
+                ClaimCitation.quote,
+                ClaimCitation.confidence,
+                Input.id,
+                Input.name,
+                Input.type,
+                DocumentSection.kind,
+                DocumentSection.ref,
+            )
+            .join(Chunk, Chunk.id == ClaimCitation.chunk_id)
+            .join(DocumentSection, DocumentSection.id == Chunk.section_id)
+            .join(Input, Input.id == DocumentSection.input_id)
+            .where(ClaimCitation.claim_id.in_(claim_ids))
+            .order_by(ClaimCitation.claim_id, ClaimCitation.created_at)
+        ).all()
+    )
+
+    citations_by_claim: dict = {}
+    for row in citation_rows:
+        citations_by_claim.setdefault(row[1], []).append(
+            CitationDetail(
+                citation_id=row[0],
+                chunk_id=row[2],
+                quote=row[3],
+                confidence=row[4],
+                input_id=row[5],
+                input_name=row[6],
+                input_type=row[7],
+                section_kind=row[8],
+                section_ref=row[9] or {},
+            )
+        )
+
+    return NodeCitationsRead(
+        node_id=node_id,
+        claims=[
+            ClaimWithCitations(
+                id=c.id,
+                kind=c.kind,
+                subject=c.subject,
+                normalized=c.normalized or {},
+                confidence=c.confidence,
+                link_kind=link_kind_by_claim.get(c.id, "supports"),
+                citations=citations_by_claim.get(c.id, []),
+            )
+            for c in claims
+        ],
+    )
 
 
 @router.delete("/lanes/{lane_id}", status_code=status.HTTP_204_NO_CONTENT)

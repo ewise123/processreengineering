@@ -8,6 +8,7 @@ import type {
   InputRow,
   LaneCreate,
   LaneUpdate,
+  NodeCitations,
   NodeUpdate,
   Page,
   ProcessGraph,
@@ -185,4 +186,8 @@ export const api = {
     request<void>(`/api/v2/projects/${projectId}/lanes/${laneId}`, {
       method: "DELETE",
     }),
+  getNodeCitations: (projectId: UUID, nodeId: UUID) =>
+    request<NodeCitations>(
+      `/api/v2/projects/${projectId}/nodes/${nodeId}/citations`
+    ),
 };

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, FileText, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
@@ -16,6 +16,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { BpmnCanvas } from "@/components/canvas/bpmn-canvas";
+import { IssuesPanel } from "@/components/canvas/issues-panel";
+import { SourcesPanel } from "@/components/canvas/sources-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
@@ -36,6 +38,8 @@ const STATUS_COLOR: Record<SaveStatus, string> = {
   error: "#dc2626",
 };
 
+type Selected = { id: string; kind: "node" | "edge"; name?: string } | null;
+
 export default function CanvasPage() {
   const params = useParams<{
     id: string;
@@ -45,6 +49,9 @@ export default function CanvasPage() {
   const [showXml, setShowXml] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Selected>(null);
+  const [showSources, setShowSources] = useState(true);
+  const [showIssues, setShowIssues] = useState(false);
 
   const handleSaveStatusChange = useCallback(
     (status: SaveStatus, error: string | null) => {
@@ -53,6 +60,10 @@ export default function CanvasPage() {
     },
     []
   );
+
+  const handleSelectionChange = useCallback((s: Selected) => {
+    setSelected(s);
+  }, []);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["graph", params.id, params.modelId, params.versionId],
@@ -64,6 +75,9 @@ export default function CanvasPage() {
     () => (data ? buildCanvasState(data) : null),
     [data]
   );
+
+  const selectedNodeId =
+    selected?.kind === "node" ? selected.id : null;
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
@@ -122,16 +136,43 @@ export default function CanvasPage() {
           )}
         </div>
         <div
-          style={{ pointerEvents: "auto", display: "flex", alignItems: "center", gap: 8 }}
+          style={{
+            pointerEvents: "auto",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
         >
           <SaveIndicator status={saveStatus} error={saveError} />
+          <Button
+            size="sm"
+            variant={showSources ? "default" : "outline"}
+            onClick={() => setShowSources((s) => !s)}
+            disabled={!selectedNodeId}
+            title={
+              selectedNodeId
+                ? "Toggle Sources panel"
+                : "Select a node to see its sources"
+            }
+          >
+            <FileText size={14} />
+            Sources
+          </Button>
+          <Button
+            size="sm"
+            variant={showIssues ? "default" : "outline"}
+            onClick={() => setShowIssues((s) => !s)}
+          >
+            <AlertTriangle size={14} />
+            Issues
+          </Button>
           <Button
             size="sm"
             variant="outline"
             disabled={!data?.version.bpmn_xml}
             onClick={() => setShowXml(true)}
           >
-            Show BPMN XML
+            BPMN XML
           </Button>
         </div>
       </div>
@@ -173,8 +214,43 @@ export default function CanvasPage() {
           initialEdges={initial.edges}
           initialLanes={initial.lanes}
           onSaveStatusChange={handleSaveStatusChange}
+          onSelectionChange={handleSelectionChange}
         />
       )}
+
+      {/* Right-side panel stack — Sources (per node) + Issues (project) */}
+      <div
+        style={{
+          position: "absolute",
+          top: 64,
+          right: 0,
+          bottom: 0,
+          display: "flex",
+          alignItems: "stretch",
+          zIndex: 25,
+          pointerEvents: "none",
+        }}
+      >
+        {showSources && selectedNodeId && (
+          <div style={{ pointerEvents: "auto", height: "100%" }}>
+            <SourcesPanel
+              projectId={params.id}
+              nodeId={selectedNodeId}
+              nodeName={selected?.name}
+              onClose={() => setShowSources(false)}
+            />
+          </div>
+        )}
+        {showIssues && (
+          <div style={{ pointerEvents: "auto", height: "100%" }}>
+            <IssuesPanel
+              projectId={params.id}
+              selectedNodeId={selectedNodeId}
+              onClose={() => setShowIssues(false)}
+            />
+          </div>
+        )}
+      </div>
 
       <div
         style={{
@@ -192,7 +268,8 @@ export default function CanvasPage() {
           zIndex: 20,
         }}
       >
-        Drag nodes between lanes · Hover a lane for the kebab menu (rename / insert / delete) · Wheel pans, Cmd+wheel zooms · Edits auto-save
+        Click a node to see its claim sources · Drag nodes / lanes to edit ·
+        Wheel pans, Cmd+wheel zooms · Edits auto-save
       </div>
 
       <Dialog open={showXml} onOpenChange={setShowXml}>

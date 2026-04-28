@@ -51,6 +51,37 @@ class NodeUpdate(BaseModel):
     relative_y: float | None = None
 
 
+class CitationDetail(BaseModel):
+    """A single supporting quote with the input + section it came from."""
+
+    citation_id: UUID
+    chunk_id: UUID
+    quote: str
+    confidence: float | None
+    input_id: UUID
+    input_name: str
+    input_type: str
+    section_kind: str
+    section_ref: dict
+
+
+class ClaimWithCitations(BaseModel):
+    """A claim plus its supporting citations, scoped to a single node."""
+
+    id: UUID
+    kind: str
+    subject: str
+    normalized: dict
+    confidence: float | None
+    link_kind: str
+    citations: list[CitationDetail]
+
+
+class NodeCitationsRead(BaseModel):
+    node_id: UUID
+    claims: list[ClaimWithCitations]
+
+
 class ProcessNodeRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
