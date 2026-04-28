@@ -18,16 +18,22 @@ export default function ProjectLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const projectId = params.id;
 
-  const { data: project } = useQuery({
+  const { data: project, isLoading, isError, error } = useQuery({
     queryKey: ["project", projectId],
     queryFn: () => api.getProject(projectId),
     enabled: !!projectId,
+    retry: false,
   });
 
   const baseHref = `/projects/${projectId}`;
   const currentSlug = pathname.startsWith(baseHref)
     ? pathname.slice(baseHref.length).replace(/^\//, "").split("/")[0] ?? ""
     : "";
+
+  let title: string;
+  if (isLoading) title = "Loading…";
+  else if (isError) title = "Project unavailable";
+  else title = project?.name ?? "Project unavailable";
 
   return (
     <div className="space-y-6">
@@ -37,10 +43,13 @@ export default function ProjectLayout({ children }: { children: ReactNode }) {
             Projects
           </Link>
         </p>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {project?.name ?? "Loading…"}
-        </h1>
-        {project?.client_name && (
+        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        {isError && (
+          <p className="text-sm text-red-600">
+            {(error as Error)?.message ?? "Failed to load project."}
+          </p>
+        )}
+        {!isError && project?.client_name && (
           <p className="text-sm text-muted-foreground">{project.client_name}</p>
         )}
       </div>

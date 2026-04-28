@@ -52,8 +52,8 @@ export const api = {
   // Projects
   listProjects: (params: { limit?: number; offset?: number } = {}) => {
     const qs = new URLSearchParams();
-    if (params.limit) qs.set("limit", String(params.limit));
-    if (params.offset) qs.set("offset", String(params.offset));
+    if (params.limit !== undefined) qs.set("limit", String(params.limit));
+    if (params.offset !== undefined) qs.set("offset", String(params.offset));
     const suffix = qs.toString() ? `?${qs}` : "";
     return request<Page<Project>>(`/api/v2/projects${suffix}`);
   },
@@ -71,8 +71,8 @@ export const api = {
   // Inputs
   listInputs: (projectId: UUID, params: { limit?: number; offset?: number } = {}) => {
     const qs = new URLSearchParams();
-    if (params.limit) qs.set("limit", String(params.limit));
-    if (params.offset) qs.set("offset", String(params.offset));
+    if (params.limit !== undefined) qs.set("limit", String(params.limit));
+    if (params.offset !== undefined) qs.set("offset", String(params.offset));
     const suffix = qs.toString() ? `?${qs}` : "";
     return request<Page<InputRow>>(`/api/v2/projects/${projectId}/inputs${suffix}`);
   },
@@ -119,8 +119,8 @@ export const api = {
   ) => {
     const qs = new URLSearchParams();
     if (params.kind) qs.set("kind", params.kind);
-    if (params.limit) qs.set("limit", String(params.limit));
-    if (params.offset) qs.set("offset", String(params.offset));
+    if (params.limit !== undefined) qs.set("limit", String(params.limit));
+    if (params.offset !== undefined) qs.set("offset", String(params.offset));
     const suffix = qs.toString() ? `?${qs}` : "";
     return request<Page<Claim>>(`/api/v2/projects/${projectId}/claims${suffix}`);
   },
@@ -135,8 +135,8 @@ export const api = {
   ) => {
     const qs = new URLSearchParams();
     if (params.resolution_status) qs.set("resolution_status", params.resolution_status);
-    if (params.limit) qs.set("limit", String(params.limit));
-    if (params.offset) qs.set("offset", String(params.offset));
+    if (params.limit !== undefined) qs.set("limit", String(params.limit));
+    if (params.offset !== undefined) qs.set("offset", String(params.offset));
     const suffix = qs.toString() ? `?${qs}` : "";
     return request<Page<ClaimConflict>>(
       `/api/v2/projects/${projectId}/conflicts${suffix}`

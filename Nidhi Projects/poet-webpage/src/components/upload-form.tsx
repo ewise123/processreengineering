@@ -47,6 +47,12 @@ const TYPE_LABELS: Record<string, string> = {
   audio_file: "Audio file",
 };
 
+interface UploadResult {
+  inputId: UUID;
+  filename: string;
+  parseError: string | null;
+}
+
 export function UploadForm({ projectId }: { projectId: UUID }) {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -54,26 +60,49 @@ export function UploadForm({ projectId }: { projectId: UUID }) {
   const [type, setType] = useState<string>("sop_document");
   const [file, setFile] = useState<File | null>(null);
 
-  const upload = useMutation({
+  const resetSelection = () => {
+    setFile(null);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const upload = useMutation<UploadResult, Error>({
     mutationFn: async () => {
       if (!file) throw new Error("No file selected");
+      // Step 1: upload (creates the input row, persists the file)
       const inp = await api.uploadInput(projectId, type, file);
-      // Auto-parse on upload — keeps the flow tight
-      await api.parseInput(projectId, inp.id);
-      return inp;
+      // Step 2: parse (separate try so we can report partial success)
+      let parseError: string | null = null;
+      try {
+        await api.parseInput(projectId, inp.id);
+      } catch (err) {
+        parseError = err instanceof Error ? err.message : String(err);
+      }
+      return { inputId: inp.id, filename: inp.name, parseError };
     },
-    onSuccess: (inp) => {
-      toast.success(`Uploaded & parsed ${inp.name}`);
+    onSuccess: (result) => {
+      // Either way, the input row exists — refresh the list
       qc.invalidateQueries({ queryKey: ["inputs", projectId] });
+      if (result.parseError) {
+        toast.error(
+          `Uploaded ${result.filename}, but parsing failed: ${result.parseError}. Retry parse from the Documents tab.`
+        );
+      } else {
+        toast.success(`Uploaded & parsed ${result.filename}`);
+      }
       setOpen(false);
-      setFile(null);
-      if (fileRef.current) fileRef.current.value = "";
+      resetSelection();
     },
-    onError: (e: Error) => toast.error(`Upload failed: ${e.message}`),
+    onError: (e) => toast.error(`Upload failed: ${e.message}`),
   });
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) resetSelection();
+      }}
+    >
       <DialogTrigger asChild>
         <Button>Upload document</Button>
       </DialogTrigger>
@@ -122,7 +151,10 @@ export function UploadForm({ projectId }: { projectId: UUID }) {
         <DialogFooter>
           <Button
             variant="outline"
-            onClick={() => setOpen(false)}
+            onClick={() => {
+              resetSelection();
+              setOpen(false);
+            }}
             disabled={upload.isPending}
           >
             Cancel

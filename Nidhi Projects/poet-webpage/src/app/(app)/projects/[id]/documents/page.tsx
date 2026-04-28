@@ -26,14 +26,17 @@ import { api } from "@/lib/api";
 import { UploadForm } from "@/components/upload-form";
 import type { InputRow } from "@/lib/types";
 
+const PAGE_SIZE = 50;
+
 export default function DocumentsPage() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
   const [confirmRow, setConfirmRow] = useState<InputRow | null>(null);
+  const [offset, setOffset] = useState(0);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["inputs", id],
-    queryFn: () => api.listInputs(id, { limit: 200 }),
+    queryKey: ["inputs", id, "page", offset],
+    queryFn: () => api.listInputs(id, { limit: PAGE_SIZE, offset }),
   });
 
   const extract = useMutation({
@@ -145,6 +148,32 @@ export default function DocumentsPage() {
             })}
           </TableBody>
         </Table>
+      )}
+
+      {data && data.total > PAGE_SIZE && (
+        <div className="flex items-center justify-between pt-2">
+          <p className="text-sm text-muted-foreground tabular-nums">
+            {data.total === 0 ? 0 : offset + 1}–{Math.min(offset + PAGE_SIZE, data.total)} of {data.total}
+          </p>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+              disabled={offset === 0}
+            >
+              Previous
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setOffset(offset + PAGE_SIZE)}
+              disabled={offset + PAGE_SIZE >= data.total}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
       )}
 
       <Dialog open={confirmRow !== null} onOpenChange={(o) => !o && setConfirmRow(null)}>
