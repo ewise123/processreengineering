@@ -155,11 +155,77 @@ function BpmnCanvas({
 
   const deleteEdgeImpl = useCallback(
     async (id: UUID) => {
-      await api.deleteEdge(projectId, id);
-      setEdges((curr) => curr.filter((e) => e.id !== id));
-      setSelectedId((curr) => (curr === id ? null : curr));
+      const edge = edgesRef.current.find((e) => e.id === id);
+      if (!edge) return;
+      // currentId tracks whichever UUID the edge has now — across undo/redo
+      // cycles, recreating issues a NEW id, so the next delete must use it.
+      let currentId = id;
+      const remove = (rid: UUID) => {
+        setEdges((curr) => curr.filter((e2) => e2.id !== rid));
+        setSelectedId((curr) => (curr === rid ? null : curr));
+      };
+      const recreate = async () => {
+        const created = await api.createEdge(projectId, modelId, versionId, {
+          source_node_id: edge.from,
+          target_node_id: edge.to,
+          label: edge.label,
+        });
+        currentId = created.id;
+        setEdges((curr) => [
+          ...curr,
+          {
+            id: currentId,
+            from: edge.from,
+            to: edge.to,
+            label: created.label ?? null,
+          },
+        ]);
+      };
+      await api.deleteEdge(projectId, currentId);
+      remove(currentId);
+      record({
+        description: "Delete edge",
+        do: async () => {
+          await api.deleteEdge(projectId, currentId);
+          remove(currentId);
+        },
+        undo: recreate,
+      });
     },
-    [projectId]
+    [projectId, modelId, versionId, record]
+  );
+
+  const createEdgeImpl = useCallback(
+    async (sourceId: UUID, targetId: UUID) => {
+      let currentId: UUID;
+      const create = async () => {
+        const created = await api.createEdge(projectId, modelId, versionId, {
+          source_node_id: sourceId,
+          target_node_id: targetId,
+        });
+        currentId = created.id;
+        setEdges((curr) => [
+          ...curr,
+          {
+            id: currentId,
+            from: sourceId,
+            to: targetId,
+            label: created.label ?? null,
+          },
+        ]);
+      };
+      await create();
+      record({
+        description: "Create edge",
+        do: create,
+        undo: async () => {
+          await api.deleteEdge(projectId, currentId);
+          setEdges((curr) => curr.filter((e) => e.id !== currentId));
+          setSelectedId((curr) => (curr === currentId ? null : curr));
+        },
+      });
+    },
+    [projectId, modelId, versionId, record]
   );
 
   useImperativeHandle(ref, () => ({ deleteNode: deleteNodeImpl }), [
@@ -434,27 +500,9 @@ function BpmnCanvas({
             (e2) => e2.from === sourceId && e2.to === targetId
           );
           if (!exists) {
-            void (async () => {
-              try {
-                const created = await api.createEdge(
-                  projectId,
-                  modelId,
-                  versionId,
-                  { source_node_id: sourceId, target_node_id: targetId }
-                );
-                setEdges((curr) => [
-                  ...curr,
-                  {
-                    id: created.id,
-                    from: sourceId,
-                    to: targetId,
-                    label: created.label ?? null,
-                  },
-                ]);
-              } catch (err) {
-                console.error("Failed to create edge", err);
-              }
-            })();
+            void createEdgeImpl(sourceId, targetId).catch((err) =>
+              console.error("Failed to create edge", err)
+            );
           }
         }
         setDrag(null);
@@ -502,7 +550,7 @@ function BpmnCanvas({
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
-  }, [drag, markNode, record]);
+  }, [drag, markNode, record, createEdgeImpl]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
   const onCanvasDragOver = (e: ReactDragEvent<SVGSVGElement>) => {
@@ -883,15 +931,22 @@ function BpmnCanvas({
             (() => {
               const source = renderNodes.find((n) => n.id === drag.sourceId);
               if (!source) return null;
+              const fx = source.x + source.w;
+              const fy = source.y + source.h / 2;
+              const tx = drag.currX;
+              const ty = drag.currY;
+              // Orthogonal L-shape — same routing rule the persisted edges
+              // use, so the preview matches what you'll actually see.
+              const midX = fx + (tx - fx) / 2;
+              const d = `M ${fx} ${fy} L ${midX} ${fy} L ${midX} ${ty} L ${tx} ${ty}`;
               return (
-                <line
-                  x1={source.x + source.w}
-                  y1={source.y + source.h / 2}
-                  x2={drag.currX}
-                  y2={drag.currY}
+                <path
+                  d={d}
+                  fill="none"
                   stroke="#0f172a"
                   strokeWidth={1.5}
                   strokeDasharray="4 4"
+                  markerEnd="url(#poet-arrow)"
                   pointerEvents="none"
                 />
               );
