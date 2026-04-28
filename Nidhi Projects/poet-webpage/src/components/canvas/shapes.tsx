@@ -28,6 +28,10 @@ interface SimpleRect {
  */
 export type EdgeOrientation = "horizontal" | "vertical";
 
+/** Below this gap on the perpendicular axis, the L-shape collapses to a
+ * single straight segment. Picked to match a single grid-cell of slack. */
+const SNAP_STRAIGHT_THRESHOLD = 8;
+
 export function buildEdgePath(
   from: SimpleRect,
   to: SimpleRect,
@@ -50,6 +54,18 @@ export function buildEdgePath(
     const naturalExitX = dx >= 0 ? from.x + from.w : from.x;
     const naturalEntryX = dx >= 0 ? to.x : to.x + to.w;
     const exitY = fc.y;
+    // Snap-to-straight: when source/target are aligned on the cross axis,
+    // the L-shape's two parallel segments collapse into one straight line.
+    if (Math.abs(exitY - tc.y) < SNAP_STRAIGHT_THRESHOLD) {
+      const y = (exitY + tc.y) / 2;
+      return {
+        d: `M ${naturalExitX} ${y} L ${naturalEntryX} ${y}`,
+        midX: (naturalExitX + naturalEntryX) / 2,
+        midY: y,
+        orientation: "horizontal",
+        midSegment: { x1: naturalExitX, y1: y, x2: naturalEntryX, y2: y },
+      };
+    }
     const naturalMidX = (naturalExitX + naturalEntryX) / 2;
     const bendX =
       typeof overrides?.bendX === "number"
@@ -85,6 +101,16 @@ export function buildEdgePath(
   const naturalExitY = dy >= 0 ? from.y + from.h : from.y;
   const naturalEntryY = dy >= 0 ? to.y : to.y + to.h;
   const exitX = fc.x;
+  if (Math.abs(exitX - tc.x) < SNAP_STRAIGHT_THRESHOLD) {
+    const x = (exitX + tc.x) / 2;
+    return {
+      d: `M ${x} ${naturalExitY} L ${x} ${naturalEntryY}`,
+      midX: x,
+      midY: (naturalExitY + naturalEntryY) / 2,
+      orientation: "vertical",
+      midSegment: { x1: x, y1: naturalExitY, x2: x, y2: naturalEntryY },
+    };
+  }
   const naturalMidY = (naturalExitY + naturalEntryY) / 2;
   const bendY =
     typeof overrides?.bendY === "number" ? overrides.bendY : naturalMidY;
