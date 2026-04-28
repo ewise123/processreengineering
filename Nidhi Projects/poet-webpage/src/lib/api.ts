@@ -174,6 +174,10 @@ export const api = {
       method: "PATCH",
       json: body,
     }),
+  deleteNode: (projectId: UUID, nodeId: UUID) =>
+    request<void>(`/api/v2/projects/${projectId}/nodes/${nodeId}`, {
+      method: "DELETE",
+    }),
   createNode: (
     projectId: UUID,
     modelId: UUID,

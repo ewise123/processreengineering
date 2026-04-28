@@ -3,8 +3,8 @@
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,12 +15,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { BpmnCanvas } from "@/components/canvas/bpmn-canvas";
+import { BpmnCanvas, type BpmnCanvasHandle } from "@/components/canvas/bpmn-canvas";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
-import type { IssueSeverity } from "@/lib/types";
+import type { IssueSeverity, UUID } from "@/lib/types";
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
   idle: "Saved",
@@ -58,6 +58,20 @@ export default function CanvasPage() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selected>(null);
+  const canvasRef = useRef<BpmnCanvasHandle>(null);
+  const queryClient = useQueryClient();
+
+  const handleNodeDelete = useCallback(
+    async (id: UUID) => {
+      if (!canvasRef.current) return;
+      await canvasRef.current.deleteNode(id);
+      setSelected(null);
+      queryClient.invalidateQueries({
+        queryKey: ["issues", params.id, params.modelId, params.versionId],
+      });
+    },
+    [queryClient, params.id, params.modelId, params.versionId]
+  );
 
   const handleSaveStatusChange = useCallback(
     (status: SaveStatus, error: string | null) => {
@@ -205,6 +219,7 @@ export default function CanvasPage() {
       )}
       {initial && (
         <BpmnCanvas
+          ref={canvasRef}
           projectId={params.id}
           modelId={params.modelId}
           versionId={params.versionId}
@@ -235,6 +250,7 @@ export default function CanvasPage() {
             selected={selectedNode}
             lanes={data.lanes}
             onClose={() => setSelected(null)}
+            onDelete={handleNodeDelete}
           />
         </div>
       )}

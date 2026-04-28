@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -59,17 +61,13 @@ function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
   return lanes.find((l) => y >= l.y && y < l.y + l.h);
 }
 
-export function BpmnCanvas({
-  projectId,
-  modelId,
-  versionId,
-  initialNodes,
-  initialEdges,
-  initialLanes,
-  issuesByNode,
-  onSaveStatusChange,
-  onSelectionChange,
-}: {
+export interface BpmnCanvasHandle {
+  /** Calls the API + removes the node (and any edges touching it) from
+   * local state without re-fetching the whole graph. */
+  deleteNode: (id: UUID) => Promise<void>;
+}
+
+interface BpmnCanvasProps {
   projectId: UUID;
   modelId: UUID;
   versionId: UUID;
@@ -89,10 +87,23 @@ export function BpmnCanvas({
         }
       | null
   ) => void;
-}) {
+}
+
+export const BpmnCanvas = forwardRef<BpmnCanvasHandle, BpmnCanvasProps>(
+function BpmnCanvas({
+  projectId,
+  modelId,
+  versionId,
+  initialNodes,
+  initialEdges,
+  initialLanes,
+  issuesByNode,
+  onSaveStatusChange,
+  onSelectionChange,
+}, ref) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState(initialNodes);
-  const [edges] = useState(initialEdges);
+  const [edges, setEdges] = useState(initialEdges);
   const [lanes, setLanes] = useState(initialLanes);
   const [viewport, setViewport] = useState<Viewport>({
     tx: 60,
@@ -107,6 +118,21 @@ export function BpmnCanvas({
 
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      deleteNode: async (id) => {
+        await api.deleteNode(projectId, id);
+        setNodes((curr) => curr.filter((n) => n.id !== id));
+        setEdges((curr) =>
+          curr.filter((e) => e.from !== id && e.to !== id)
+        );
+        setSelectedId((curr) => (curr === id ? null : curr));
+      },
+    }),
+    [projectId]
+  );
 
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
@@ -625,4 +651,4 @@ export function BpmnCanvas({
       />
     </div>
   );
-}
+});
