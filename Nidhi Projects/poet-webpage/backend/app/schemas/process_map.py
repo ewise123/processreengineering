@@ -51,6 +51,20 @@ class NodeUpdate(BaseModel):
     relative_y: float | None = None
 
 
+class NodeCreate(BaseModel):
+    """Body for the palette → drop-on-canvas flow. The canvas knows the
+    target lane and where the user dropped, so we accept those directly
+    instead of re-running auto-layout."""
+
+    type: str = Field(
+        pattern=r"^(task|event_start|event_end|event_intermediate|gateway_exclusive|gateway_parallel|gateway_inclusive|subprocess)$"
+    )
+    name: str = Field(min_length=1, max_length=500)
+    lane_id: UUID
+    x: float
+    relative_y: float
+
+
 class CitationDetail(BaseModel):
     """A single supporting quote with the input + section it came from."""
 

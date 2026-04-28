@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type MouseEvent,
 } from "react";
 
@@ -15,11 +16,17 @@ import type { IssueSeverity, UUID } from "@/lib/types";
 import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT } from "./layout";
+import {
+  PALETTE_DRAG_MIME,
+  PALETTE_SHAPES,
+  ShapePalette,
+} from "./shape-palette";
 import { EdgeArrow, NodeShape } from "./shapes";
 import type {
   CanvasEdge,
   CanvasLane,
   CanvasNode,
+  CanvasNodeKind,
   ResolvedNode,
   Viewport,
 } from "./types";
@@ -302,6 +309,55 @@ export function BpmnCanvas({
   }, [drag, markNode]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
+  const onCanvasDragOver = (e: ReactDragEvent<SVGSVGElement>) => {
+    if (!e.dataTransfer.types.includes(PALETTE_DRAG_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const onCanvasDrop = async (e: ReactDragEvent<SVGSVGElement>) => {
+    const kind = e.dataTransfer.getData(PALETTE_DRAG_MIME) as CanvasNodeKind;
+    if (!kind) return;
+    e.preventDefault();
+    const shape = PALETTE_SHAPES.find((s) => s.kind === kind);
+    if (!shape) return;
+    const { x, y } = toWorld(e.clientX, e.clientY);
+    const dropCenterX = x - shape.w / 2;
+    const dropCenterY = y - shape.h / 2;
+    const currLanes = lanesRef.current;
+    const targetLane =
+      laneAtY(dropCenterY + shape.h / 2, currLanes) ?? currLanes[0];
+    if (!targetLane) return;
+    const maxRel = Math.max(0, targetLane.h - shape.h);
+    const rel = Math.max(
+      0,
+      Math.min(maxRel, dropCenterY - targetLane.y)
+    );
+    try {
+      const created = await api.createNode(projectId, modelId, versionId, {
+        type: shape.backendType,
+        name: shape.defaultName,
+        lane_id: targetLane.id,
+        x: dropCenterX,
+        relative_y: rel,
+      });
+      const newNode: CanvasNode = {
+        id: created.id,
+        kind: shape.kind,
+        label: created.name,
+        laneId: targetLane.id,
+        x: dropCenterX,
+        relativeY: rel,
+        w: shape.w,
+        h: shape.h,
+      };
+      setNodes((curr) => [...curr, newNode]);
+      setSelectedId(newNode.id);
+    } catch (err) {
+      console.error("Failed to create node from palette", err);
+    }
+  };
+
   const fitToWorld = useCallback(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -449,6 +505,8 @@ export function BpmnCanvas({
       <svg
         ref={svgRef}
         onMouseDown={onSvgMouseDown}
+        onDragOver={onCanvasDragOver}
+        onDrop={onCanvasDrop}
         style={{
           width: "100%",
           height: "100%",
@@ -550,6 +608,8 @@ export function BpmnCanvas({
         onAddLaneAt={addLaneAt}
         onDeleteLane={deleteLane}
       />
+
+      <ShapePalette />
 
       <FloatingToolbar
         tool={tool}

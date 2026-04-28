@@ -142,6 +142,14 @@ export interface NodeUpdate {
   relative_y?: number;
 }
 
+export interface NodeCreate {
+  type: string;
+  name: string;
+  lane_id: UUID;
+  x: number;
+  relative_y: number;
+}
+
 export interface CitationDetail {
   citation_id: UUID;
   chunk_id: UUID;
