@@ -88,7 +88,7 @@ class NodeIssueRead(BaseModel):
     open conflicts touching this node's claims."""
 
     node_id: UUID
-    severity: str = Field(pattern=r"^(low|medium|high)$")
+    severity: str = Field(pattern=r"^(medium|high)$")
     conflict_count: int
 
 

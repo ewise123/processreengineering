@@ -9,7 +9,6 @@ import type { CanvasEdge, ResolvedNode } from "./types";
 const ISSUE_FILL: Record<IssueSeverity, string> = {
   high: "#dc2626",
   medium: "#d97706",
-  low: "#64748b",
 };
 
 export function NodeShape({
