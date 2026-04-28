@@ -222,7 +222,10 @@ export function LaneRail({
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                overflow: "hidden",
+                // Visible so the rotated label can extend past the 44px rail
+                // strip box (rotation maps width→visual height; the parent's
+                // narrow horizontal box must not clip).
+                overflow: "visible",
               }}
             >
               {isEditing ? (
@@ -241,8 +244,8 @@ export function LaneRail({
                   style={{
                     transform: "rotate(-90deg)",
                     transformOrigin: "center",
-                    width: `${Math.max(80, height - 24)}px`,
-                    fontSize: 11,
+                    width: `${Math.max(120, height - 24)}px`,
+                    fontSize: 10,
                     fontWeight: 600,
                     padding: "3px 6px",
                     border: "1px solid #0f172a",
@@ -259,17 +262,15 @@ export function LaneRail({
                   style={{
                     transform: "rotate(-90deg)",
                     transformOrigin: "center",
-                    fontSize: 11,
+                    fontSize: 10,
                     fontWeight: 600,
                     color: "#475569",
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
-                    // Cap based on lane's WORLD height (constant per lane, not
-                    // affected by zoom) so reasonable lane names stay legible
-                    // at every zoom level. Truncation only kicks in for labels
-                    // longer than the lane's world height in pixels.
-                    maxWidth: `${Math.max(140, lane.h - 16)}px`,
+                    // World-height-based cap with a generous floor so default
+                    // 150px lanes can fit ~25-char labels at any zoom level.
+                    maxWidth: `${Math.max(200, lane.h - 8)}px`,
                     cursor: "text",
                     userSelect: "none",
                   }}
