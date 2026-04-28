@@ -162,6 +162,7 @@ function BpmnCanvas({
   const [tool, setTool] = useState<CanvasTool>("select");
   const [showIssues, setShowIssues] = useState(true);
   const [reviewMode, setReviewMode] = useState(false);
+  const [editingEdgeId, setEditingEdgeId] = useState<UUID | null>(null);
 
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
@@ -219,6 +220,36 @@ function BpmnCanvas({
       });
     },
     [projectId, modelId, versionId, record]
+  );
+
+  const updateEdgeLabelLocal = useCallback(
+    async (id: UUID, label: string | null) => {
+      const updated = await api.updateEdge(projectId, id, { label });
+      setEdges((curr) =>
+        curr.map((e) =>
+          e.id === id ? { ...e, label: updated.label ?? null } : e
+        )
+      );
+    },
+    [projectId]
+  );
+
+  const commitEdgeLabel = useCallback(
+    async (id: UUID, raw: string) => {
+      const trimmed = raw.trim();
+      const newLabel = trimmed === "" ? null : trimmed;
+      const existing = edgesRef.current.find((e) => e.id === id);
+      if (!existing) return;
+      const oldLabel = existing.label;
+      if (oldLabel === newLabel) return;
+      await updateEdgeLabelLocal(id, newLabel);
+      record({
+        description: "Edit edge label",
+        do: () => updateEdgeLabelLocal(id, newLabel),
+        undo: () => updateEdgeLabelLocal(id, oldLabel),
+      });
+    },
+    [updateEdgeLabelLocal, record]
   );
 
   const createEdgeImpl = useCallback(
@@ -964,6 +995,10 @@ function BpmnCanvas({
               nodes={renderNodes}
               selected={selectedId === edge.id}
               onClick={(id) => setSelectedId(id)}
+              onDoubleClick={(id) => {
+                setSelectedId(id);
+                setEditingEdgeId(id);
+              }}
             />
           ))}
           {renderNodes.map((node) => (
@@ -977,6 +1012,27 @@ function BpmnCanvas({
               onStartConnect={onStartConnect}
             />
           ))}
+          {editingEdgeId &&
+            (() => {
+              const edge = edges.find((e) => e.id === editingEdgeId);
+              if (!edge) return null;
+              const from = renderNodes.find((n) => n.id === edge.from);
+              const to = renderNodes.find((n) => n.id === edge.to);
+              if (!from || !to) return null;
+              const { midX, midY } = buildEdgePath(from, to);
+              return (
+                <EdgeLabelEditor
+                  x={midX}
+                  y={midY}
+                  initial={edge.label ?? ""}
+                  onCommit={(value) => {
+                    setEditingEdgeId(null);
+                    void commitEdgeLabel(edge.id, value);
+                  }}
+                  onCancel={() => setEditingEdgeId(null)}
+                />
+              );
+            })()}
           {drag?.type === "connect" &&
             (() => {
               const source = renderNodes.find((n) => n.id === drag.sourceId);
@@ -1022,6 +1078,7 @@ function BpmnCanvas({
 
       <ShapePalette />
 
+      {/* end SVG */}
       <FloatingToolbar
         tool={tool}
         onToolChange={setTool}
@@ -1041,3 +1098,58 @@ function BpmnCanvas({
     </div>
   );
 });
+
+function EdgeLabelEditor({
+  x,
+  y,
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  x: number;
+  y: number;
+  initial: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const W = 120;
+  const H = 24;
+  return (
+    <foreignObject x={x - W / 2} y={y - H / 2} width={W} height={H}>
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => onCommit(value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            (e.currentTarget as HTMLInputElement).blur();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+          // Don't let Cmd+Z bubble to the canvas-level shortcut.
+          e.stopPropagation();
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+        placeholder="label…"
+        style={{
+          width: "100%",
+          height: "100%",
+          padding: "0 6px",
+          fontSize: 11,
+          fontFamily: "inherit",
+          textAlign: "center",
+          background: "#fff",
+          border: "1.5px solid #0f172a",
+          borderRadius: 4,
+          color: "#0f172a",
+          outline: "none",
+          boxShadow: "0 2px 6px rgba(15,23,42,0.18)",
+        }}
+      />
+    </foreignObject>
+  );
+}

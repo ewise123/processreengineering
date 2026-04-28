@@ -156,6 +156,10 @@ export interface EdgeCreate {
   label?: string | null;
 }
 
+export interface EdgeUpdate {
+  label?: string | null;
+}
+
 export interface CitationDetail {
   citation_id: UUID;
   chunk_id: UUID;

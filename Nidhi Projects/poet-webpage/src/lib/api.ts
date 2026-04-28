@@ -7,6 +7,7 @@ import type {
   InputParseResult,
   InputRow,
   EdgeCreate,
+  EdgeUpdate,
   LaneCreate,
   LaneUpdate,
   NodeCitations,
@@ -190,6 +191,11 @@ export const api = {
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/edges`,
       { method: "POST", json: body }
     ),
+  updateEdge: (projectId: UUID, edgeId: UUID, body: EdgeUpdate) =>
+    request<ProcessEdge>(`/api/v2/projects/${projectId}/edges/${edgeId}`, {
+      method: "PATCH",
+      json: body,
+    }),
   deleteEdge: (projectId: UUID, edgeId: UUID) =>
     request<void>(`/api/v2/projects/${projectId}/edges/${edgeId}`, {
       method: "DELETE",

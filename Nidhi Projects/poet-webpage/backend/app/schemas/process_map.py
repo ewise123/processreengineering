@@ -73,6 +73,13 @@ class EdgeCreate(BaseModel):
     label: str | None = Field(default=None, max_length=300)
 
 
+class EdgeUpdate(BaseModel):
+    """Partial update for an edge. Empty-string labels are normalized to None
+    on the server so the persisted state matches 'no label'."""
+
+    label: str | None = Field(default=None, max_length=300)
+
+
 class CitationDetail(BaseModel):
     """A single supporting quote with the input + section it came from."""
 

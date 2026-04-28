@@ -33,6 +33,7 @@ from app.schemas.process_map import (
     ClaimSummary,
     ClaimWithCitations,
     EdgeCreate,
+    EdgeUpdate,
     LaneCreate,
     LaneUpdate,
     NodeCitationsRead,
@@ -556,6 +557,25 @@ def create_edge(
         label=payload.label,
     )
     db.add(edge)
+    db.commit()
+    db.refresh(edge)
+    return edge
+
+
+@router.patch("/edges/{edge_id}", response_model=ProcessEdgeRead)
+def update_edge(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    edge_id: UUID,
+    payload: EdgeUpdate,
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessEdge:
+    edge = db.get(ProcessEdge, edge_id)
+    if edge is None:
+        raise HTTPException(status_code=404, detail="Edge not found")
+    _check_edge_in_project(edge, project.id, db)
+    if "label" in payload.model_fields_set:
+        # Empty string ↔ "no label" so the round-trip is consistent.
+        edge.label = payload.label or None
     db.commit()
     db.refresh(edge)
     return edge

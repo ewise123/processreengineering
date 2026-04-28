@@ -271,11 +271,13 @@ export function EdgeArrow({
   nodes,
   selected,
   onClick,
+  onDoubleClick,
 }: {
   edge: CanvasEdge;
   nodes: ResolvedNode[];
   selected: boolean;
   onClick: (id: string) => void;
+  onDoubleClick?: (id: string) => void;
 }) {
   const from = nodes.find((n) => n.id === edge.from);
   const to = nodes.find((n) => n.id === edge.to);
@@ -288,6 +290,11 @@ export function EdgeArrow({
       onClick={(e) => {
         e.stopPropagation();
         onClick(edge.id);
+      }}
+      onDoubleClick={(e) => {
+        if (!onDoubleClick) return;
+        e.stopPropagation();
+        onDoubleClick(edge.id);
       }}
       style={{ cursor: "pointer" }}
     >
