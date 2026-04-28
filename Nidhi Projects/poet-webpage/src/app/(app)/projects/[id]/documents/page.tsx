@@ -32,6 +32,9 @@ export default function DocumentsPage() {
         `Extracted ${res.claim_count} claim(s) from input.`
       );
       qc.invalidateQueries({ queryKey: ["claims", id] });
+      // Re-extracting wipes prior claims for this input, so any cached
+      // conflicts referencing them are now stale.
+      qc.invalidateQueries({ queryKey: ["conflicts", id] });
     },
     onError: (e: Error) => toast.error(`Extraction failed: ${e.message}`),
   });

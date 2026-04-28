@@ -35,6 +35,10 @@ export default function ConflictsPage() {
         `Scanned ${res.claim_count} claim(s) — ${res.new_conflict_count} new conflict(s).`
       );
       qc.invalidateQueries({ queryKey: ["conflicts", id] });
+      // Defensive: ensures the Claims tab refetches even if the user navigates
+      // back during the long detection round-trip. Detection itself doesn't
+      // mutate claims, but co-invalidating prevents any stale render.
+      qc.invalidateQueries({ queryKey: ["claims", id] });
     },
     onError: (e: Error) => toast.error(`Detection failed: ${e.message}`),
   });
