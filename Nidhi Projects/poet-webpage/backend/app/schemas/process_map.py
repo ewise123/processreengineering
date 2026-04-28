@@ -82,6 +82,16 @@ class NodeCitationsRead(BaseModel):
     claims: list[ClaimWithCitations]
 
 
+class NodeIssueRead(BaseModel):
+    """Surfaces open conflicts on claims linked to a given node so the canvas
+    can render an issue badge. Severity is derived from the count of distinct
+    open conflicts touching this node's claims."""
+
+    node_id: UUID
+    severity: str = Field(pattern=r"^(low|medium|high)$")
+    conflict_count: int
+
+
 class ProcessNodeRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID

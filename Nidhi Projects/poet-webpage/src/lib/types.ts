@@ -193,6 +193,14 @@ export interface ProcessGraph {
   edges: ProcessEdge[];
 }
 
+export type IssueSeverity = "low" | "medium" | "high";
+
+export interface NodeIssue {
+  node_id: UUID;
+  severity: IssueSeverity;
+  conflict_count: number;
+}
+
 export interface ProcessMapGenerateRequest {
   name: string;
   level: string;

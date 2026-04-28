@@ -9,6 +9,7 @@ import type {
   LaneCreate,
   LaneUpdate,
   NodeCitations,
+  NodeIssue,
   NodeUpdate,
   Page,
   ProcessGraph,
@@ -161,6 +162,10 @@ export const api = {
   getProcessGraph: (projectId: UUID, modelId: UUID, versionId: UUID) =>
     request<ProcessGraph>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}`
+    ),
+  getProcessMapIssues: (projectId: UUID, modelId: UUID, versionId: UUID) =>
+    request<NodeIssue[]>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/issues`
     ),
   updateNode: (projectId: UUID, nodeId: UUID, body: NodeUpdate) =>
     request<ProcessNode>(`/api/v2/projects/${projectId}/nodes/${nodeId}`, {

@@ -10,8 +10,9 @@ import {
 } from "react";
 
 import { api } from "@/lib/api";
-import type { UUID } from "@/lib/types";
+import type { IssueSeverity, UUID } from "@/lib/types";
 
+import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT } from "./layout";
 import { EdgeArrow, NodeShape } from "./shapes";
@@ -58,6 +59,7 @@ export function BpmnCanvas({
   initialNodes,
   initialEdges,
   initialLanes,
+  issuesByNode,
   onSaveStatusChange,
   onSelectionChange,
 }: {
@@ -67,6 +69,7 @@ export function BpmnCanvas({
   initialNodes: CanvasNode[];
   initialEdges: CanvasEdge[];
   initialLanes: CanvasLane[];
+  issuesByNode?: Record<string, IssueSeverity>;
   onSaveStatusChange?: (status: SaveStatus, error: string | null) => void;
   onSelectionChange?: (
     selected:
@@ -91,6 +94,12 @@ export function BpmnCanvas({
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [tool, setTool] = useState<CanvasTool>("select");
+  const [showIssues, setShowIssues] = useState(true);
+  const [reviewMode, setReviewMode] = useState(false);
+
+  const issuesMap = issuesByNode ?? {};
+  const issueCount = Object.keys(issuesMap).length;
 
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
@@ -506,6 +515,7 @@ export function BpmnCanvas({
               key={node.id}
               node={node}
               selected={selectedId === node.id}
+              issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
               onMouseDown={onNodeMouseDown}
             />
           ))}
@@ -520,6 +530,18 @@ export function BpmnCanvas({
         onRenameLane={renameLane}
         onAddLaneAt={addLaneAt}
         onDeleteLane={deleteLane}
+      />
+
+      <FloatingToolbar
+        tool={tool}
+        onToolChange={setTool}
+        viewport={viewport}
+        onViewportChange={setViewport}
+        showIssues={showIssues}
+        onShowIssuesChange={setShowIssues}
+        reviewMode={reviewMode}
+        onReviewModeChange={setReviewMode}
+        issueCount={issueCount}
       />
     </div>
   );

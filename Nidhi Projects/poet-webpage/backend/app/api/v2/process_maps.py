@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -11,6 +11,7 @@ from app.api.v2.deps import get_current_user, get_project_or_404
 from app.db.session import get_db
 from app.enums import (
     ClaimLinkKind,
+    ConflictStatus,
     NodeType,
     ProcessVersionStatus,
 )
@@ -25,7 +26,7 @@ from app.models.process import (
     ProcessVersion,
 )
 from app.models.project import Project
-from app.models.claim import Claim, ClaimCitation
+from app.models.claim import Claim, ClaimCitation, ClaimConflict
 from app.models.input import Chunk, DocumentSection, Input
 from app.schemas.process_map import (
     CitationDetail,
@@ -33,6 +34,7 @@ from app.schemas.process_map import (
     LaneCreate,
     LaneUpdate,
     NodeCitationsRead,
+    NodeIssueRead,
     NodeUpdate,
     ProcessEdgeRead,
     ProcessGraphRead,
@@ -693,3 +695,50 @@ def get_process_graph(
         nodes=[ProcessNodeRead.model_validate(n) for n in nodes],
         edges=[ProcessEdgeRead.model_validate(e) for e in edges],
     )
+
+
+@router.get(
+    "/process-maps/{model_id}/versions/{version_id}/issues",
+    response_model=list[NodeIssueRead],
+)
+def list_process_map_issues(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[NodeIssueRead]:
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+
+    rows = db.execute(
+        select(
+            NodeClaimLink.node_id,
+            func.count(func.distinct(ClaimConflict.id)).label("cnt"),
+        )
+        .join(ProcessNode, NodeClaimLink.node_id == ProcessNode.id)
+        .join(
+            ClaimConflict,
+            or_(
+                ClaimConflict.claim_a_id == NodeClaimLink.claim_id,
+                ClaimConflict.claim_b_id == NodeClaimLink.claim_id,
+            ),
+        )
+        .where(
+            ProcessNode.version_id == version.id,
+            ClaimConflict.resolution_status == ConflictStatus.DETECTED.value,
+        )
+        .group_by(NodeClaimLink.node_id)
+    ).all()
+
+    issues: list[NodeIssueRead] = []
+    for node_id, cnt in rows:
+        # 2+ open conflicts touching this node = high; 1 = medium.
+        severity = "high" if cnt >= 2 else "medium"
+        issues.append(
+            NodeIssueRead(node_id=node_id, severity=severity, conflict_count=cnt)
+        )
+    return issues
