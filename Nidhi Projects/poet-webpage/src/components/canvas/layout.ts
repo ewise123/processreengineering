@@ -133,6 +133,8 @@ export function buildCanvasState(graph: ProcessGraph): {
     from: e.source_node_id,
     to: e.target_node_id,
     label: e.label,
+    bendX: e.bend_x ?? null,
+    bendY: e.bend_y ?? null,
   }));
 
   return { nodes, edges, lanes };

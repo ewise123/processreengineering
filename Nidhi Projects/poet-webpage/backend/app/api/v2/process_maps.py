@@ -576,6 +576,10 @@ def update_edge(
     if "label" in payload.model_fields_set:
         # Empty string ↔ "no label" so the round-trip is consistent.
         edge.label = payload.label or None
+    if "bend_x" in payload.model_fields_set:
+        edge.bend_x = payload.bend_x
+    if "bend_y" in payload.model_fields_set:
+        edge.bend_y = payload.bend_y
     db.commit()
     db.refresh(edge)
     return edge

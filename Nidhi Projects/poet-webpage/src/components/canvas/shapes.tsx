@@ -26,10 +26,21 @@ interface SimpleRect {
  * (perpendicular to its closest side), instead of disappearing into it.
  * Produces a 3-segment L-shape with one horizontal+one vertical bend.
  */
+export type EdgeOrientation = "horizontal" | "vertical";
+
 export function buildEdgePath(
   from: SimpleRect,
-  to: SimpleRect
-): { d: string; midX: number; midY: number } {
+  to: SimpleRect,
+  overrides?: { bendX?: number | null; bendY?: number | null }
+): {
+  d: string;
+  midX: number;
+  midY: number;
+  orientation: EdgeOrientation;
+  /** The two segment endpoints of the draggable middle segment, in the
+   * canvas coordinate system. */
+  midSegment: { x1: number; y1: number; x2: number; y2: number };
+} {
   const fc = { x: from.x + from.w / 2, y: from.y + from.h / 2 };
   const tc = { x: to.x + to.w / 2, y: to.y + to.h / 2 };
   const dx = tc.x - fc.x;
@@ -40,22 +51,32 @@ export function buildEdgePath(
     const entryX = dx >= 0 ? to.x : to.x + to.w;
     const exitY = fc.y;
     const entryY = tc.y;
-    const midX = (exitX + entryX) / 2;
+    const midX =
+      typeof overrides?.bendX === "number"
+        ? overrides.bendX
+        : (exitX + entryX) / 2;
     return {
       d: `M ${exitX} ${exitY} L ${midX} ${exitY} L ${midX} ${entryY} L ${entryX} ${entryY}`,
       midX,
       midY: (exitY + entryY) / 2,
+      orientation: "horizontal",
+      midSegment: { x1: midX, y1: exitY, x2: midX, y2: entryY },
     };
   }
   const exitY = dy >= 0 ? from.y + from.h : from.y;
   const entryY = dy >= 0 ? to.y : to.y + to.h;
   const exitX = fc.x;
   const entryX = tc.x;
-  const midY = (exitY + entryY) / 2;
+  const midY =
+    typeof overrides?.bendY === "number"
+      ? overrides.bendY
+      : (exitY + entryY) / 2;
   return {
     d: `M ${exitX} ${exitY} L ${exitX} ${midY} L ${entryX} ${midY} L ${entryX} ${entryY}`,
     midX: (exitX + entryX) / 2,
     midY,
+    orientation: "vertical",
+    midSegment: { x1: exitX, y1: midY, x2: entryX, y2: midY },
   };
 }
 
@@ -272,18 +293,28 @@ export function EdgeArrow({
   selected,
   onClick,
   onDoubleClick,
+  onStartBendDrag,
 }: {
   edge: CanvasEdge;
   nodes: ResolvedNode[];
   selected: boolean;
   onClick: (id: string) => void;
   onDoubleClick?: (id: string) => void;
+  /** Fires when the user grabs the middle segment of a selected edge. */
+  onStartBendDrag?: (
+    e: MouseEvent,
+    edgeId: UUID,
+    orientation: EdgeOrientation
+  ) => void;
 }) {
   const from = nodes.find((n) => n.id === edge.from);
   const to = nodes.find((n) => n.id === edge.to);
   if (!from || !to) return null;
 
-  const { d, midX, midY } = buildEdgePath(from, to);
+  const { d, midX, midY, orientation, midSegment } = buildEdgePath(from, to, {
+    bendX: edge.bendX,
+    bendY: edge.bendY,
+  });
 
   return (
     <g
@@ -307,6 +338,25 @@ export function EdgeArrow({
       />
       {/* Hit-area for click */}
       <path d={d} fill="none" stroke="transparent" strokeWidth={12} />
+      {selected && onStartBendDrag && (
+        // Wider, draggable hit-area on the middle segment only — perpendicular
+        // drag reshapes the orthogonal route.
+        <line
+          x1={midSegment.x1}
+          y1={midSegment.y1}
+          x2={midSegment.x2}
+          y2={midSegment.y2}
+          stroke="transparent"
+          strokeWidth={14}
+          style={{
+            cursor: orientation === "horizontal" ? "ew-resize" : "ns-resize",
+          }}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            onStartBendDrag(e, edge.id, orientation);
+          }}
+        />
+      )}
       {edge.label && (
         <g>
           <rect

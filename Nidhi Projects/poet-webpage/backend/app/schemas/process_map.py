@@ -78,6 +78,8 @@ class EdgeUpdate(BaseModel):
     on the server so the persisted state matches 'no label'."""
 
     label: str | None = Field(default=None, max_length=300)
+    bend_x: float | None = None
+    bend_y: float | None = None
 
 
 class CitationDetail(BaseModel):
@@ -166,6 +168,8 @@ class ProcessEdgeRead(BaseModel):
     target_node_id: UUID
     label: str | None
     condition_text: str | None
+    bend_x: float | None = None
+    bend_y: float | None = None
 
 
 class ProcessVersionRead(BaseModel):

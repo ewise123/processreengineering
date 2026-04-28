@@ -29,6 +29,7 @@ import {
   NodeShape,
   sidePoint,
   type ConnectSide,
+  type EdgeOrientation,
 } from "./shapes";
 import type {
   CanvasEdge,
@@ -75,6 +76,14 @@ type Drag =
       // Live cursor position in world coords for the temp line.
       currX: number;
       currY: number;
+    }
+  | {
+      type: "edgeBend";
+      edgeId: UUID;
+      orientation: EdgeOrientation;
+      // The persisted bend value before the drag started, so we can record
+      // an undo entry that snaps back to it.
+      origBend: number | null;
     };
 
 /** Orthogonal preview path from a node-side anchor toward an arbitrary
@@ -469,6 +478,49 @@ function BpmnCanvas({
     });
   };
 
+  const onStartBendDrag = useCallback(
+    (e: MouseEvent, edgeId: UUID, orientation: EdgeOrientation) => {
+      e.stopPropagation();
+      const edge = edgesRef.current.find((ed) => ed.id === edgeId);
+      if (!edge) return;
+      const origBend =
+        orientation === "horizontal"
+          ? edge.bendX ?? null
+          : edge.bendY ?? null;
+      setDrag({ type: "edgeBend", edgeId, orientation, origBend });
+    },
+    []
+  );
+
+  const applyEdgeBendLocal = useCallback(
+    async (
+      id: UUID,
+      orientation: EdgeOrientation,
+      value: number | null
+    ) => {
+      setEdges((curr) =>
+        curr.map((e) =>
+          e.id === id
+            ? {
+                ...e,
+                ...(orientation === "horizontal"
+                  ? { bendX: value }
+                  : { bendY: value }),
+              }
+            : e
+        )
+      );
+      await api.updateEdge(
+        projectId,
+        id,
+        orientation === "horizontal"
+          ? { bend_x: value }
+          : { bend_y: value }
+      );
+    },
+    [projectId]
+  );
+
   const onStartConnect = useCallback(
     (e: MouseEvent, sourceId: UUID, side: ConnectSide) => {
       e.stopPropagation();
@@ -516,6 +568,23 @@ function BpmnCanvas({
         setDrag({ ...drag, currX: x, currY: y });
         return;
       }
+      if (drag.type === "edgeBend") {
+        const { x, y } = screenToWorld(e.clientX, e.clientY);
+        const value = drag.orientation === "horizontal" ? x : y;
+        setEdges((curr) =>
+          curr.map((ed) =>
+            ed.id === drag.edgeId
+              ? {
+                  ...ed,
+                  ...(drag.orientation === "horizontal"
+                    ? { bendX: value }
+                    : { bendY: value }),
+                }
+              : ed
+          )
+        );
+        return;
+      }
       if (drag.type === "node") {
         const { x, y } = screenToWorld(e.clientX, e.clientY);
         const newX = x - drag.offX;
@@ -556,6 +625,37 @@ function BpmnCanvas({
     };
 
     const onUp = (e: globalThis.MouseEvent) => {
+      if (drag.type === "edgeBend") {
+        const final = edgesRef.current.find((ed) => ed.id === drag.edgeId);
+        if (final) {
+          const finalValue =
+            drag.orientation === "horizontal"
+              ? final.bendX ?? null
+              : final.bendY ?? null;
+          if (finalValue !== drag.origBend) {
+            // Persist the new bend, plus record the inverse for undo.
+            void api
+              .updateEdge(
+                projectId,
+                drag.edgeId,
+                drag.orientation === "horizontal"
+                  ? { bend_x: finalValue }
+                  : { bend_y: finalValue }
+              )
+              .catch((err) => console.error("Failed to save edge bend", err));
+            const edgeId = drag.edgeId;
+            const orientation = drag.orientation;
+            const origBend = drag.origBend;
+            record({
+              description: "Move edge segment",
+              do: () => applyEdgeBendLocal(edgeId, orientation, finalValue),
+              undo: () => applyEdgeBendLocal(edgeId, orientation, origBend),
+            });
+          }
+        }
+        setDrag(null);
+        return;
+      }
       if (drag.type === "connect") {
         const { x, y } = screenToWorld(e.clientX, e.clientY);
         const target = nodesRef.current.find((n) => {
@@ -629,7 +729,7 @@ function BpmnCanvas({
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
-  }, [drag, markNode, record, createEdgeImpl]);
+  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
   const onCanvasDragOver = (e: ReactDragEvent<SVGSVGElement>) => {
@@ -999,6 +1099,7 @@ function BpmnCanvas({
                 setSelectedId(id);
                 setEditingEdgeId(id);
               }}
+              onStartBendDrag={onStartBendDrag}
             />
           ))}
           {renderNodes.map((node) => (

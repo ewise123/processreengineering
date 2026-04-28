@@ -158,6 +158,8 @@ export interface EdgeCreate {
 
 export interface EdgeUpdate {
   label?: string | null;
+  bend_x?: number | null;
+  bend_y?: number | null;
 }
 
 export interface CitationDetail {
@@ -202,6 +204,8 @@ export interface ProcessEdge {
   target_node_id: UUID;
   label: string | null;
   condition_text: string | null;
+  bend_x?: number | null;
+  bend_y?: number | null;
 }
 
 export interface ProcessGraph {
