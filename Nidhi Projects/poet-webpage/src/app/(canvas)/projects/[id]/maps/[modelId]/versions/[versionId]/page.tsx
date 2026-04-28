@@ -66,6 +66,13 @@ export default function CanvasPage() {
       if (!canvasRef.current) return;
       await canvasRef.current.deleteNode(id);
       setSelected(null);
+    },
+    []
+  );
+
+  const handleNodeDeleted = useCallback(
+    (_id: UUID) => {
+      setSelected(null);
       queryClient.invalidateQueries({
         queryKey: ["issues", params.id, params.modelId, params.versionId],
       });
@@ -229,6 +236,7 @@ export default function CanvasPage() {
           issuesByNode={issuesByNode}
           onSaveStatusChange={handleSaveStatusChange}
           onSelectionChange={handleSelectionChange}
+          onNodeDeleted={handleNodeDeleted}
         />
       )}
 

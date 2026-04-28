@@ -87,6 +87,9 @@ interface BpmnCanvasProps {
         }
       | null
   ) => void;
+  /** Fires after a node is removed (via panel Delete or keyboard). The page
+   * uses this to invalidate dependent queries like issue badges. */
+  onNodeDeleted?: (id: UUID) => void;
 }
 
 export const BpmnCanvas = forwardRef<BpmnCanvasHandle, BpmnCanvasProps>(
@@ -100,6 +103,7 @@ function BpmnCanvas({
   issuesByNode,
   onSaveStatusChange,
   onSelectionChange,
+  onNodeDeleted,
 }, ref) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState(initialNodes);
@@ -119,20 +123,45 @@ function BpmnCanvas({
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      deleteNode: async (id) => {
-        await api.deleteNode(projectId, id);
-        setNodes((curr) => curr.filter((n) => n.id !== id));
-        setEdges((curr) =>
-          curr.filter((e) => e.from !== id && e.to !== id)
-        );
-        setSelectedId((curr) => (curr === id ? null : curr));
-      },
-    }),
-    [projectId]
+  const deleteNodeImpl = useCallback(
+    async (id: UUID) => {
+      await api.deleteNode(projectId, id);
+      setNodes((curr) => curr.filter((n) => n.id !== id));
+      setEdges((curr) => curr.filter((e) => e.from !== id && e.to !== id));
+      setSelectedId((curr) => (curr === id ? null : curr));
+      onNodeDeleted?.(id);
+    },
+    [projectId, onNodeDeleted]
   );
+
+  useImperativeHandle(ref, () => ({ deleteNode: deleteNodeImpl }), [
+    deleteNodeImpl,
+  ]);
+
+  // Keyboard delete: when a node is selected and the user isn't typing in
+  // an input, Delete/Backspace removes it. Same code path as the panel's
+  // Delete button.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (!selectedId) return;
+      const isNode = nodesRef.current.some((n) => n.id === selectedId);
+      if (!isNode) return;
+      e.preventDefault();
+      void deleteNodeImpl(selectedId);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [selectedId, deleteNodeImpl]);
 
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
