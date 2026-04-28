@@ -302,6 +302,25 @@ export function BpmnCanvas({
   }, [drag, markNode]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
+  const fitToWorld = useCallback(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const padding = 40;
+    const usableW = Math.max(1, rect.width - padding * 2);
+    const usableH = Math.max(1, rect.height - padding * 2);
+    const scale = Math.max(
+      0.3,
+      Math.min(2.5, Math.min(usableW / worldWidth, usableH / worldHeight))
+    );
+    setViewport({
+      scale,
+      tx: (rect.width - worldWidth * scale) / 2,
+      ty: (rect.height - worldHeight * scale) / 2,
+    });
+  }, [worldWidth, worldHeight]);
+
   const recomputeY = (ls: CanvasLane[]): CanvasLane[] => {
     let y = 0;
     return ls.map((l) => {
@@ -537,6 +556,7 @@ export function BpmnCanvas({
         onToolChange={setTool}
         viewport={viewport}
         onViewportChange={setViewport}
+        onFit={fitToWorld}
         showIssues={showIssues}
         onShowIssuesChange={setShowIssues}
         reviewMode={reviewMode}

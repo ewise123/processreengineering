@@ -11,6 +11,7 @@ export function FloatingToolbar({
   onToolChange,
   viewport,
   onViewportChange,
+  onFit,
   showIssues,
   onShowIssuesChange,
   reviewMode,
@@ -25,6 +26,7 @@ export function FloatingToolbar({
   onToolChange: (tool: CanvasTool) => void;
   viewport: Viewport;
   onViewportChange: (viewport: Viewport) => void;
+  onFit: () => void;
   showIssues: boolean;
   onShowIssuesChange: (next: boolean) => void;
   reviewMode: boolean;
@@ -137,8 +139,8 @@ export function FloatingToolbar({
           +
         </PlainButton>
         <PlainButton
-          onClick={() => onViewportChange({ scale: 1, tx: 60, ty: 60 })}
-          title="Reset view"
+          onClick={onFit}
+          title="Fit swimlanes to view"
           style={{ fontSize: 11, padding: "0 8px" }}
         >
           Fit
