@@ -40,6 +40,11 @@ export interface CanvasEdge {
   from: UUID;
   to: UUID;
   label: string | null;
+  /** Optional user-set X-coordinate of the vertical mid-segment when the
+   * edge routes horizontally. */
+  bendX?: number | null;
+  /** Y-coordinate of the horizontal mid-segment for vertical-routed edges. */
+  bendY?: number | null;
 }
 
 export interface CanvasLane {

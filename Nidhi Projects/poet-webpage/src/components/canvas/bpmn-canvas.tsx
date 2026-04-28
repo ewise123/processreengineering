@@ -23,7 +23,14 @@ import {
   PALETTE_SHAPES,
   ShapePalette,
 } from "./shape-palette";
-import { EdgeArrow, NodeShape } from "./shapes";
+import {
+  buildEdgePath,
+  EdgeArrow,
+  NodeShape,
+  sidePoint,
+  type ConnectSide,
+  type EdgeOrientation,
+} from "./shapes";
 import type {
   CanvasEdge,
   CanvasLane,
@@ -61,7 +68,42 @@ type Drag =
       origRelativeY: number;
       origLaneId: UUID | null;
     }
-  | { type: "pan"; startX: number; startY: number; tx0: number; ty0: number };
+  | { type: "pan"; startX: number; startY: number; tx0: number; ty0: number }
+  | {
+      type: "connect";
+      sourceId: UUID;
+      sourceSide: ConnectSide;
+      // Live cursor position in world coords for the temp line.
+      currX: number;
+      currY: number;
+    }
+  | {
+      type: "edgeBend";
+      edgeId: UUID;
+      orientation: EdgeOrientation;
+      // The persisted bend value before the drag started, so we can record
+      // an undo entry that snaps back to it.
+      origBend: number | null;
+    };
+
+/** Orthogonal preview path from a node-side anchor toward an arbitrary
+ * cursor point. The first segment extends perpendicular to the source side
+ * so the preview clearly shows which side the connection will exit. */
+function buildPreviewToCursor(
+  source: { x: number; y: number; w: number; h: number },
+  sourceSide: ConnectSide,
+  cx: number,
+  cy: number
+): string {
+  const start = sidePoint(source, sourceSide);
+  const isHorizontal = sourceSide === "left" || sourceSide === "right";
+  if (isHorizontal) {
+    const midX = (start.x + cx) / 2;
+    return `M ${start.x} ${start.y} L ${midX} ${start.y} L ${midX} ${cy} L ${cx} ${cy}`;
+  }
+  const midY = (start.y + cy) / 2;
+  return `M ${start.x} ${start.y} L ${start.x} ${midY} L ${cx} ${midY} L ${cx} ${cy}`;
+}
 
 function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
   if (lanes.length === 0) return undefined;
@@ -129,6 +171,7 @@ function BpmnCanvas({
   const [tool, setTool] = useState<CanvasTool>("select");
   const [showIssues, setShowIssues] = useState(true);
   const [reviewMode, setReviewMode] = useState(false);
+  const [editingEdgeId, setEditingEdgeId] = useState<UUID | null>(null);
 
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
@@ -144,6 +187,111 @@ function BpmnCanvas({
       onNodeDeleted?.(id);
     },
     [projectId, onNodeDeleted]
+  );
+
+  const deleteEdgeImpl = useCallback(
+    async (id: UUID) => {
+      const edge = edgesRef.current.find((e) => e.id === id);
+      if (!edge) return;
+      // currentId tracks whichever UUID the edge has now — across undo/redo
+      // cycles, recreating issues a NEW id, so the next delete must use it.
+      let currentId = id;
+      const remove = (rid: UUID) => {
+        setEdges((curr) => curr.filter((e2) => e2.id !== rid));
+        setSelectedId((curr) => (curr === rid ? null : curr));
+      };
+      const recreate = async () => {
+        const created = await api.createEdge(projectId, modelId, versionId, {
+          source_node_id: edge.from,
+          target_node_id: edge.to,
+          label: edge.label,
+        });
+        currentId = created.id;
+        setEdges((curr) => [
+          ...curr,
+          {
+            id: currentId,
+            from: edge.from,
+            to: edge.to,
+            label: created.label ?? null,
+          },
+        ]);
+      };
+      await api.deleteEdge(projectId, currentId);
+      remove(currentId);
+      record({
+        description: "Delete edge",
+        do: async () => {
+          await api.deleteEdge(projectId, currentId);
+          remove(currentId);
+        },
+        undo: recreate,
+      });
+    },
+    [projectId, modelId, versionId, record]
+  );
+
+  const updateEdgeLabelLocal = useCallback(
+    async (id: UUID, label: string | null) => {
+      const updated = await api.updateEdge(projectId, id, { label });
+      setEdges((curr) =>
+        curr.map((e) =>
+          e.id === id ? { ...e, label: updated.label ?? null } : e
+        )
+      );
+    },
+    [projectId]
+  );
+
+  const commitEdgeLabel = useCallback(
+    async (id: UUID, raw: string) => {
+      const trimmed = raw.trim();
+      const newLabel = trimmed === "" ? null : trimmed;
+      const existing = edgesRef.current.find((e) => e.id === id);
+      if (!existing) return;
+      const oldLabel = existing.label;
+      if (oldLabel === newLabel) return;
+      await updateEdgeLabelLocal(id, newLabel);
+      record({
+        description: "Edit edge label",
+        do: () => updateEdgeLabelLocal(id, newLabel),
+        undo: () => updateEdgeLabelLocal(id, oldLabel),
+      });
+    },
+    [updateEdgeLabelLocal, record]
+  );
+
+  const createEdgeImpl = useCallback(
+    async (sourceId: UUID, targetId: UUID) => {
+      let currentId: UUID;
+      const create = async () => {
+        const created = await api.createEdge(projectId, modelId, versionId, {
+          source_node_id: sourceId,
+          target_node_id: targetId,
+        });
+        currentId = created.id;
+        setEdges((curr) => [
+          ...curr,
+          {
+            id: currentId,
+            from: sourceId,
+            to: targetId,
+            label: created.label ?? null,
+          },
+        ]);
+      };
+      await create();
+      record({
+        description: "Create edge",
+        do: create,
+        undo: async () => {
+          await api.deleteEdge(projectId, currentId);
+          setEdges((curr) => curr.filter((e) => e.id !== currentId));
+          setSelectedId((curr) => (curr === currentId ? null : curr));
+        },
+      });
+    },
+    [projectId, modelId, versionId, record]
   );
 
   useImperativeHandle(ref, () => ({ deleteNode: deleteNodeImpl }), [
@@ -181,15 +329,18 @@ function BpmnCanvas({
 
       if (e.key === "Delete" || e.key === "Backspace") {
         if (!selectedId) return;
-        const isNode = nodesRef.current.some((n) => n.id === selectedId);
-        if (!isNode) return;
-        e.preventDefault();
-        void deleteNodeImpl(selectedId);
+        if (nodesRef.current.some((n) => n.id === selectedId)) {
+          e.preventDefault();
+          void deleteNodeImpl(selectedId);
+        } else if (edgesRef.current.some((edge) => edge.id === selectedId)) {
+          e.preventDefault();
+          void deleteEdgeImpl(selectedId);
+        }
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [selectedId, deleteNodeImpl, undo, redo]);
+  }, [selectedId, deleteNodeImpl, deleteEdgeImpl, undo, redo]);
 
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
@@ -197,6 +348,8 @@ function BpmnCanvas({
   nodesRef.current = nodes;
   const lanesRef = useRef(lanes);
   lanesRef.current = lanes;
+  const edgesRef = useRef(edges);
+  edgesRef.current = edges;
 
   const { status, error, markNode, markLane, flush } = useGraphPersistence({
     projectId,
@@ -296,6 +449,24 @@ function BpmnCanvas({
     const stored = nodesRef.current.find((n) => n.id === id);
     if (!resolved || !stored) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
+    if (tool === "connect") {
+      // Body-drag in connect mode picks the source side from where the user
+      // grabbed: closest of top/right/bottom/left to the click point.
+      const cx = resolved.x + resolved.w / 2;
+      const cy = resolved.y + resolved.h / 2;
+      const dx = x - cx;
+      const dy = y - cy;
+      const side: ConnectSide =
+        Math.abs(dx) > Math.abs(dy)
+          ? dx >= 0
+            ? "right"
+            : "left"
+          : dy >= 0
+            ? "bottom"
+            : "top";
+      setDrag({ type: "connect", sourceId: id, sourceSide: side, currX: x, currY: y });
+      return;
+    }
     setDrag({
       type: "node",
       id,
@@ -306,6 +477,59 @@ function BpmnCanvas({
       origLaneId: stored.laneId,
     });
   };
+
+  const onStartBendDrag = useCallback(
+    (e: MouseEvent, edgeId: UUID, orientation: EdgeOrientation) => {
+      e.stopPropagation();
+      const edge = edgesRef.current.find((ed) => ed.id === edgeId);
+      if (!edge) return;
+      const origBend =
+        orientation === "horizontal"
+          ? edge.bendX ?? null
+          : edge.bendY ?? null;
+      setDrag({ type: "edgeBend", edgeId, orientation, origBend });
+    },
+    []
+  );
+
+  const applyEdgeBendLocal = useCallback(
+    async (
+      id: UUID,
+      orientation: EdgeOrientation,
+      value: number | null
+    ) => {
+      setEdges((curr) =>
+        curr.map((e) =>
+          e.id === id
+            ? {
+                ...e,
+                ...(orientation === "horizontal"
+                  ? { bendX: value }
+                  : { bendY: value }),
+              }
+            : e
+        )
+      );
+      await api.updateEdge(
+        projectId,
+        id,
+        orientation === "horizontal"
+          ? { bend_x: value }
+          : { bend_y: value }
+      );
+    },
+    [projectId]
+  );
+
+  const onStartConnect = useCallback(
+    (e: MouseEvent, sourceId: UUID, side: ConnectSide) => {
+      e.stopPropagation();
+      setSelectedId(sourceId);
+      const { x, y } = toWorld(e.clientX, e.clientY);
+      setDrag({ type: "connect", sourceId, sourceSide: side, currX: x, currY: y });
+    },
+    [toWorld]
+  );
 
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
     const target = e.target as SVGElement;
@@ -339,6 +563,28 @@ function BpmnCanvas({
     };
 
     const onMove = (e: globalThis.MouseEvent) => {
+      if (drag.type === "connect") {
+        const { x, y } = screenToWorld(e.clientX, e.clientY);
+        setDrag({ ...drag, currX: x, currY: y });
+        return;
+      }
+      if (drag.type === "edgeBend") {
+        const { x, y } = screenToWorld(e.clientX, e.clientY);
+        const value = drag.orientation === "horizontal" ? x : y;
+        setEdges((curr) =>
+          curr.map((ed) =>
+            ed.id === drag.edgeId
+              ? {
+                  ...ed,
+                  ...(drag.orientation === "horizontal"
+                    ? { bendX: value }
+                    : { bendY: value }),
+                }
+              : ed
+          )
+        );
+        return;
+      }
       if (drag.type === "node") {
         const { x, y } = screenToWorld(e.clientX, e.clientY);
         const newX = x - drag.offX;
@@ -378,7 +624,69 @@ function BpmnCanvas({
       }
     };
 
-    const onUp = () => {
+    const onUp = (e: globalThis.MouseEvent) => {
+      if (drag.type === "edgeBend") {
+        const final = edgesRef.current.find((ed) => ed.id === drag.edgeId);
+        if (final) {
+          const finalValue =
+            drag.orientation === "horizontal"
+              ? final.bendX ?? null
+              : final.bendY ?? null;
+          if (finalValue !== drag.origBend) {
+            // Persist the new bend, plus record the inverse for undo.
+            void api
+              .updateEdge(
+                projectId,
+                drag.edgeId,
+                drag.orientation === "horizontal"
+                  ? { bend_x: finalValue }
+                  : { bend_y: finalValue }
+              )
+              .catch((err) => console.error("Failed to save edge bend", err));
+            const edgeId = drag.edgeId;
+            const orientation = drag.orientation;
+            const origBend = drag.origBend;
+            record({
+              description: "Move edge segment",
+              do: () => applyEdgeBendLocal(edgeId, orientation, finalValue),
+              undo: () => applyEdgeBendLocal(edgeId, orientation, origBend),
+            });
+          }
+        }
+        setDrag(null);
+        return;
+      }
+      if (drag.type === "connect") {
+        const { x, y } = screenToWorld(e.clientX, e.clientY);
+        const target = nodesRef.current.find((n) => {
+          // Resolve node Y the same way renderNodes does.
+          const lane = n.laneId
+            ? lanesRef.current.find((l) => l.id === n.laneId)
+            : undefined;
+          const ny = lane ? lane.y + n.relativeY : n.relativeY;
+          return (
+            n.id !== drag.sourceId &&
+            x >= n.x &&
+            x <= n.x + n.w &&
+            y >= ny &&
+            y <= ny + n.h
+          );
+        });
+        if (target) {
+          const sourceId = drag.sourceId;
+          const targetId = target.id;
+          const exists = edgesRef.current.some(
+            (e2) => e2.from === sourceId && e2.to === targetId
+          );
+          if (!exists) {
+            void createEdgeImpl(sourceId, targetId).catch((err) =>
+              console.error("Failed to create edge", err)
+            );
+          }
+        }
+        setDrag(null);
+        return;
+      }
       if (drag.type === "node") {
         const final = nodesRef.current.find((n) => n.id === drag.id);
         if (final) {
@@ -421,7 +729,7 @@ function BpmnCanvas({
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
-  }, [drag, markNode, record]);
+  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
   const onCanvasDragOver = (e: ReactDragEvent<SVGSVGElement>) => {
@@ -707,7 +1015,12 @@ function BpmnCanvas({
         style={{
           width: "100%",
           height: "100%",
-          cursor: drag?.type === "pan" ? "grabbing" : "default",
+          cursor:
+            drag?.type === "pan"
+              ? "grabbing"
+              : tool === "connect"
+                ? "crosshair"
+                : "default",
           userSelect: "none",
         }}
       >
@@ -782,6 +1095,11 @@ function BpmnCanvas({
               nodes={renderNodes}
               selected={selectedId === edge.id}
               onClick={(id) => setSelectedId(id)}
+              onDoubleClick={(id) => {
+                setSelectedId(id);
+                setEditingEdgeId(id);
+              }}
+              onStartBendDrag={onStartBendDrag}
             />
           ))}
           {renderNodes.map((node) => (
@@ -790,9 +1108,62 @@ function BpmnCanvas({
               node={node}
               selected={selectedId === node.id}
               issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
+              showHandles={tool === "connect"}
               onMouseDown={onNodeMouseDown}
+              onStartConnect={onStartConnect}
             />
           ))}
+          {editingEdgeId &&
+            (() => {
+              const edge = edges.find((e) => e.id === editingEdgeId);
+              if (!edge) return null;
+              const from = renderNodes.find((n) => n.id === edge.from);
+              const to = renderNodes.find((n) => n.id === edge.to);
+              if (!from || !to) return null;
+              const { midX, midY } = buildEdgePath(from, to);
+              return (
+                <EdgeLabelEditor
+                  x={midX}
+                  y={midY}
+                  initial={edge.label ?? ""}
+                  onCommit={(value) => {
+                    setEditingEdgeId(null);
+                    void commitEdgeLabel(edge.id, value);
+                  }}
+                  onCancel={() => setEditingEdgeId(null)}
+                />
+              );
+            })()}
+          {drag?.type === "connect" &&
+            (() => {
+              const source = renderNodes.find((n) => n.id === drag.sourceId);
+              if (!source) return null;
+              // If the cursor is over a target node, preview the final
+              // edge using node-to-node routing so the user can see exactly
+              // what they'll get. Otherwise fall back to source-side → cursor.
+              const target = renderNodes.find(
+                (n) =>
+                  n.id !== drag.sourceId &&
+                  drag.currX >= n.x &&
+                  drag.currX <= n.x + n.w &&
+                  drag.currY >= n.y &&
+                  drag.currY <= n.y + n.h
+              );
+              const d = target
+                ? buildEdgePath(source, target).d
+                : buildPreviewToCursor(source, drag.sourceSide, drag.currX, drag.currY);
+              return (
+                <path
+                  d={d}
+                  fill="none"
+                  stroke="#0f172a"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 4"
+                  markerEnd="url(#poet-arrow)"
+                  pointerEvents="none"
+                />
+              );
+            })()}
         </g>
       </svg>
 
@@ -808,6 +1179,7 @@ function BpmnCanvas({
 
       <ShapePalette />
 
+      {/* end SVG */}
       <FloatingToolbar
         tool={tool}
         onToolChange={setTool}
@@ -827,3 +1199,58 @@ function BpmnCanvas({
     </div>
   );
 });
+
+function EdgeLabelEditor({
+  x,
+  y,
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  x: number;
+  y: number;
+  initial: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const W = 120;
+  const H = 24;
+  return (
+    <foreignObject x={x - W / 2} y={y - H / 2} width={W} height={H}>
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => onCommit(value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            (e.currentTarget as HTMLInputElement).blur();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+          // Don't let Cmd+Z bubble to the canvas-level shortcut.
+          e.stopPropagation();
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+        placeholder="label…"
+        style={{
+          width: "100%",
+          height: "100%",
+          padding: "0 6px",
+          fontSize: 11,
+          fontFamily: "inherit",
+          textAlign: "center",
+          background: "#fff",
+          border: "1.5px solid #0f172a",
+          borderRadius: 4,
+          color: "#0f172a",
+          outline: "none",
+          boxShadow: "0 2px 6px rgba(15,23,42,0.18)",
+        }}
+      />
+    </foreignObject>
+  );
+}

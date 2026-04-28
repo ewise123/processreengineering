@@ -32,6 +32,8 @@ from app.schemas.process_map import (
     CitationDetail,
     ClaimSummary,
     ClaimWithCitations,
+    EdgeCreate,
+    EdgeUpdate,
     LaneCreate,
     LaneUpdate,
     NodeCitationsRead,
@@ -498,6 +500,119 @@ def update_node(
     db.commit()
     db.refresh(node)
     return node
+
+
+def _check_edge_in_project(
+    edge: ProcessEdge, project_id: UUID, db: Session
+) -> None:
+    version = db.get(ProcessVersion, edge.version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="Edge not found")
+    model = db.get(ProcessModel, version.model_id)
+    if model is None or model.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Edge not found")
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/edges",
+    response_model=ProcessEdgeRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_edge(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    payload: EdgeCreate,
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessEdge:
+    """Create an edge between two existing nodes in the same version."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+    if payload.source_node_id == payload.target_node_id:
+        raise HTTPException(
+            status_code=422, detail="source_node_id and target_node_id must differ"
+        )
+
+    source = db.get(ProcessNode, payload.source_node_id)
+    target = db.get(ProcessNode, payload.target_node_id)
+    if (
+        source is None
+        or target is None
+        or source.version_id != version.id
+        or target.version_id != version.id
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="source and target must reference nodes in the same version",
+        )
+
+    # Server-side dedupe so retries / parallel requests can't persist
+    # duplicate edges for the same (version, source, target) tuple.
+    existing = db.scalars(
+        select(ProcessEdge)
+        .where(
+            ProcessEdge.version_id == version.id,
+            ProcessEdge.source_node_id == payload.source_node_id,
+            ProcessEdge.target_node_id == payload.target_node_id,
+        )
+        .limit(1)
+    ).first()
+    if existing is not None:
+        raise HTTPException(
+            status_code=409, detail="Edge already exists between these nodes"
+        )
+
+    edge = ProcessEdge(
+        version_id=version.id,
+        source_node_id=payload.source_node_id,
+        target_node_id=payload.target_node_id,
+        label=payload.label,
+    )
+    db.add(edge)
+    db.commit()
+    db.refresh(edge)
+    return edge
+
+
+@router.patch("/edges/{edge_id}", response_model=ProcessEdgeRead)
+def update_edge(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    edge_id: UUID,
+    payload: EdgeUpdate,
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessEdge:
+    edge = db.get(ProcessEdge, edge_id)
+    if edge is None:
+        raise HTTPException(status_code=404, detail="Edge not found")
+    _check_edge_in_project(edge, project.id, db)
+    if "label" in payload.model_fields_set:
+        # Empty string ↔ "no label" so the round-trip is consistent.
+        edge.label = payload.label or None
+    if "bend_x" in payload.model_fields_set:
+        edge.bend_x = payload.bend_x
+    if "bend_y" in payload.model_fields_set:
+        edge.bend_y = payload.bend_y
+    db.commit()
+    db.refresh(edge)
+    return edge
+
+
+@router.delete("/edges/{edge_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_edge(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    edge_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    edge = db.get(ProcessEdge, edge_id)
+    if edge is None:
+        raise HTTPException(status_code=404, detail="Edge not found")
+    _check_edge_in_project(edge, project.id, db)
+    db.delete(edge)
+    db.commit()
 
 
 @router.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)

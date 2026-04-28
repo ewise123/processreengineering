@@ -65,6 +65,23 @@ class NodeCreate(BaseModel):
     relative_y: float
 
 
+class EdgeCreate(BaseModel):
+    """Body for the connect-tool flow: drag from source node to target."""
+
+    source_node_id: UUID
+    target_node_id: UUID
+    label: str | None = Field(default=None, max_length=300)
+
+
+class EdgeUpdate(BaseModel):
+    """Partial update for an edge. Empty-string labels are normalized to None
+    on the server so the persisted state matches 'no label'."""
+
+    label: str | None = Field(default=None, max_length=300)
+    bend_x: float | None = None
+    bend_y: float | None = None
+
+
 class CitationDetail(BaseModel):
     """A single supporting quote with the input + section it came from."""
 
@@ -151,6 +168,8 @@ class ProcessEdgeRead(BaseModel):
     target_node_id: UUID
     label: str | None
     condition_text: str | None
+    bend_x: float | None = None
+    bend_y: float | None = None
 
 
 class ProcessVersionRead(BaseModel):

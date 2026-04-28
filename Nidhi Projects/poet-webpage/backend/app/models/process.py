@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -132,6 +132,11 @@ class ProcessEdge(IdMixin, TimestampMixin, Base):
         ForeignKey("claims.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # User-overridden orthogonal bend coordinates. When the routing chooses
+    # horizontal layout, bend_x sets the x-coordinate of the vertical mid
+    # segment; bend_y is the analog for vertical routing. NULL → auto-route.
+    bend_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bend_y: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class NodeClaimLink(IdMixin, TimestampMixin, Base):
