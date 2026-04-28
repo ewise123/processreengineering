@@ -182,54 +182,82 @@ export function BpmnCanvas({
     });
   };
 
-  const onMouseMove = (e: MouseEvent) => {
+  // Drag is tracked at the *document* level so motion across the lane-rail
+  // HTML overlay (or out of the SVG entirely) doesn't interrupt the drag.
+  useEffect(() => {
     if (!drag) return;
-    if (drag.type === "node") {
-      const { x, y } = toWorld(e.clientX, e.clientY);
-      const newX = x - drag.offX;
-      const newAbsY = y - drag.offY;
-      setNodes((curr) =>
-        curr.map((n) => {
-          if (n.id !== drag.id) return n;
-          const targetLane =
-            laneAtY(newAbsY + n.h / 2, lanes) ??
-            (n.laneId ? lanes.find((l) => l.id === n.laneId) : lanes[0]);
-          if (!targetLane) {
-            return { ...n, x: newX };
-          }
-          const maxRel = Math.max(0, targetLane.h - n.h);
-          const rel = Math.max(0, Math.min(maxRel, newAbsY - targetLane.y));
-          return {
-            ...n,
-            x: newX,
-            laneId: targetLane.id,
-            relativeY: rel,
-          };
-        })
-      );
-    } else {
-      setViewport({
-        ...viewport,
-        tx: drag.tx0 + (e.clientX - drag.startX),
-        ty: drag.ty0 + (e.clientY - drag.startY),
-      });
-    }
-  };
 
-  const onMouseUp = () => {
-    // Commit node drag to persistence on drop
-    if (drag?.type === "node") {
-      const finalNode = nodesRef.current.find((n) => n.id === drag.id);
-      if (finalNode) {
-        markNode(finalNode.id, {
-          x: finalNode.x,
-          relative_y: finalNode.relativeY,
-          lane_id: finalNode.laneId ?? undefined,
+    const screenToWorld = (sx: number, sy: number) => {
+      if (!svgRef.current) return { x: 0, y: 0 };
+      const rect = svgRef.current.getBoundingClientRect();
+      const v = viewportRef.current;
+      return {
+        x: (sx - rect.left - v.tx) / v.scale,
+        y: (sy - rect.top - v.ty) / v.scale,
+      };
+    };
+
+    const onMove = (e: globalThis.MouseEvent) => {
+      if (drag.type === "node") {
+        const { x, y } = screenToWorld(e.clientX, e.clientY);
+        const newX = x - drag.offX;
+        const newAbsY = y - drag.offY;
+        const currLanes = lanesRef.current;
+        setNodes((curr) =>
+          curr.map((n) => {
+            if (n.id !== drag.id) return n;
+            const targetLane =
+              laneAtY(newAbsY + n.h / 2, currLanes) ??
+              (n.laneId
+                ? currLanes.find((l) => l.id === n.laneId)
+                : currLanes[0]);
+            if (!targetLane) {
+              return { ...n, x: newX };
+            }
+            const maxRel = Math.max(0, targetLane.h - n.h);
+            const rel = Math.max(
+              0,
+              Math.min(maxRel, newAbsY - targetLane.y)
+            );
+            return {
+              ...n,
+              x: newX,
+              laneId: targetLane.id,
+              relativeY: rel,
+            };
+          })
+        );
+      } else {
+        const v = viewportRef.current;
+        setViewport({
+          ...v,
+          tx: drag.tx0 + (e.clientX - drag.startX),
+          ty: drag.ty0 + (e.clientY - drag.startY),
         });
       }
-    }
-    setDrag(null);
-  };
+    };
+
+    const onUp = () => {
+      if (drag.type === "node") {
+        const final = nodesRef.current.find((n) => n.id === drag.id);
+        if (final) {
+          markNode(final.id, {
+            x: final.x,
+            relative_y: final.relativeY,
+            lane_id: final.laneId ?? undefined,
+          });
+        }
+      }
+      setDrag(null);
+    };
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [drag, markNode]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
   const recomputeY = (ls: CanvasLane[]): CanvasLane[] => {
@@ -363,9 +391,6 @@ export function BpmnCanvas({
       <svg
         ref={svgRef}
         onMouseDown={onSvgMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onMouseLeave={onMouseUp}
         style={{
           width: "100%",
           height: "100%",

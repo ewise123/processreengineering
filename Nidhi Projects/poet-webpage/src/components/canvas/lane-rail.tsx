@@ -265,7 +265,11 @@ export function LaneRail({
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
-                    maxWidth: `${Math.max(40, height - 28)}px`,
+                    // Cap based on lane's WORLD height (constant per lane, not
+                    // affected by zoom) so reasonable lane names stay legible
+                    // at every zoom level. Truncation only kicks in for labels
+                    // longer than the lane's world height in pixels.
+                    maxWidth: `${Math.max(140, lane.h - 16)}px`,
                     cursor: "text",
                     userSelect: "none",
                   }}
