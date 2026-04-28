@@ -9,6 +9,8 @@ import type {
   LaneCreate,
   LaneUpdate,
   NodeCitations,
+  NodeIssue,
+  NodeIssuesDetail,
   NodeUpdate,
   Page,
   ProcessGraph,
@@ -162,6 +164,10 @@ export const api = {
     request<ProcessGraph>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}`
     ),
+  getProcessMapIssues: (projectId: UUID, modelId: UUID, versionId: UUID) =>
+    request<NodeIssue[]>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/issues`
+    ),
   updateNode: (projectId: UUID, nodeId: UUID, body: NodeUpdate) =>
     request<ProcessNode>(`/api/v2/projects/${projectId}/nodes/${nodeId}`, {
       method: "PATCH",
@@ -189,5 +195,9 @@ export const api = {
   getNodeCitations: (projectId: UUID, nodeId: UUID) =>
     request<NodeCitations>(
       `/api/v2/projects/${projectId}/nodes/${nodeId}/citations`
+    ),
+  getNodeIssues: (projectId: UUID, nodeId: UUID) =>
+    request<NodeIssuesDetail>(
+      `/api/v2/projects/${projectId}/nodes/${nodeId}/issues`
     ),
 };

@@ -20,6 +20,7 @@ import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
+import type { IssueSeverity } from "@/lib/types";
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
   idle: "Saved",
@@ -75,6 +76,20 @@ export default function CanvasPage() {
     queryFn: () =>
       api.getProcessGraph(params.id, params.modelId, params.versionId),
   });
+
+  const { data: issues } = useQuery({
+    queryKey: ["issues", params.id, params.modelId, params.versionId],
+    queryFn: () =>
+      api.getProcessMapIssues(params.id, params.modelId, params.versionId),
+    enabled: !!data,
+  });
+
+  const issuesByNode = useMemo<Record<string, IssueSeverity>>(() => {
+    if (!issues) return {};
+    const out: Record<string, IssueSeverity> = {};
+    for (const i of issues) out[i.node_id] = i.severity;
+    return out;
+  }, [issues]);
 
   const initial = useMemo(
     () => (data ? buildCanvasState(data) : null),
@@ -196,6 +211,7 @@ export default function CanvasPage() {
           initialNodes={initial.nodes}
           initialEdges={initial.edges}
           initialLanes={initial.lanes}
+          issuesByNode={issuesByNode}
           onSaveStatusChange={handleSaveStatusChange}
           onSelectionChange={handleSelectionChange}
         />
@@ -222,26 +238,6 @@ export default function CanvasPage() {
           />
         </div>
       )}
-
-      <div
-        style={{
-          position: "absolute",
-          bottom: 12,
-          left: "50%",
-          transform: "translateX(-50%)",
-          padding: "4px 10px",
-          background: "rgba(255,255,255,0.9)",
-          border: "1px solid #e2e8f0",
-          borderRadius: 6,
-          fontSize: 11,
-          color: "#64748b",
-          pointerEvents: "none",
-          zIndex: 20,
-        }}
-      >
-        Click a node for properties + provenance · Drag nodes / lanes to edit ·
-        Wheel pans, Cmd+wheel zooms · Edits auto-save
-      </div>
 
       <Dialog open={showXml} onOpenChange={setShowXml}>
         <DialogContent className="max-w-3xl">

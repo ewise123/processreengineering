@@ -1,15 +1,25 @@
 "use client";
 
 import type { MouseEvent } from "react";
+
+import type { IssueSeverity } from "@/lib/types";
+
 import type { CanvasEdge, ResolvedNode } from "./types";
+
+const ISSUE_FILL: Record<IssueSeverity, string> = {
+  high: "#dc2626",
+  medium: "#d97706",
+};
 
 export function NodeShape({
   node,
   selected,
+  issueLevel,
   onMouseDown,
 }: {
   node: ResolvedNode;
   selected: boolean;
+  issueLevel?: IssueSeverity | null;
   onMouseDown: (e: MouseEvent, id: string) => void;
 }) {
   const { kind, x, y, w, h, label, id } = node;
@@ -17,8 +27,9 @@ export function NodeShape({
   const isGateway = kind === "gateway";
   const isTask = !isEvent && !isGateway;
 
-  const stroke = selected ? "#0f172a" : "#475569";
-  const strokeWidth = selected ? 2.5 : 1.2;
+  const issueStroke = issueLevel ? ISSUE_FILL[issueLevel] : null;
+  const stroke = selected ? "#0f172a" : (issueStroke ?? "#475569");
+  const strokeWidth = selected ? 2.5 : issueLevel ? 2 : 1.2;
   const fill = "#ffffff";
 
   return (
@@ -124,6 +135,25 @@ export function NodeShape({
             {label}
           </div>
         </foreignObject>
+      )}
+      {issueLevel && (
+        <g transform={`translate(${w - 8}, -8)`} style={{ pointerEvents: "none" }}>
+          <circle
+            r={9}
+            fill={ISSUE_FILL[issueLevel]}
+            stroke="#fff"
+            strokeWidth={2}
+          />
+          <text
+            textAnchor="middle"
+            y={4}
+            fontSize="11"
+            fontWeight="700"
+            fill="#fff"
+          >
+            !
+          </text>
+        </g>
       )}
     </g>
   );

@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -11,6 +11,7 @@ from app.api.v2.deps import get_current_user, get_project_or_404
 from app.db.session import get_db
 from app.enums import (
     ClaimLinkKind,
+    ConflictStatus,
     NodeType,
     ProcessVersionStatus,
 )
@@ -25,14 +26,18 @@ from app.models.process import (
     ProcessVersion,
 )
 from app.models.project import Project
-from app.models.claim import Claim, ClaimCitation
+from app.models.claim import Claim, ClaimCitation, ClaimConflict
 from app.models.input import Chunk, DocumentSection, Input
 from app.schemas.process_map import (
     CitationDetail,
+    ClaimSummary,
     ClaimWithCitations,
     LaneCreate,
     LaneUpdate,
     NodeCitationsRead,
+    NodeIssueDetail,
+    NodeIssueRead,
+    NodeIssuesDetailRead,
     NodeUpdate,
     ProcessEdgeRead,
     ProcessGraphRead,
@@ -603,6 +608,97 @@ def get_node_citations(
     )
 
 
+@router.get("/nodes/{node_id}/issues", response_model=NodeIssuesDetailRead)
+def get_node_issues(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    node_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> NodeIssuesDetailRead:
+    """Open conflicts touching any claim linked to this node, with both
+    sides of each conflict resolved to claim summaries so the panel can
+    show 'this claim says X — but other claim says Y'."""
+    node = db.get(ProcessNode, node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    _check_node_in_project(node, project.id, db)
+
+    linked_claim_ids = list(
+        db.scalars(
+            select(NodeClaimLink.claim_id).where(NodeClaimLink.node_id == node_id)
+        ).all()
+    )
+    if not linked_claim_ids:
+        return NodeIssuesDetailRead(node_id=node_id, issues=[])
+
+    conflicts = list(
+        db.scalars(
+            select(ClaimConflict)
+            .where(
+                ClaimConflict.resolution_status == ConflictStatus.DETECTED.value,
+                or_(
+                    ClaimConflict.claim_a_id.in_(linked_claim_ids),
+                    ClaimConflict.claim_b_id.in_(linked_claim_ids),
+                ),
+            )
+            .order_by(ClaimConflict.created_at.desc())
+        ).all()
+    )
+    if not conflicts:
+        return NodeIssuesDetailRead(node_id=node_id, issues=[])
+
+    # Bulk-load every claim referenced on either side of any conflict so we
+    # don't N+1 the DB.
+    referenced_ids: set[UUID] = set()
+    for c in conflicts:
+        referenced_ids.add(c.claim_a_id)
+        referenced_ids.add(c.claim_b_id)
+    claim_by_id: dict[UUID, Claim] = {
+        cl.id: cl
+        for cl in db.scalars(
+            select(Claim).where(Claim.id.in_(referenced_ids))
+        ).all()
+    }
+
+    linked_set = set(linked_claim_ids)
+
+    def _summary(cl: Claim | None) -> ClaimSummary | None:
+        if cl is None:
+            return None
+        return ClaimSummary(
+            id=cl.id,
+            kind=cl.kind,
+            subject=cl.subject,
+            normalized=cl.normalized or {},
+            confidence=cl.confidence,
+        )
+
+    issues: list[NodeIssueDetail] = []
+    for c in conflicts:
+        # Pick which side belongs to *this* node so the UI can render
+        # "this claim" vs "the other claim" consistently.
+        if c.claim_a_id in linked_set:
+            this_id, other_id = c.claim_a_id, c.claim_b_id
+        else:
+            this_id, other_id = c.claim_b_id, c.claim_a_id
+        this_claim = _summary(claim_by_id.get(this_id))
+        other_claim = _summary(claim_by_id.get(other_id))
+        if this_claim is None or other_claim is None:
+            continue
+        issues.append(
+            NodeIssueDetail(
+                conflict_id=c.id,
+                kind=c.kind,
+                resolution_status=c.resolution_status,
+                detected_by=c.detected_by,
+                resolution_notes=c.resolution_notes,
+                this_claim=this_claim,
+                other_claim=other_claim,
+            )
+        )
+
+    return NodeIssuesDetailRead(node_id=node_id, issues=issues)
+
+
 @router.delete("/lanes/{lane_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_lane(
     project: Annotated[Project, Depends(get_project_or_404)],
@@ -693,3 +789,50 @@ def get_process_graph(
         nodes=[ProcessNodeRead.model_validate(n) for n in nodes],
         edges=[ProcessEdgeRead.model_validate(e) for e in edges],
     )
+
+
+@router.get(
+    "/process-maps/{model_id}/versions/{version_id}/issues",
+    response_model=list[NodeIssueRead],
+)
+def list_process_map_issues(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[NodeIssueRead]:
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+
+    rows = db.execute(
+        select(
+            NodeClaimLink.node_id,
+            func.count(func.distinct(ClaimConflict.id)).label("cnt"),
+        )
+        .join(ProcessNode, NodeClaimLink.node_id == ProcessNode.id)
+        .join(
+            ClaimConflict,
+            or_(
+                ClaimConflict.claim_a_id == NodeClaimLink.claim_id,
+                ClaimConflict.claim_b_id == NodeClaimLink.claim_id,
+            ),
+        )
+        .where(
+            ProcessNode.version_id == version.id,
+            ClaimConflict.resolution_status == ConflictStatus.DETECTED.value,
+        )
+        .group_by(NodeClaimLink.node_id)
+    ).all()
+
+    issues: list[NodeIssueRead] = []
+    for node_id, cnt in rows:
+        # 2+ open conflicts touching this node = high; 1 = medium.
+        severity = "high" if cnt >= 2 else "medium"
+        issues.append(
+            NodeIssueRead(node_id=node_id, severity=severity, conflict_count=cnt)
+        )
+    return issues
