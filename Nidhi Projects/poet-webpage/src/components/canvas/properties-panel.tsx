@@ -1,6 +1,13 @@
 "use client";
 
-import { AlertTriangle, Sparkles, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Sparkles,
+  X,
+} from "lucide-react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
@@ -55,6 +62,7 @@ export function PropertiesPanel({
   const claims = data?.claims ?? [];
   const totalCitations = claims.reduce((acc, c) => acc + c.citations.length, 0);
   const issues = issuesData?.issues ?? [];
+  const [issuesExpanded, setIssuesExpanded] = useState(true);
 
   return (
     <div
@@ -155,8 +163,18 @@ export function PropertiesPanel({
       {/* Issues — open conflicts touching this node's claims */}
       {(issuesLoading || issues.length > 0) && (
         <div className="border-t border-slate-100 bg-rose-50/40 px-3 py-2.5">
-          <div className="mb-1.5 flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => setIssuesExpanded((v) => !v)}
+            className="flex w-full items-center justify-between"
+            aria-expanded={issuesExpanded}
+          >
             <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-rose-700">
+              {issuesExpanded ? (
+                <ChevronDown size={10} />
+              ) : (
+                <ChevronRight size={10} />
+              )}
               <AlertTriangle size={10} />
               Issues
             </div>
@@ -165,16 +183,22 @@ export function PropertiesPanel({
                 {issues.length} open
               </span>
             )}
-          </div>
-          {issuesLoading && (
-            <div className="text-[11px] italic text-slate-400">Loading…</div>
-          )}
-          {!issuesLoading && issues.length > 0 && (
-            <ul className="space-y-1.5">
-              {issues.map((iss) => (
-                <IssueCard key={iss.conflict_id} issue={iss} />
-              ))}
-            </ul>
+          </button>
+          {issuesExpanded && (
+            <div className="mt-1.5">
+              {issuesLoading && (
+                <div className="text-[11px] italic text-slate-400">
+                  Loading…
+                </div>
+              )}
+              {!issuesLoading && issues.length > 0 && (
+                <ul className="space-y-1.5">
+                  {issues.map((iss) => (
+                    <IssueCard key={iss.conflict_id} issue={iss} />
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
         </div>
       )}
