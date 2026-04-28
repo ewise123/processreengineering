@@ -9,6 +9,7 @@ import type {
   LaneCreate,
   LaneUpdate,
   NodeCitations,
+  NodeCreate,
   NodeIssue,
   NodeIssuesDetail,
   NodeUpdate,
@@ -173,6 +174,16 @@ export const api = {
       method: "PATCH",
       json: body,
     }),
+  createNode: (
+    projectId: UUID,
+    modelId: UUID,
+    versionId: UUID,
+    body: NodeCreate
+  ) =>
+    request<ProcessNode>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/nodes`,
+      { method: "POST", json: body }
+    ),
   updateLane: (projectId: UUID, laneId: UUID, body: LaneUpdate) =>
     request<ProcessLane>(`/api/v2/projects/${projectId}/lanes/${laneId}`, {
       method: "PATCH",

@@ -35,6 +35,7 @@ from app.schemas.process_map import (
     LaneCreate,
     LaneUpdate,
     NodeCitationsRead,
+    NodeCreate,
     NodeIssueDetail,
     NodeIssueRead,
     NodeIssuesDetailRead,
@@ -420,6 +421,48 @@ def _check_lane_in_project(
     if model is None or model.project_id != project_id:
         raise HTTPException(status_code=404, detail="Lane not found")
     return version
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/nodes",
+    response_model=ProcessNodeRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_node(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    payload: NodeCreate,
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessNode:
+    """Create a node from the shape palette. Lane must belong to this
+    version; position is whatever the canvas calculated from the drop."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+
+    lane = db.get(ProcessLane, payload.lane_id)
+    if lane is None or lane.version_id != version.id:
+        raise HTTPException(
+            status_code=422,
+            detail="lane_id must reference a lane in the same version",
+        )
+
+    node = ProcessNode(
+        version_id=version.id,
+        type=payload.type,
+        name=payload.name,
+        lane_id=payload.lane_id,
+        position={"x": payload.x, "relative_y": payload.relative_y},
+        properties={},
+    )
+    db.add(node)
+    db.commit()
+    db.refresh(node)
+    return node
 
 
 @router.patch("/nodes/{node_id}", response_model=ProcessNodeRead)
