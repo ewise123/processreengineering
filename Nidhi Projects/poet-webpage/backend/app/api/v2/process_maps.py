@@ -342,13 +342,48 @@ def generate_process_map(
 def list_process_maps(
     project: Annotated[Project, Depends(get_project_or_404)],
     db: Annotated[Session, Depends(get_db)],
-) -> list[ProcessModel]:
-    items = db.scalars(
-        select(ProcessModel)
-        .where(ProcessModel.project_id == project.id, ProcessModel.deleted_at.is_(None))
-        .order_by(ProcessModel.created_at.desc())
+) -> list[ProcessModelRead]:
+    models = list(
+        db.scalars(
+            select(ProcessModel)
+            .where(
+                ProcessModel.project_id == project.id,
+                ProcessModel.deleted_at.is_(None),
+            )
+            .order_by(ProcessModel.created_at.desc())
+        ).all()
+    )
+    if not models:
+        return []
+
+    # One row per model: the highest version_number row, via DISTINCT ON.
+    model_ids = [m.id for m in models]
+    rows = db.execute(
+        select(
+            ProcessVersion.model_id,
+            ProcessVersion.id,
+            ProcessVersion.version_number,
+        )
+        .where(ProcessVersion.model_id.in_(model_ids))
+        .order_by(
+            ProcessVersion.model_id,
+            ProcessVersion.version_number.desc(),
+        )
+        .distinct(ProcessVersion.model_id)
     ).all()
-    return list(items)
+    latest_by_model: dict = {
+        row[0]: (row[1], row[2]) for row in rows
+    }
+
+    return [
+        ProcessModelRead.model_validate(m).model_copy(
+            update={
+                "latest_version_id": latest_by_model.get(m.id, (None, None))[0],
+                "latest_version_number": latest_by_model.get(m.id, (None, None))[1],
+            }
+        )
+        for m in models
+    ]
 
 
 @router.get(

@@ -102,6 +102,48 @@ export interface ProcessModel {
   parent_model_id: UUID | null;
   created_at: string;
   updated_at: string;
+  latest_version_id: UUID | null;
+  latest_version_number: number | null;
+}
+
+export interface ProcessVersion {
+  id: UUID;
+  model_id: UUID;
+  version_number: number;
+  status: string;
+  bpmn_xml: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface ProcessLane {
+  id: UUID;
+  name: string;
+  order_index: number;
+}
+
+export interface ProcessNode {
+  id: UUID;
+  type: string;
+  name: string;
+  lane_id: UUID | null;
+  position: Record<string, unknown>;
+  properties: Record<string, unknown>;
+}
+
+export interface ProcessEdge {
+  id: UUID;
+  source_node_id: UUID;
+  target_node_id: UUID;
+  label: string | null;
+  condition_text: string | null;
+}
+
+export interface ProcessGraph {
+  version: ProcessVersion;
+  lanes: ProcessLane[];
+  nodes: ProcessNode[];
+  edges: ProcessEdge[];
 }
 
 export interface ProcessMapGenerateRequest {

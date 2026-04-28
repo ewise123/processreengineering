@@ -7,6 +7,7 @@ import type {
   InputParseResult,
   InputRow,
   Page,
+  ProcessGraph,
   ProcessMapGenerateRequest,
   ProcessMapGenerateResult,
   ProcessModel,
@@ -150,5 +151,9 @@ export const api = {
     request<ProcessMapGenerateResult>(
       `/api/v2/projects/${projectId}/generate-process-map`,
       { method: "POST", json: payload }
+    ),
+  getProcessGraph: (projectId: UUID, modelId: UUID, versionId: UUID) =>
+    request<ProcessGraph>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}`
     ),
 };
