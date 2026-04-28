@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.api.v2.deps import get_current_user, get_project_or_404
 from app.db.session import get_db
 from app.enums import InputStatus, InputType
+from app.models.claim import ClaimCitation
 from app.models.identity import User
 from app.models.input import Chunk, DocumentSection, Input
 from app.models.project import Project
@@ -74,11 +75,35 @@ def list_inputs(
 ) -> Page[InputRead]:
     base = select(Input).where(Input.project_id == project.id)
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
-    items = db.scalars(
-        base.order_by(Input.created_at.desc()).limit(limit).offset(offset)
-    ).all()
+    items = list(
+        db.scalars(
+            base.order_by(Input.created_at.desc()).limit(limit).offset(offset)
+        ).all()
+    )
+
+    # Compute distinct claim counts per input via citations → chunks → sections
+    counts: dict = {}
+    if items:
+        input_ids = [i.id for i in items]
+        rows = db.execute(
+            select(
+                DocumentSection.input_id,
+                func.count(func.distinct(ClaimCitation.claim_id)),
+            )
+            .join(Chunk, Chunk.section_id == DocumentSection.id)
+            .join(ClaimCitation, ClaimCitation.chunk_id == Chunk.id)
+            .where(DocumentSection.input_id.in_(input_ids))
+            .group_by(DocumentSection.input_id)
+        ).all()
+        counts = {row[0]: row[1] for row in rows}
+
     return Page[InputRead](
-        items=[InputRead.model_validate(i) for i in items],
+        items=[
+            InputRead.model_validate(i).model_copy(
+                update={"claim_count": counts.get(i.id, 0)}
+            )
+            for i in items
+        ],
         total=total,
         limit=limit,
         offset=offset,

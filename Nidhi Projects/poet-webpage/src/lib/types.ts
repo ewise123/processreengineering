@@ -44,6 +44,7 @@ export interface InputRow {
   status: string;
   created_at: string;
   updated_at: string;
+  claim_count: number;
 }
 
 export interface InputParseResult {

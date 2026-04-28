@@ -17,6 +17,7 @@ class InputRead(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+    claim_count: int = 0
 
 
 class InputParseResult(BaseModel):
