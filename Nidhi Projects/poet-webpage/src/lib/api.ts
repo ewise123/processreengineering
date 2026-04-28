@@ -6,6 +6,7 @@ import type {
   EmbedResult,
   InputParseResult,
   InputRow,
+  EdgeCreate,
   LaneCreate,
   LaneUpdate,
   NodeCitations,
@@ -13,6 +14,7 @@ import type {
   NodeIssue,
   NodeIssuesDetail,
   NodeUpdate,
+  ProcessEdge,
   Page,
   ProcessGraph,
   ProcessLane,
@@ -176,6 +178,20 @@ export const api = {
     }),
   deleteNode: (projectId: UUID, nodeId: UUID) =>
     request<void>(`/api/v2/projects/${projectId}/nodes/${nodeId}`, {
+      method: "DELETE",
+    }),
+  createEdge: (
+    projectId: UUID,
+    modelId: UUID,
+    versionId: UUID,
+    body: EdgeCreate
+  ) =>
+    request<ProcessEdge>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/edges`,
+      { method: "POST", json: body }
+    ),
+  deleteEdge: (projectId: UUID, edgeId: UUID) =>
+    request<void>(`/api/v2/projects/${projectId}/edges/${edgeId}`, {
       method: "DELETE",
     }),
   createNode: (

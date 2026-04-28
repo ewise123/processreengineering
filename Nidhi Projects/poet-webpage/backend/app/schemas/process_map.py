@@ -65,6 +65,14 @@ class NodeCreate(BaseModel):
     relative_y: float
 
 
+class EdgeCreate(BaseModel):
+    """Body for the connect-tool flow: drag from source node to target."""
+
+    source_node_id: UUID
+    target_node_id: UUID
+    label: str | None = Field(default=None, max_length=300)
+
+
 class CitationDetail(BaseModel):
     """A single supporting quote with the input + section it came from."""
 

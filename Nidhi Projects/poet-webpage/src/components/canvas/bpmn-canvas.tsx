@@ -61,7 +61,14 @@ type Drag =
       origRelativeY: number;
       origLaneId: UUID | null;
     }
-  | { type: "pan"; startX: number; startY: number; tx0: number; ty0: number };
+  | { type: "pan"; startX: number; startY: number; tx0: number; ty0: number }
+  | {
+      type: "connect";
+      sourceId: UUID;
+      // Live cursor position in world coords for the temp line.
+      currX: number;
+      currY: number;
+    };
 
 function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
   if (lanes.length === 0) return undefined;
@@ -146,6 +153,15 @@ function BpmnCanvas({
     [projectId, onNodeDeleted]
   );
 
+  const deleteEdgeImpl = useCallback(
+    async (id: UUID) => {
+      await api.deleteEdge(projectId, id);
+      setEdges((curr) => curr.filter((e) => e.id !== id));
+      setSelectedId((curr) => (curr === id ? null : curr));
+    },
+    [projectId]
+  );
+
   useImperativeHandle(ref, () => ({ deleteNode: deleteNodeImpl }), [
     deleteNodeImpl,
   ]);
@@ -181,15 +197,18 @@ function BpmnCanvas({
 
       if (e.key === "Delete" || e.key === "Backspace") {
         if (!selectedId) return;
-        const isNode = nodesRef.current.some((n) => n.id === selectedId);
-        if (!isNode) return;
-        e.preventDefault();
-        void deleteNodeImpl(selectedId);
+        if (nodesRef.current.some((n) => n.id === selectedId)) {
+          e.preventDefault();
+          void deleteNodeImpl(selectedId);
+        } else if (edgesRef.current.some((edge) => edge.id === selectedId)) {
+          e.preventDefault();
+          void deleteEdgeImpl(selectedId);
+        }
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [selectedId, deleteNodeImpl, undo, redo]);
+  }, [selectedId, deleteNodeImpl, deleteEdgeImpl, undo, redo]);
 
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
@@ -197,6 +216,8 @@ function BpmnCanvas({
   nodesRef.current = nodes;
   const lanesRef = useRef(lanes);
   lanesRef.current = lanes;
+  const edgesRef = useRef(edges);
+  edgesRef.current = edges;
 
   const { status, error, markNode, markLane, flush } = useGraphPersistence({
     projectId,
@@ -296,6 +317,12 @@ function BpmnCanvas({
     const stored = nodesRef.current.find((n) => n.id === id);
     if (!resolved || !stored) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
+    if (tool === "connect") {
+      // Drag from this node — temp line follows the cursor; on mouseup we
+      // create an edge if the user is over another node.
+      setDrag({ type: "connect", sourceId: id, currX: x, currY: y });
+      return;
+    }
     setDrag({
       type: "node",
       id,
@@ -339,6 +366,11 @@ function BpmnCanvas({
     };
 
     const onMove = (e: globalThis.MouseEvent) => {
+      if (drag.type === "connect") {
+        const { x, y } = screenToWorld(e.clientX, e.clientY);
+        setDrag({ ...drag, currX: x, currY: y });
+        return;
+      }
       if (drag.type === "node") {
         const { x, y } = screenToWorld(e.clientX, e.clientY);
         const newX = x - drag.offX;
@@ -378,7 +410,56 @@ function BpmnCanvas({
       }
     };
 
-    const onUp = () => {
+    const onUp = (e: globalThis.MouseEvent) => {
+      if (drag.type === "connect") {
+        const { x, y } = screenToWorld(e.clientX, e.clientY);
+        const target = nodesRef.current.find((n) => {
+          // Resolve node Y the same way renderNodes does.
+          const lane = n.laneId
+            ? lanesRef.current.find((l) => l.id === n.laneId)
+            : undefined;
+          const ny = lane ? lane.y + n.relativeY : n.relativeY;
+          return (
+            n.id !== drag.sourceId &&
+            x >= n.x &&
+            x <= n.x + n.w &&
+            y >= ny &&
+            y <= ny + n.h
+          );
+        });
+        if (target) {
+          const sourceId = drag.sourceId;
+          const targetId = target.id;
+          const exists = edgesRef.current.some(
+            (e2) => e2.from === sourceId && e2.to === targetId
+          );
+          if (!exists) {
+            void (async () => {
+              try {
+                const created = await api.createEdge(
+                  projectId,
+                  modelId,
+                  versionId,
+                  { source_node_id: sourceId, target_node_id: targetId }
+                );
+                setEdges((curr) => [
+                  ...curr,
+                  {
+                    id: created.id,
+                    from: sourceId,
+                    to: targetId,
+                    label: created.label ?? null,
+                  },
+                ]);
+              } catch (err) {
+                console.error("Failed to create edge", err);
+              }
+            })();
+          }
+        }
+        setDrag(null);
+        return;
+      }
       if (drag.type === "node") {
         const final = nodesRef.current.find((n) => n.id === drag.id);
         if (final) {
@@ -707,7 +788,12 @@ function BpmnCanvas({
         style={{
           width: "100%",
           height: "100%",
-          cursor: drag?.type === "pan" ? "grabbing" : "default",
+          cursor:
+            drag?.type === "pan"
+              ? "grabbing"
+              : tool === "connect"
+                ? "crosshair"
+                : "default",
           userSelect: "none",
         }}
       >
@@ -793,6 +879,23 @@ function BpmnCanvas({
               onMouseDown={onNodeMouseDown}
             />
           ))}
+          {drag?.type === "connect" &&
+            (() => {
+              const source = renderNodes.find((n) => n.id === drag.sourceId);
+              if (!source) return null;
+              return (
+                <line
+                  x1={source.x + source.w}
+                  y1={source.y + source.h / 2}
+                  x2={drag.currX}
+                  y2={drag.currY}
+                  stroke="#0f172a"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 4"
+                  pointerEvents="none"
+                />
+              );
+            })()}
         </g>
       </svg>
 
