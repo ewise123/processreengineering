@@ -117,6 +117,12 @@ export interface BpmnCanvasHandle {
   /** Calls the API + removes the node (and any edges touching it) from
    * local state without re-fetching the whole graph. */
   deleteNode: (id: UUID) => Promise<void>;
+  /** Apply a node-level edit (label, lane assignment) from outside the
+   * canvas (e.g. the Properties panel). Records an undo entry. */
+  updateNode: (
+    id: UUID,
+    patch: { name?: string; laneId?: UUID }
+  ) => Promise<void>;
 }
 
 interface BpmnCanvasProps {
@@ -187,6 +193,70 @@ function BpmnCanvas({
       onNodeDeleted?.(id);
     },
     [projectId, onNodeDeleted]
+  );
+
+  const applyNodeEditLocal = useCallback(
+    async (
+      id: UUID,
+      next: { name: string; laneId: UUID | null; relativeY: number }
+    ) => {
+      setNodes((curr) =>
+        curr.map((n) =>
+          n.id === id
+            ? {
+                ...n,
+                label: next.name,
+                laneId: next.laneId,
+                relativeY: next.relativeY,
+              }
+            : n
+        )
+      );
+      await api.updateNode(projectId, id, {
+        name: next.name,
+        lane_id: next.laneId ?? undefined,
+        relative_y: next.relativeY,
+      });
+    },
+    [projectId]
+  );
+
+  const updateNodeImpl = useCallback(
+    async (
+      id: UUID,
+      patch: { name?: string; laneId?: UUID }
+    ) => {
+      const old = nodesRef.current.find((n) => n.id === id);
+      if (!old) return;
+      const oldName = old.label;
+      const oldLaneId = old.laneId;
+      const oldRelativeY = old.relativeY;
+      const newName = patch.name !== undefined ? patch.name : oldName;
+      const laneChanged =
+        patch.laneId !== undefined && patch.laneId !== oldLaneId;
+      const newLaneId = laneChanged ? patch.laneId! : oldLaneId;
+      // When the user moves the node to a different lane via the dropdown,
+      // anchor it at relativeY=0 of the new lane so it stays visible there.
+      const newRelativeY = laneChanged ? 0 : oldRelativeY;
+      if (newName === oldName && !laneChanged) return;
+      const next = {
+        name: newName,
+        laneId: newLaneId,
+        relativeY: newRelativeY,
+      };
+      const prev = {
+        name: oldName,
+        laneId: oldLaneId,
+        relativeY: oldRelativeY,
+      };
+      await applyNodeEditLocal(id, next);
+      record({
+        description: laneChanged ? "Move node to lane" : "Rename node",
+        do: () => applyNodeEditLocal(id, next),
+        undo: () => applyNodeEditLocal(id, prev),
+      });
+    },
+    [applyNodeEditLocal, record]
   );
 
   const deleteEdgeImpl = useCallback(
@@ -294,9 +364,11 @@ function BpmnCanvas({
     [projectId, modelId, versionId, record]
   );
 
-  useImperativeHandle(ref, () => ({ deleteNode: deleteNodeImpl }), [
-    deleteNodeImpl,
-  ]);
+  useImperativeHandle(
+    ref,
+    () => ({ deleteNode: deleteNodeImpl, updateNode: updateNodeImpl }),
+    [deleteNodeImpl, updateNodeImpl]
+  );
 
   // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
   // Cmd/Ctrl+Shift+Z (or Cmd/Ctrl+Y) for undo/redo. All of them no-op

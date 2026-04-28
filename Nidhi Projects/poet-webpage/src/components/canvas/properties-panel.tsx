@@ -7,7 +7,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
@@ -44,12 +44,17 @@ export function PropertiesPanel({
   lanes,
   onClose,
   onDelete,
+  onUpdate,
 }: {
   projectId: UUID;
   selected: SelectedNode;
   lanes: ProcessLane[];
   onClose: () => void;
   onDelete?: (id: UUID) => Promise<void> | void;
+  onUpdate?: (
+    id: UUID,
+    patch: { name?: string; laneId?: UUID }
+  ) => Promise<void> | void;
 }) {
   const { data, isLoading } = useQuery({
     queryKey: ["node-citations", projectId, selected.id],
@@ -68,6 +73,13 @@ export function PropertiesPanel({
   const [provenanceExpanded, setProvenanceExpanded] = useState(true);
   const [deleting, setDeleting] = useState(false);
 
+  // Local label state lets the input feel responsive while debouncing the
+  // PATCH until blur/Enter. Reset whenever the selection changes.
+  const [labelDraft, setLabelDraft] = useState(selected.name ?? "");
+  useEffect(() => {
+    setLabelDraft(selected.name ?? "");
+  }, [selected.id, selected.name]);
+
   const handleDelete = async () => {
     if (!onDelete || deleting) return;
     setDeleting(true);
@@ -76,6 +88,21 @@ export function PropertiesPanel({
     } finally {
       setDeleting(false);
     }
+  };
+
+  const handleLabelCommit = () => {
+    if (!onUpdate) return;
+    const trimmed = labelDraft.trim();
+    if (trimmed === "" || trimmed === (selected.name ?? "")) {
+      setLabelDraft(selected.name ?? "");
+      return;
+    }
+    void onUpdate(selected.id, { name: trimmed });
+  };
+
+  const handleLaneChange = (laneId: UUID) => {
+    if (!onUpdate || laneId === (selected.laneId ?? "")) return;
+    void onUpdate(selected.id, { laneId });
   };
 
   return (
@@ -122,10 +149,21 @@ export function PropertiesPanel({
             Label
           </label>
           <input
-            value={selected.name ?? ""}
-            disabled
-            title="Editing label inline coming soon — drag the node to reposition for now"
-            className="mt-1 w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-600 focus:outline-none"
+            value={labelDraft}
+            onChange={(e) => setLabelDraft(e.target.value)}
+            onBlur={handleLabelCommit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                (e.currentTarget as HTMLInputElement).blur();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setLabelDraft(selected.name ?? "");
+                (e.currentTarget as HTMLInputElement).blur();
+              }
+            }}
+            disabled={!onUpdate}
+            className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800 focus:border-slate-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-500"
           />
         </div>
 
@@ -153,9 +191,9 @@ export function PropertiesPanel({
             </label>
             <select
               value={selected.laneId ?? ""}
-              disabled
-              title="Drag the node into a different lane to change assignment"
-              className="mt-1 w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-600 focus:outline-none"
+              onChange={(e) => handleLaneChange(e.target.value as UUID)}
+              disabled={!onUpdate}
+              className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800 focus:border-slate-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-500"
             >
               {lanes.map((l) => (
                 <option key={l.id} value={l.id}>

@@ -70,6 +70,24 @@ export default function CanvasPage() {
     []
   );
 
+  const handleNodeUpdate = useCallback(
+    async (id: UUID, patch: { name?: string; laneId?: UUID }) => {
+      if (!canvasRef.current) return;
+      await canvasRef.current.updateNode(id, patch);
+      // Reflect the new label/lane in the panel without forcing a re-select.
+      setSelected((curr) =>
+        curr && curr.id === id
+          ? {
+              ...curr,
+              ...(patch.name !== undefined ? { name: patch.name } : {}),
+              ...(patch.laneId !== undefined ? { laneId: patch.laneId } : {}),
+            }
+          : curr
+      );
+    },
+    []
+  );
+
   const handleNodeDeleted = useCallback(
     (_id: UUID) => {
       setSelected(null);
@@ -259,6 +277,7 @@ export default function CanvasPage() {
             lanes={data.lanes}
             onClose={() => setSelected(null)}
             onDelete={handleNodeDelete}
+            onUpdate={handleNodeUpdate}
           />
         </div>
       )}
