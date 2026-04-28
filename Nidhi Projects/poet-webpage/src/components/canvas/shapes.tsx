@@ -1,14 +1,14 @@
 "use client";
 
 import type { MouseEvent } from "react";
-import type { CanvasEdge, CanvasNode } from "./types";
+import type { CanvasEdge, ResolvedNode } from "./types";
 
 export function NodeShape({
   node,
   selected,
   onMouseDown,
 }: {
-  node: CanvasNode;
+  node: ResolvedNode;
   selected: boolean;
   onMouseDown: (e: MouseEvent, id: string) => void;
 }) {
@@ -136,7 +136,7 @@ export function EdgeArrow({
   onClick,
 }: {
   edge: CanvasEdge;
-  nodes: CanvasNode[];
+  nodes: ResolvedNode[];
   selected: boolean;
   onClick: (id: string) => void;
 }) {

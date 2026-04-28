@@ -15,6 +15,7 @@ import type {
   CanvasEdge,
   CanvasLane,
   CanvasNode,
+  ResolvedNode,
   Viewport,
 } from "./types";
 
@@ -25,6 +26,14 @@ const MIN_LANE_HEIGHT = 90;
 type Drag =
   | { type: "node"; id: string; offX: number; offY: number }
   | { type: "pan"; startX: number; startY: number; tx0: number; ty0: number };
+
+function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
+  if (lanes.length === 0) return undefined;
+  if (y < lanes[0].y) return lanes[0];
+  const last = lanes[lanes.length - 1];
+  if (y >= last.y + last.h) return last;
+  return lanes.find((l) => y >= l.y && y < l.y + l.h);
+}
 
 export function BpmnCanvas({
   initialNodes,
@@ -47,12 +56,10 @@ export function BpmnCanvas({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
 
-  // Keep latest viewport accessible inside the native wheel handler so
-  // we can attach the listener once with passive:false.
+  // Keep viewport accessible inside the native (non-passive) wheel handler.
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
 
-  // World extent must enclose every node, otherwise lanes look truncated.
   const worldWidth = useMemo(() => {
     const maxX = nodes.reduce((m, n) => Math.max(m, n.x + n.w), 0);
     return Math.max(WORLD_WIDTH_MIN, maxX + WORLD_RIGHT_PADDING);
@@ -62,6 +69,18 @@ export function BpmnCanvas({
     const maxBottom = lanes.reduce((m, l) => Math.max(m, l.y + l.h), 0);
     return Math.max(620, maxBottom);
   }, [lanes]);
+
+  // Resolve absolute Y for rendering: lane.y + relativeY.
+  const renderNodes: ResolvedNode[] = useMemo(() => {
+    const laneMap = new Map(lanes.map((l) => [l.id, l]));
+    return nodes.map((n) => {
+      const lane = n.laneId ? laneMap.get(n.laneId) : undefined;
+      const y = lane ? lane.y + n.relativeY : n.relativeY;
+      const { relativeY: _ignore, ...rest } = n;
+      void _ignore;
+      return { ...rest, y };
+    });
+  }, [nodes, lanes]);
 
   const toWorld = useCallback(
     (sx: number, sy: number) => {
@@ -75,8 +94,8 @@ export function BpmnCanvas({
     [viewport]
   );
 
-  // Native wheel handler with passive:false so preventDefault actually stops
-  // the browser from page-zooming on Cmd/Ctrl+wheel.
+  // Native wheel handler (passive: false) so Cmd/Ctrl+wheel zooms the canvas
+  // instead of the browser window.
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -107,10 +126,10 @@ export function BpmnCanvas({
   const onNodeMouseDown = (e: MouseEvent, id: string) => {
     e.stopPropagation();
     setSelectedId(id);
-    const node = nodes.find((n) => n.id === id);
-    if (!node) return;
+    const resolved = renderNodes.find((n) => n.id === id);
+    if (!resolved) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
-    setDrag({ type: "node", id, offX: x - node.x, offY: y - node.y });
+    setDrag({ type: "node", id, offX: x - resolved.x, offY: y - resolved.y });
   };
 
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
@@ -133,12 +152,28 @@ export function BpmnCanvas({
     if (!drag) return;
     if (drag.type === "node") {
       const { x, y } = toWorld(e.clientX, e.clientY);
+      const newX = x - drag.offX;
+      const newAbsY = y - drag.offY;
       setNodes((curr) =>
-        curr.map((n) =>
-          n.id === drag.id
-            ? { ...n, x: x - drag.offX, y: y - drag.offY }
-            : n
-        )
+        curr.map((n) => {
+          if (n.id !== drag.id) return n;
+          // Determine which lane the dropped Y lands in.
+          const targetLane =
+            laneAtY(newAbsY + n.h / 2, lanes) ??
+            (n.laneId ? lanes.find((l) => l.id === n.laneId) : lanes[0]);
+          if (!targetLane) {
+            return { ...n, x: newX };
+          }
+          // Clamp within the new lane so the node never overflows top/bottom.
+          const maxRel = Math.max(0, targetLane.h - n.h);
+          const rel = Math.max(0, Math.min(maxRel, newAbsY - targetLane.y));
+          return {
+            ...n,
+            x: newX,
+            laneId: targetLane.id,
+            relativeY: rel,
+          };
+        })
       );
     } else {
       setViewport({
@@ -235,10 +270,11 @@ export function BpmnCanvas({
             height={worldHeight + 2000}
             fill="url(#poet-grid)"
           />
-          {/* Lane backgrounds */}
+          {/* Lane backgrounds — wide rect tagged as bg so panning works on them */}
           {lanes.map((lane) => (
             <g key={lane.id}>
               <rect
+                data-bg="1"
                 x={0}
                 y={lane.y}
                 width={worldWidth}
@@ -269,13 +305,13 @@ export function BpmnCanvas({
             <EdgeArrow
               key={edge.id}
               edge={edge}
-              nodes={nodes}
+              nodes={renderNodes}
               selected={selectedId === edge.id}
               onClick={(id) => setSelectedId(id)}
             />
           ))}
           {/* Nodes */}
-          {nodes.map((node) => (
+          {renderNodes.map((node) => (
             <NodeShape
               key={node.id}
               node={node}

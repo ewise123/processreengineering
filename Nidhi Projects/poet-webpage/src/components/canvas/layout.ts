@@ -88,21 +88,20 @@ export function buildCanvasState(graph: ProcessGraph): {
   }
   dagre.layout(g);
 
+  // Initial relativeY centers the node within its lane.
   const nodes: CanvasNode[] = graph.nodes.map((n) => {
     const kind = nodeKindFromType(n.type);
     const size = NODE_SIZES[kind];
     const dPos = g.node(n.id);
-    const laneIdx = n.lane_id ? laneIndexById.get(n.lane_id) ?? 0 : 0;
-    const laneCenterY = laneIdx * LANE_HEIGHT + LANE_HEIGHT / 2;
     const x = (dPos?.x ?? 0) - size.w / 2;
-    const y = laneCenterY - size.h / 2;
+    const relativeY = LANE_HEIGHT / 2 - size.h / 2;
     return {
       id: n.id,
       kind,
       label: n.name,
       laneId: n.lane_id,
       x: Math.max(LANE_PADDING_LEFT, x),
-      y,
+      relativeY,
       w: size.w,
       h: size.h,
     };
