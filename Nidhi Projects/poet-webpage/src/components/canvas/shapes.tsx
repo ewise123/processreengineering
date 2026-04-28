@@ -184,7 +184,7 @@ export function NodeShape({
   return (
     <g
       transform={`translate(${x},${y})`}
-      style={{ cursor: "move" }}
+      style={{ cursor: showHandles ? "crosshair" : "move" }}
       onMouseDown={(e) => onMouseDown(e, id)}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}

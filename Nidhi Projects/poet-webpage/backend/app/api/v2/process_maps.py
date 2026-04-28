@@ -550,6 +550,22 @@ def create_edge(
             detail="source and target must reference nodes in the same version",
         )
 
+    # Server-side dedupe so retries / parallel requests can't persist
+    # duplicate edges for the same (version, source, target) tuple.
+    existing = db.scalars(
+        select(ProcessEdge)
+        .where(
+            ProcessEdge.version_id == version.id,
+            ProcessEdge.source_node_id == payload.source_node_id,
+            ProcessEdge.target_node_id == payload.target_node_id,
+        )
+        .limit(1)
+    ).first()
+    if existing is not None:
+        raise HTTPException(
+            status_code=409, detail="Edge already exists between these nodes"
+        )
+
     edge = ProcessEdge(
         version_id=version.id,
         source_node_id=payload.source_node_id,
