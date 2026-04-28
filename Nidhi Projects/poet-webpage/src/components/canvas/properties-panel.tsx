@@ -51,13 +51,13 @@ export function PropertiesPanel({
 
   return (
     <div
-      className="flex h-full w-[270px] flex-col border-l bg-white"
+      className="flex h-full w-[270px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white"
       style={{
         boxShadow: "0 8px 28px -8px rgba(15, 23, 42, 0.18), 0 2px 6px -1px rgba(15, 23, 42, 0.08)",
       }}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
+      {/* Header — sticky at top */}
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-100 bg-white px-3 py-2">
         <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
           Properties
         </div>
@@ -80,6 +80,9 @@ export function PropertiesPanel({
           </Button>
         </div>
       </div>
+
+      {/* Scrollable body — three sections share this container */}
+      <div className="flex-1 overflow-y-auto">
 
       {/* Properties body */}
       <div className="space-y-2.5 px-3 py-2.5">
@@ -203,6 +206,8 @@ export function PropertiesPanel({
           </button>
         </div>
       </div>
+
+      </div>{/* end scrollable body */}
     </div>
   );
 }
