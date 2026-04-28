@@ -108,7 +108,7 @@ export function FloatingToolbar({
           onClick={() =>
             onViewportChange({
               ...viewport,
-              scale: Math.max(0.3, viewport.scale - 0.15),
+              scale: Math.max(0.1, viewport.scale - 0.15),
             })
           }
           title="Zoom out"

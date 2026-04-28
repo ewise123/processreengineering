@@ -183,7 +183,7 @@ export function BpmnCanvas({
       const v = viewportRef.current;
       if (e.ctrlKey || e.metaKey) {
         const delta = -e.deltaY * 0.002;
-        const newScale = Math.max(0.3, Math.min(2.5, v.scale * (1 + delta)));
+        const newScale = Math.max(0.1, Math.min(2.5, v.scale * (1 + delta)));
         const wx = (mx - v.tx) / v.scale;
         const wy = (my - v.ty) / v.scale;
         setViewport({
