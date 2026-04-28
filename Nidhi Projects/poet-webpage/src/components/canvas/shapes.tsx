@@ -1,8 +1,8 @@
 "use client";
 
-import type { MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 
-import type { IssueSeverity } from "@/lib/types";
+import type { IssueSeverity, UUID } from "@/lib/types";
 
 import type { CanvasEdge, ResolvedNode } from "./types";
 
@@ -11,16 +11,83 @@ const ISSUE_FILL: Record<IssueSeverity, string> = {
   medium: "#d97706",
 };
 
+export type ConnectSide = "top" | "right" | "bottom" | "left";
+
+interface SimpleRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Pick orthogonal exit/entry sides based on the relative position of
+ * source and target so the arrow always lands ON the target's perimeter
+ * (perpendicular to its closest side), instead of disappearing into it.
+ * Produces a 3-segment L-shape with one horizontal+one vertical bend.
+ */
+export function buildEdgePath(
+  from: SimpleRect,
+  to: SimpleRect
+): { d: string; midX: number; midY: number } {
+  const fc = { x: from.x + from.w / 2, y: from.y + from.h / 2 };
+  const tc = { x: to.x + to.w / 2, y: to.y + to.h / 2 };
+  const dx = tc.x - fc.x;
+  const dy = tc.y - fc.y;
+  const horizontal = Math.abs(dx) >= Math.abs(dy);
+  if (horizontal) {
+    const exitX = dx >= 0 ? from.x + from.w : from.x;
+    const entryX = dx >= 0 ? to.x : to.x + to.w;
+    const exitY = fc.y;
+    const entryY = tc.y;
+    const midX = (exitX + entryX) / 2;
+    return {
+      d: `M ${exitX} ${exitY} L ${midX} ${exitY} L ${midX} ${entryY} L ${entryX} ${entryY}`,
+      midX,
+      midY: (exitY + entryY) / 2,
+    };
+  }
+  const exitY = dy >= 0 ? from.y + from.h : from.y;
+  const entryY = dy >= 0 ? to.y : to.y + to.h;
+  const exitX = fc.x;
+  const entryX = tc.x;
+  const midY = (exitY + entryY) / 2;
+  return {
+    d: `M ${exitX} ${exitY} L ${exitX} ${midY} L ${entryX} ${midY} L ${entryX} ${entryY}`,
+    midX: (exitX + entryX) / 2,
+    midY,
+  };
+}
+
+export function sidePoint(rect: SimpleRect, side: ConnectSide) {
+  switch (side) {
+    case "top":
+      return { x: rect.x + rect.w / 2, y: rect.y };
+    case "right":
+      return { x: rect.x + rect.w, y: rect.y + rect.h / 2 };
+    case "bottom":
+      return { x: rect.x + rect.w / 2, y: rect.y + rect.h };
+    case "left":
+      return { x: rect.x, y: rect.y + rect.h / 2 };
+  }
+}
+
 export function NodeShape({
   node,
   selected,
   issueLevel,
+  showHandles,
   onMouseDown,
+  onStartConnect,
 }: {
   node: ResolvedNode;
   selected: boolean;
   issueLevel?: IssueSeverity | null;
+  /** When true, hover handles are always rendered (e.g. while the connect
+   * tool is active). Otherwise they appear on hover or when selected. */
+  showHandles?: boolean;
   onMouseDown: (e: MouseEvent, id: string) => void;
+  onStartConnect?: (e: MouseEvent, sourceId: UUID, side: ConnectSide) => void;
 }) {
   const { kind, x, y, w, h, label, id } = node;
   const isEvent = kind === "start" || kind === "end" || kind === "intermediate";
@@ -32,11 +99,17 @@ export function NodeShape({
   const strokeWidth = selected ? 2.5 : issueLevel ? 2 : 1.2;
   const fill = "#ffffff";
 
+  const [hover, setHover] = useState(false);
+  const handlesVisible =
+    !!onStartConnect && (hover || selected || showHandles);
+
   return (
     <g
       transform={`translate(${x},${y})`}
       style={{ cursor: "move" }}
       onMouseDown={(e) => onMouseDown(e, id)}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       data-node-id={id}
     >
       {isEvent && (
@@ -155,7 +228,41 @@ export function NodeShape({
           </text>
         </g>
       )}
+      {handlesVisible && (
+        <>
+          <ConnectHandle cx={w / 2} cy={0} onMouseDown={(e) => onStartConnect!(e, id, "top")} />
+          <ConnectHandle cx={w} cy={h / 2} onMouseDown={(e) => onStartConnect!(e, id, "right")} />
+          <ConnectHandle cx={w / 2} cy={h} onMouseDown={(e) => onStartConnect!(e, id, "bottom")} />
+          <ConnectHandle cx={0} cy={h / 2} onMouseDown={(e) => onStartConnect!(e, id, "left")} />
+        </>
+      )}
     </g>
+  );
+}
+
+function ConnectHandle({
+  cx,
+  cy,
+  onMouseDown,
+}: {
+  cx: number;
+  cy: number;
+  onMouseDown: (e: MouseEvent) => void;
+}) {
+  return (
+    <circle
+      cx={cx}
+      cy={cy}
+      r={5}
+      fill="#0f172a"
+      stroke="#fff"
+      strokeWidth={1.5}
+      style={{ cursor: "crosshair" }}
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        onMouseDown(e);
+      }}
+    />
   );
 }
 
@@ -174,13 +281,7 @@ export function EdgeArrow({
   const to = nodes.find((n) => n.id === edge.to);
   if (!from || !to) return null;
 
-  const fx = from.x + from.w;
-  const fy = from.y + from.h / 2;
-  const tx = to.x;
-  const ty = to.y + to.h / 2;
-  const midX = fx + (tx - fx) / 2;
-  const d = `M ${fx} ${fy} L ${midX} ${fy} L ${midX} ${ty} L ${tx} ${ty}`;
-  const midY = (fy + ty) / 2;
+  const { d, midX, midY } = buildEdgePath(from, to);
 
   return (
     <g

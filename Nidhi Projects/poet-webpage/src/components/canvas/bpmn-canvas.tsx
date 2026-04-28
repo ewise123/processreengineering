@@ -23,7 +23,13 @@ import {
   PALETTE_SHAPES,
   ShapePalette,
 } from "./shape-palette";
-import { EdgeArrow, NodeShape } from "./shapes";
+import {
+  buildEdgePath,
+  EdgeArrow,
+  NodeShape,
+  sidePoint,
+  type ConnectSide,
+} from "./shapes";
 import type {
   CanvasEdge,
   CanvasLane,
@@ -65,10 +71,30 @@ type Drag =
   | {
       type: "connect";
       sourceId: UUID;
+      sourceSide: ConnectSide;
       // Live cursor position in world coords for the temp line.
       currX: number;
       currY: number;
     };
+
+/** Orthogonal preview path from a node-side anchor toward an arbitrary
+ * cursor point. The first segment extends perpendicular to the source side
+ * so the preview clearly shows which side the connection will exit. */
+function buildPreviewToCursor(
+  source: { x: number; y: number; w: number; h: number },
+  sourceSide: ConnectSide,
+  cx: number,
+  cy: number
+): string {
+  const start = sidePoint(source, sourceSide);
+  const isHorizontal = sourceSide === "left" || sourceSide === "right";
+  if (isHorizontal) {
+    const midX = (start.x + cx) / 2;
+    return `M ${start.x} ${start.y} L ${midX} ${start.y} L ${midX} ${cy} L ${cx} ${cy}`;
+  }
+  const midY = (start.y + cy) / 2;
+  return `M ${start.x} ${start.y} L ${start.x} ${midY} L ${cx} ${midY} L ${cx} ${cy}`;
+}
 
 function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
   if (lanes.length === 0) return undefined;
@@ -384,9 +410,21 @@ function BpmnCanvas({
     if (!resolved || !stored) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
     if (tool === "connect") {
-      // Drag from this node — temp line follows the cursor; on mouseup we
-      // create an edge if the user is over another node.
-      setDrag({ type: "connect", sourceId: id, currX: x, currY: y });
+      // Body-drag in connect mode picks the source side from where the user
+      // grabbed: closest of top/right/bottom/left to the click point.
+      const cx = resolved.x + resolved.w / 2;
+      const cy = resolved.y + resolved.h / 2;
+      const dx = x - cx;
+      const dy = y - cy;
+      const side: ConnectSide =
+        Math.abs(dx) > Math.abs(dy)
+          ? dx >= 0
+            ? "right"
+            : "left"
+          : dy >= 0
+            ? "bottom"
+            : "top";
+      setDrag({ type: "connect", sourceId: id, sourceSide: side, currX: x, currY: y });
       return;
     }
     setDrag({
@@ -399,6 +437,16 @@ function BpmnCanvas({
       origLaneId: stored.laneId,
     });
   };
+
+  const onStartConnect = useCallback(
+    (e: MouseEvent, sourceId: UUID, side: ConnectSide) => {
+      e.stopPropagation();
+      setSelectedId(sourceId);
+      const { x, y } = toWorld(e.clientX, e.clientY);
+      setDrag({ type: "connect", sourceId, sourceSide: side, currX: x, currY: y });
+    },
+    [toWorld]
+  );
 
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
     const target = e.target as SVGElement;
@@ -924,21 +972,29 @@ function BpmnCanvas({
               node={node}
               selected={selectedId === node.id}
               issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
+              showHandles={tool === "connect"}
               onMouseDown={onNodeMouseDown}
+              onStartConnect={onStartConnect}
             />
           ))}
           {drag?.type === "connect" &&
             (() => {
               const source = renderNodes.find((n) => n.id === drag.sourceId);
               if (!source) return null;
-              const fx = source.x + source.w;
-              const fy = source.y + source.h / 2;
-              const tx = drag.currX;
-              const ty = drag.currY;
-              // Orthogonal L-shape — same routing rule the persisted edges
-              // use, so the preview matches what you'll actually see.
-              const midX = fx + (tx - fx) / 2;
-              const d = `M ${fx} ${fy} L ${midX} ${fy} L ${midX} ${ty} L ${tx} ${ty}`;
+              // If the cursor is over a target node, preview the final
+              // edge using node-to-node routing so the user can see exactly
+              // what they'll get. Otherwise fall back to source-side → cursor.
+              const target = renderNodes.find(
+                (n) =>
+                  n.id !== drag.sourceId &&
+                  drag.currX >= n.x &&
+                  drag.currX <= n.x + n.w &&
+                  drag.currY >= n.y &&
+                  drag.currY <= n.y + n.h
+              );
+              const d = target
+                ? buildEdgePath(source, target).d
+                : buildPreviewToCursor(source, drag.sourceSide, drag.currX, drag.currY);
               return (
                 <path
                   d={d}
