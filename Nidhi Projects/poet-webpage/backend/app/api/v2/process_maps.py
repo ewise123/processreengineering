@@ -3,8 +3,9 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.v2.deps import get_current_user, get_project_or_404
 from app.db.session import get_db
@@ -27,13 +28,16 @@ from app.models.process import (
 )
 from app.models.project import Project
 from app.schemas.process_map import (
+    LaneCreate,
+    LaneUpdate,
+    NodeUpdate,
+    ProcessEdgeRead,
     ProcessGraphRead,
     ProcessLaneRead,
     ProcessMapGenerateRequest,
     ProcessMapGenerateResult,
     ProcessModelRead,
     ProcessNodeRead,
-    ProcessEdgeRead,
     ProcessVersionRead,
 )
 from app.services.legacy_bpmn import build_bpmn_xml, validate_xml
@@ -384,6 +388,156 @@ def list_process_maps(
         )
         for m in models
     ]
+
+
+def _check_node_in_project(
+    node: ProcessNode, project_id: UUID, db: Session
+) -> None:
+    """Raise 404 unless the node ultimately belongs to the given project."""
+    version = db.get(ProcessVersion, node.version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    model = db.get(ProcessModel, version.model_id)
+    if model is None or model.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+
+def _check_lane_in_project(
+    lane: ProcessLane, project_id: UUID, db: Session
+) -> ProcessVersion:
+    version = db.get(ProcessVersion, lane.version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="Lane not found")
+    model = db.get(ProcessModel, version.model_id)
+    if model is None or model.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Lane not found")
+    return version
+
+
+@router.patch("/nodes/{node_id}", response_model=ProcessNodeRead)
+def update_node(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    node_id: UUID,
+    payload: NodeUpdate,
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessNode:
+    node = db.get(ProcessNode, node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    _check_node_in_project(node, project.id, db)
+
+    if payload.lane_id is not None:
+        target_lane = db.get(ProcessLane, payload.lane_id)
+        if target_lane is None or target_lane.version_id != node.version_id:
+            raise HTTPException(
+                status_code=422,
+                detail="lane_id must reference a lane in the same version",
+            )
+        node.lane_id = payload.lane_id
+    if payload.name is not None:
+        node.name = payload.name
+    if payload.x is not None or payload.relative_y is not None:
+        new_position = dict(node.position or {})
+        if payload.x is not None:
+            new_position["x"] = payload.x
+        if payload.relative_y is not None:
+            new_position["relative_y"] = payload.relative_y
+        node.position = new_position
+        flag_modified(node, "position")
+    db.commit()
+    db.refresh(node)
+    return node
+
+
+@router.patch("/lanes/{lane_id}", response_model=ProcessLaneRead)
+def update_lane(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    lane_id: UUID,
+    payload: LaneUpdate,
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessLane:
+    lane = db.get(ProcessLane, lane_id)
+    if lane is None:
+        raise HTTPException(status_code=404, detail="Lane not found")
+    _check_lane_in_project(lane, project.id, db)
+
+    if payload.name is not None:
+        lane.name = payload.name
+    if payload.order_index is not None:
+        lane.order_index = payload.order_index
+    if payload.height_px is not None:
+        lane.height_px = payload.height_px
+    db.commit()
+    db.refresh(lane)
+    return lane
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/lanes",
+    response_model=ProcessLaneRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_lane(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    payload: LaneCreate,
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessLane:
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model_id:
+        raise HTTPException(status_code=404, detail="Version not found")
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    lane = ProcessLane(
+        version_id=version_id,
+        name=payload.name,
+        order_index=payload.order_index,
+        height_px=payload.height_px or 150,
+    )
+    db.add(lane)
+    db.commit()
+    db.refresh(lane)
+    return lane
+
+
+@router.delete("/lanes/{lane_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_lane(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    lane_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    lane = db.get(ProcessLane, lane_id)
+    if lane is None:
+        raise HTTPException(status_code=404, detail="Lane not found")
+    version = _check_lane_in_project(lane, project.id, db)
+
+    others = list(
+        db.scalars(
+            select(ProcessLane)
+            .where(
+                ProcessLane.version_id == version.id,
+                ProcessLane.id != lane_id,
+            )
+            .order_by(ProcessLane.order_index)
+        ).all()
+    )
+    if not others:
+        raise HTTPException(
+            status_code=422, detail="Cannot delete the last remaining lane"
+        )
+
+    fallback = others[0]
+    # Reassign nodes to a remaining lane so they don't end up orphaned.
+    db.execute(
+        update(ProcessNode)
+        .where(ProcessNode.lane_id == lane_id)
+        .values(lane_id=fallback.id)
+    )
+    db.delete(lane)
+    db.commit()
 
 
 @router.get(

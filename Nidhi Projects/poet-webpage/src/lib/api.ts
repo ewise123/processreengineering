@@ -6,11 +6,16 @@ import type {
   EmbedResult,
   InputParseResult,
   InputRow,
+  LaneCreate,
+  LaneUpdate,
+  NodeUpdate,
   Page,
   ProcessGraph,
+  ProcessLane,
   ProcessMapGenerateRequest,
   ProcessMapGenerateResult,
   ProcessModel,
+  ProcessNode,
   Project,
   ProjectCreate,
   ProjectUpdate,
@@ -156,4 +161,28 @@ export const api = {
     request<ProcessGraph>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}`
     ),
+  updateNode: (projectId: UUID, nodeId: UUID, body: NodeUpdate) =>
+    request<ProcessNode>(`/api/v2/projects/${projectId}/nodes/${nodeId}`, {
+      method: "PATCH",
+      json: body,
+    }),
+  updateLane: (projectId: UUID, laneId: UUID, body: LaneUpdate) =>
+    request<ProcessLane>(`/api/v2/projects/${projectId}/lanes/${laneId}`, {
+      method: "PATCH",
+      json: body,
+    }),
+  createLane: (
+    projectId: UUID,
+    modelId: UUID,
+    versionId: UUID,
+    body: LaneCreate
+  ) =>
+    request<ProcessLane>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/lanes`,
+      { method: "POST", json: body }
+    ),
+  deleteLane: (projectId: UUID, laneId: UUID) =>
+    request<void>(`/api/v2/projects/${projectId}/lanes/${laneId}`, {
+      method: "DELETE",
+    }),
 };

@@ -28,7 +28,7 @@ const LANE_PALETTE = [
   "#e0e7ff", // indigo
 ];
 
-const LANE_HEIGHT = 150;
+export const LANE_HEIGHT = 150;
 const LANE_PADDING_LEFT = 110; // gap between lane header strip and first node
 
 function nodeKindFromType(type: string): CanvasNodeKind {
@@ -62,13 +62,22 @@ export function buildCanvasState(graph: ProcessGraph): {
   );
   const laneIndexById = new Map(sortedLanes.map((l, i) => [l.id, i]));
 
-  const lanes: CanvasLane[] = sortedLanes.map((l, i) => ({
-    id: l.id,
-    label: l.name,
-    color: LANE_PALETTE[i % LANE_PALETTE.length],
-    y: i * LANE_HEIGHT,
-    h: LANE_HEIGHT,
-  }));
+  // Compute Y positions cumulatively from each lane's height_px (defaulting
+  // to LANE_HEIGHT when older data has no stored height).
+  const lanes: CanvasLane[] = [];
+  let runningY = 0;
+  for (let i = 0; i < sortedLanes.length; i++) {
+    const l = sortedLanes[i];
+    const h = l.height_px ?? LANE_HEIGHT;
+    lanes.push({
+      id: l.id,
+      label: l.name,
+      color: LANE_PALETTE[i % LANE_PALETTE.length],
+      y: runningY,
+      h,
+    });
+    runningY += h;
+  }
 
   const g = new dagre.graphlib.Graph();
   g.setGraph({
@@ -88,19 +97,27 @@ export function buildCanvasState(graph: ProcessGraph): {
   }
   dagre.layout(g);
 
-  // Initial relativeY centers the node within its lane.
+  // Prefer persisted positions from the server (`position.x` / `position.relative_y`);
+  // fall back to Dagre + lane-center for nodes that haven't been moved yet.
   const nodes: CanvasNode[] = graph.nodes.map((n) => {
     const kind = nodeKindFromType(n.type);
     const size = NODE_SIZES[kind];
     const dPos = g.node(n.id);
-    const x = (dPos?.x ?? 0) - size.w / 2;
-    const relativeY = LANE_HEIGHT / 2 - size.h / 2;
+    const persisted = (n.position ?? {}) as { x?: number; relative_y?: number };
+    const x =
+      typeof persisted.x === "number"
+        ? persisted.x
+        : Math.max(LANE_PADDING_LEFT, (dPos?.x ?? 0) - size.w / 2);
+    const relativeY =
+      typeof persisted.relative_y === "number"
+        ? persisted.relative_y
+        : LANE_HEIGHT / 2 - size.h / 2;
     return {
       id: n.id,
       kind,
       label: n.name,
       laneId: n.lane_id,
-      x: Math.max(LANE_PADDING_LEFT, x),
+      x,
       relativeY,
       w: size.w,
       h: size.h,

@@ -29,6 +29,26 @@ class ProcessLaneRead(BaseModel):
     id: UUID
     name: str
     order_index: int
+    height_px: int
+
+
+class LaneCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+    order_index: int = Field(ge=0)
+    height_px: int | None = Field(default=None, ge=80)
+
+
+class LaneUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=300)
+    order_index: int | None = Field(default=None, ge=0)
+    height_px: int | None = Field(default=None, ge=80)
+
+
+class NodeUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=500)
+    lane_id: UUID | None = None
+    x: float | None = None
+    relative_y: float | None = None
 
 
 class ProcessNodeRead(BaseModel):

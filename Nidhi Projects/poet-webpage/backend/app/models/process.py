@@ -81,6 +81,9 @@ class ProcessLane(IdMixin, TimestampMixin, Base):
         nullable=True,
     )
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    height_px: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=150, server_default="150"
+    )
 
 
 class ProcessNode(IdMixin, TimestampMixin, Base):

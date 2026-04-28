@@ -120,6 +120,26 @@ export interface ProcessLane {
   id: UUID;
   name: string;
   order_index: number;
+  height_px: number;
+}
+
+export interface LaneCreate {
+  name: string;
+  order_index: number;
+  height_px?: number | null;
+}
+
+export interface LaneUpdate {
+  name?: string;
+  order_index?: number;
+  height_px?: number;
+}
+
+export interface NodeUpdate {
+  name?: string;
+  lane_id?: UUID;
+  x?: number;
+  relative_y?: number;
 }
 
 export interface ProcessNode {

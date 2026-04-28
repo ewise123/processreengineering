@@ -9,7 +9,11 @@ import {
   type MouseEvent,
 } from "react";
 
+import { api } from "@/lib/api";
+import type { UUID } from "@/lib/types";
+
 import { LaneRail } from "./lane-rail";
+import { LANE_HEIGHT } from "./layout";
 import { EdgeArrow, NodeShape } from "./shapes";
 import type {
   CanvasEdge,
@@ -18,10 +22,22 @@ import type {
   ResolvedNode,
   Viewport,
 } from "./types";
+import { useGraphPersistence, type SaveStatus } from "./use-persistence";
 
 const WORLD_WIDTH_MIN = 1700;
 const WORLD_RIGHT_PADDING = 240;
 const MIN_LANE_HEIGHT = 90;
+
+const LANE_PALETTE = [
+  "#dbeafe",
+  "#dcfce7",
+  "#fef9c3",
+  "#fae8ff",
+  "#fce7f3",
+  "#cffafe",
+  "#ffedd5",
+  "#e0e7ff",
+];
 
 type Drag =
   | { type: "node"; id: string; offX: number; offY: number }
@@ -36,13 +52,21 @@ function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
 }
 
 export function BpmnCanvas({
+  projectId,
+  modelId,
+  versionId,
   initialNodes,
   initialEdges,
   initialLanes,
+  onSaveStatusChange,
 }: {
+  projectId: UUID;
+  modelId: UUID;
+  versionId: UUID;
   initialNodes: CanvasNode[];
   initialEdges: CanvasEdge[];
   initialLanes: CanvasLane[];
+  onSaveStatusChange?: (status: SaveStatus, error: string | null) => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState(initialNodes);
@@ -56,9 +80,21 @@ export function BpmnCanvas({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
 
-  // Keep viewport accessible inside the native (non-passive) wheel handler.
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
+  const lanesRef = useRef(lanes);
+  lanesRef.current = lanes;
+
+  const { status, error, markNode, markLane } = useGraphPersistence({
+    projectId,
+  });
+
+  // Notify parent of save state transitions for UI indicator.
+  useEffect(() => {
+    onSaveStatusChange?.(status, error);
+  }, [status, error, onSaveStatusChange]);
 
   const worldWidth = useMemo(() => {
     const maxX = nodes.reduce((m, n) => Math.max(m, n.x + n.w), 0);
@@ -70,7 +106,6 @@ export function BpmnCanvas({
     return Math.max(620, maxBottom);
   }, [lanes]);
 
-  // Resolve absolute Y for rendering: lane.y + relativeY.
   const renderNodes: ResolvedNode[] = useMemo(() => {
     const laneMap = new Map(lanes.map((l) => [l.id, l]));
     return nodes.map((n) => {
@@ -94,8 +129,7 @@ export function BpmnCanvas({
     [viewport]
   );
 
-  // Native wheel handler (passive: false) so Cmd/Ctrl+wheel zooms the canvas
-  // instead of the browser window.
+  // Native wheel handler with passive:false so Cmd/Ctrl+wheel zooms the canvas.
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -157,14 +191,12 @@ export function BpmnCanvas({
       setNodes((curr) =>
         curr.map((n) => {
           if (n.id !== drag.id) return n;
-          // Determine which lane the dropped Y lands in.
           const targetLane =
             laneAtY(newAbsY + n.h / 2, lanes) ??
             (n.laneId ? lanes.find((l) => l.id === n.laneId) : lanes[0]);
           if (!targetLane) {
             return { ...n, x: newX };
           }
-          // Clamp within the new lane so the node never overflows top/bottom.
           const maxRel = Math.max(0, targetLane.h - n.h);
           const rel = Math.max(0, Math.min(maxRel, newAbsY - targetLane.y));
           return {
@@ -184,12 +216,36 @@ export function BpmnCanvas({
     }
   };
 
-  const onMouseUp = () => setDrag(null);
+  const onMouseUp = () => {
+    // Commit node drag to persistence on drop
+    if (drag?.type === "node") {
+      const finalNode = nodesRef.current.find((n) => n.id === drag.id);
+      if (finalNode) {
+        markNode(finalNode.id, {
+          x: finalNode.x,
+          relative_y: finalNode.relativeY,
+          lane_id: finalNode.laneId ?? undefined,
+        });
+      }
+    }
+    setDrag(null);
+  };
 
-  const moveLane = useCallback((laneId: string, targetIdx: number) => {
-    setLanes((curr) => {
+  // Internal helpers that compute the new lane array, set state, mark dirty.
+  const recomputeY = (ls: CanvasLane[]): CanvasLane[] => {
+    let y = 0;
+    return ls.map((l) => {
+      const out = { ...l, y };
+      y += l.h;
+      return out;
+    });
+  };
+
+  const moveLane = useCallback(
+    (laneId: string, targetIdx: number) => {
+      const curr = lanesRef.current;
       const idx = curr.findIndex((l) => l.id === laneId);
-      if (idx === -1) return curr;
+      if (idx === -1) return;
       const removed = [...curr.slice(0, idx), ...curr.slice(idx + 1)];
       const target = targetIdx > idx ? targetIdx - 1 : targetIdx;
       const reordered = [
@@ -197,28 +253,110 @@ export function BpmnCanvas({
         curr[idx],
         ...removed.slice(target),
       ];
-      let y = 0;
-      return reordered.map((l) => {
-        const next = { ...l, y };
-        y += l.h;
-        return next;
+      const next = recomputeY(reordered);
+      setLanes(next);
+      // Mark every lane whose index changed (defensive: just re-PATCH them all)
+      next.forEach((l, i) => {
+        const oldIdx = curr.findIndex((c) => c.id === l.id);
+        if (oldIdx !== i) markLane(l.id, { order_index: i });
       });
-    });
-  }, []);
+    },
+    [markLane]
+  );
 
-  const resizeLane = useCallback((laneId: string, newH: number) => {
-    setLanes((curr) => {
-      const next = curr.map((l) =>
-        l.id === laneId ? { ...l, h: Math.max(MIN_LANE_HEIGHT, newH) } : l
+  const resizeLane = useCallback(
+    (laneId: string, newH: number) => {
+      const curr = lanesRef.current;
+      const idx = curr.findIndex((l) => l.id === laneId);
+      if (idx === -1) return;
+      const clamped = Math.max(MIN_LANE_HEIGHT, Math.round(newH));
+      const next = recomputeY(
+        curr.map((l) => (l.id === laneId ? { ...l, h: clamped } : l))
       );
-      let y = 0;
-      return next.map((l) => {
-        const out = { ...l, y };
-        y += l.h;
-        return out;
-      });
-    });
-  }, []);
+      setLanes(next);
+      markLane(laneId, { height_px: clamped });
+    },
+    [markLane]
+  );
+
+  const renameLane = useCallback(
+    (laneId: string, newName: string) => {
+      setLanes((curr) =>
+        curr.map((l) => (l.id === laneId ? { ...l, label: newName } : l))
+      );
+      markLane(laneId, { name: newName });
+    },
+    [markLane]
+  );
+
+  const addLaneAt = useCallback(
+    async (atIndex: number) => {
+      const curr = lanesRef.current;
+      try {
+        const created = await api.createLane(projectId, modelId, versionId, {
+          name: "New lane",
+          order_index: atIndex,
+          height_px: LANE_HEIGHT,
+        });
+        const newLane: CanvasLane = {
+          id: created.id,
+          label: created.name,
+          color: LANE_PALETTE[atIndex % LANE_PALETTE.length],
+          y: 0,
+          h: created.height_px,
+        };
+        const inserted = [
+          ...curr.slice(0, atIndex),
+          newLane,
+          ...curr.slice(atIndex),
+        ];
+        const next = recomputeY(inserted);
+        setLanes(next);
+        // Re-PATCH order_index for everyone after the insertion point so
+        // server numbering stays consecutive.
+        for (let i = atIndex + 1; i < next.length; i++) {
+          markLane(next[i].id, { order_index: i });
+        }
+      } catch (e) {
+        console.error("Failed to add lane", e);
+      }
+    },
+    [projectId, modelId, versionId, markLane]
+  );
+
+  const deleteLane = useCallback(
+    async (laneId: string) => {
+      const curr = lanesRef.current;
+      if (curr.length <= 1) return;
+      const idx = curr.findIndex((l) => l.id === laneId);
+      if (idx === -1) return;
+      const fallback = curr.find((l) => l.id !== laneId);
+      if (!fallback) return;
+      try {
+        await api.deleteLane(projectId, laneId);
+        const remaining = curr.filter((l) => l.id !== laneId);
+        const next = recomputeY(remaining);
+        setLanes(next);
+        // Re-assign any nodes that were in the deleted lane to fallback locally
+        // (server already did this — we mirror it for instant UI consistency).
+        setNodes((nodesNow) =>
+          nodesNow.map((n) =>
+            n.laneId === laneId
+              ? { ...n, laneId: fallback.id, relativeY: 0 }
+              : n
+          )
+        );
+        // Re-PATCH order_index for shifted lanes
+        next.forEach((l, i) => {
+          const prevIdx = curr.findIndex((c) => c.id === l.id);
+          if (prevIdx !== i) markLane(l.id, { order_index: i });
+        });
+      } catch (e) {
+        console.error("Failed to delete lane", e);
+      }
+    },
+    [projectId, markLane]
+  );
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
@@ -270,7 +408,6 @@ export function BpmnCanvas({
             height={worldHeight + 2000}
             fill="url(#poet-grid)"
           />
-          {/* Lane backgrounds — wide rect tagged as bg so panning works on them */}
           {lanes.map((lane) => (
             <g key={lane.id}>
               <rect
@@ -300,7 +437,6 @@ export function BpmnCanvas({
               />
             </g>
           ))}
-          {/* Edges */}
           {edges.map((edge) => (
             <EdgeArrow
               key={edge.id}
@@ -310,7 +446,6 @@ export function BpmnCanvas({
               onClick={(id) => setSelectedId(id)}
             />
           ))}
-          {/* Nodes */}
           {renderNodes.map((node) => (
             <NodeShape
               key={node.id}
@@ -327,6 +462,9 @@ export function BpmnCanvas({
         viewport={viewport}
         onMoveLane={moveLane}
         onResizeLane={resizeLane}
+        onRenameLane={renameLane}
+        onAddLaneAt={addLaneAt}
+        onDeleteLane={deleteLane}
       />
     </div>
   );

@@ -3,7 +3,7 @@
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +17,24 @@ import {
 } from "@/components/ui/dialog";
 import { BpmnCanvas } from "@/components/canvas/bpmn-canvas";
 import { buildCanvasState } from "@/components/canvas/layout";
+import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
+
+const STATUS_LABEL: Record<SaveStatus, string> = {
+  idle: "Saved",
+  dirty: "Unsaved",
+  saving: "Saving…",
+  saved: "Saved",
+  error: "Save failed",
+};
+
+const STATUS_COLOR: Record<SaveStatus, string> = {
+  idle: "#64748b",
+  dirty: "#a16207",
+  saving: "#0369a1",
+  saved: "#166534",
+  error: "#dc2626",
+};
 
 export default function CanvasPage() {
   const params = useParams<{
@@ -26,6 +43,16 @@ export default function CanvasPage() {
     versionId: string;
   }>();
   const [showXml, setShowXml] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const handleSaveStatusChange = useCallback(
+    (status: SaveStatus, error: string | null) => {
+      setSaveStatus(status);
+      setSaveError(error);
+    },
+    []
+  );
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["graph", params.id, params.modelId, params.versionId],
@@ -40,7 +67,6 @@ export default function CanvasPage() {
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      {/* Top bar — overlaid on the canvas */}
       <div
         style={{
           position: "absolute",
@@ -95,7 +121,10 @@ export default function CanvasPage() {
             </div>
           )}
         </div>
-        <div style={{ pointerEvents: "auto" }}>
+        <div
+          style={{ pointerEvents: "auto", display: "flex", alignItems: "center", gap: 8 }}
+        >
+          <SaveIndicator status={saveStatus} error={saveError} />
           <Button
             size="sm"
             variant="outline"
@@ -137,13 +166,16 @@ export default function CanvasPage() {
       )}
       {initial && (
         <BpmnCanvas
+          projectId={params.id}
+          modelId={params.modelId}
+          versionId={params.versionId}
           initialNodes={initial.nodes}
           initialEdges={initial.edges}
           initialLanes={initial.lanes}
+          onSaveStatusChange={handleSaveStatusChange}
         />
       )}
 
-      {/* Hint footer */}
       <div
         style={{
           position: "absolute",
@@ -160,8 +192,7 @@ export default function CanvasPage() {
           zIndex: 20,
         }}
       >
-        Drag nodes · Hover a lane to drag/resize · Wheel to pan · Cmd+wheel to
-        zoom · Edits are local until persistence lands
+        Drag nodes between lanes · Hover a lane for the kebab menu (rename / insert / delete) · Wheel pans, Cmd+wheel zooms · Edits auto-save
       </div>
 
       <Dialog open={showXml} onOpenChange={setShowXml}>
@@ -169,8 +200,9 @@ export default function CanvasPage() {
           <DialogHeader>
             <DialogTitle>BPMN 2.0 XML</DialogTitle>
             <DialogDescription>
-              Canonical machine-readable export. Paste into bpmn.io for full
-              BPMN viewer rendering, or hand to a downstream tool.
+              Reflects the original generation. Canvas edits don&apos;t
+              regenerate the XML yet — paste into bpmn.io for full BPMN
+              viewer rendering.
             </DialogDescription>
           </DialogHeader>
           <textarea
@@ -180,6 +212,44 @@ export default function CanvasPage() {
           />
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function SaveIndicator({
+  status,
+  error,
+}: {
+  status: SaveStatus;
+  error: string | null;
+}) {
+  return (
+    <div
+      title={error ?? STATUS_LABEL[status]}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 10px",
+        background: "rgba(255,255,255,0.96)",
+        borderRadius: 8,
+        border: "1px solid #e2e8f0",
+        fontSize: 12,
+        color: STATUS_COLOR[status],
+        boxShadow:
+          "0 8px 28px -8px rgba(15, 23, 42, 0.18), 0 2px 6px -1px rgba(15, 23, 42, 0.08)",
+      }}
+    >
+      <span
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: 999,
+          background: STATUS_COLOR[status],
+          opacity: status === "saving" ? 0.6 : 1,
+        }}
+      />
+      {STATUS_LABEL[status]}
     </div>
   );
 }
