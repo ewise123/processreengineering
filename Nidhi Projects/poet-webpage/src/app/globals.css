@@ -48,6 +48,8 @@
 }
 
 :root {
+  --font-geist-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-geist-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", "Menlo", monospace;
   --radius: 0.625rem;
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);

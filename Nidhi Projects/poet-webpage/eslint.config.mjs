@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Static prototype workspace served from public/. Uses Babel-in-browser JSX
+    // and isn't part of the Next.js build, so we ignore it for linting.
+    "public/poet-workspace/src/**",
   ]),
 ]);
 
