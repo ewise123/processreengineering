@@ -92,6 +92,34 @@ class NodeIssueRead(BaseModel):
     conflict_count: int
 
 
+class ClaimSummary(BaseModel):
+    """Lightweight claim shape used inside conflict listings — no citations."""
+
+    id: UUID
+    kind: str
+    subject: str
+    normalized: dict
+    confidence: float | None
+
+
+class NodeIssueDetail(BaseModel):
+    """A single open conflict touching one of this node's claims, with both
+    sides of the conflict surfaced for the properties panel."""
+
+    conflict_id: UUID
+    kind: str
+    resolution_status: str
+    detected_by: str
+    resolution_notes: str | None
+    this_claim: ClaimSummary
+    other_claim: ClaimSummary
+
+
+class NodeIssuesDetailRead(BaseModel):
+    node_id: UUID
+    issues: list[NodeIssueDetail]
+
+
 class ProcessNodeRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID

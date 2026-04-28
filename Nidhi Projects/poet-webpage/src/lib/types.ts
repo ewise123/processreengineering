@@ -201,6 +201,29 @@ export interface NodeIssue {
   conflict_count: number;
 }
 
+export interface ClaimSummary {
+  id: UUID;
+  kind: string;
+  subject: string;
+  normalized: Record<string, unknown>;
+  confidence: number | null;
+}
+
+export interface NodeIssueDetail {
+  conflict_id: UUID;
+  kind: string;
+  resolution_status: string;
+  detected_by: string;
+  resolution_notes: string | null;
+  this_claim: ClaimSummary;
+  other_claim: ClaimSummary;
+}
+
+export interface NodeIssuesDetail {
+  node_id: UUID;
+  issues: NodeIssueDetail[];
+}
+
 export interface ProcessMapGenerateRequest {
   name: string;
   level: string;

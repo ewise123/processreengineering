@@ -10,6 +10,7 @@ import type {
   LaneUpdate,
   NodeCitations,
   NodeIssue,
+  NodeIssuesDetail,
   NodeUpdate,
   Page,
   ProcessGraph,
@@ -194,5 +195,9 @@ export const api = {
   getNodeCitations: (projectId: UUID, nodeId: UUID) =>
     request<NodeCitations>(
       `/api/v2/projects/${projectId}/nodes/${nodeId}/citations`
+    ),
+  getNodeIssues: (projectId: UUID, nodeId: UUID) =>
+    request<NodeIssuesDetail>(
+      `/api/v2/projects/${projectId}/nodes/${nodeId}/issues`
     ),
 };

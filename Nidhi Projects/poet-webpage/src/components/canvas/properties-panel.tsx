@@ -1,12 +1,13 @@
 "use client";
 
-import { Sparkles, X } from "lucide-react";
+import { AlertTriangle, Sparkles, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import type {
   CitationDetail,
+  NodeIssueDetail,
   ProcessLane,
   UUID,
 } from "@/lib/types";
@@ -46,8 +47,14 @@ export function PropertiesPanel({
     queryFn: () => api.getNodeCitations(projectId, selected.id),
   });
 
+  const { data: issuesData, isLoading: issuesLoading } = useQuery({
+    queryKey: ["node-issues", projectId, selected.id],
+    queryFn: () => api.getNodeIssues(projectId, selected.id),
+  });
+
   const claims = data?.claims ?? [];
   const totalCitations = claims.reduce((acc, c) => acc + c.citations.length, 0);
+  const issues = issuesData?.issues ?? [];
 
   return (
     <div
@@ -144,6 +151,33 @@ export function PropertiesPanel({
           Ask AI to edit this step
         </button>
       </div>
+
+      {/* Issues — open conflicts touching this node's claims */}
+      {(issuesLoading || issues.length > 0) && (
+        <div className="border-t border-slate-100 bg-rose-50/40 px-3 py-2.5">
+          <div className="mb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-rose-700">
+              <AlertTriangle size={10} />
+              Issues
+            </div>
+            {issues.length > 0 && (
+              <span className="text-[10px] tabular-nums text-rose-700/70">
+                {issues.length} open
+              </span>
+            )}
+          </div>
+          {issuesLoading && (
+            <div className="text-[11px] italic text-slate-400">Loading…</div>
+          )}
+          {!issuesLoading && issues.length > 0 && (
+            <ul className="space-y-1.5">
+              {issues.map((iss) => (
+                <IssueCard key={iss.conflict_id} issue={iss} />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Provenance */}
       <div className="border-t border-slate-100 px-3 py-2.5">
@@ -261,6 +295,70 @@ function CitationCard({
         </div>
       )}
     </li>
+  );
+}
+
+const CONFLICT_KIND_LABEL: Record<string, string> = {
+  threshold_mismatch: "Threshold mismatch",
+  owner_mismatch: "Owner mismatch",
+  sla_mismatch: "SLA mismatch",
+  sequence_mismatch: "Sequence mismatch",
+  missing_path: "Missing path",
+};
+
+function IssueCard({ issue }: { issue: NodeIssueDetail }) {
+  const kindLabel =
+    CONFLICT_KIND_LABEL[issue.kind] ?? issue.kind.replace(/_/g, " ");
+  return (
+    <li className="rounded-md border border-rose-200 bg-white px-2 py-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-rose-700">
+          {kindLabel}
+        </span>
+        <span className="text-[9px] uppercase tracking-wider text-slate-400">
+          {issue.detected_by}
+        </span>
+      </div>
+      <div className="mt-1 space-y-1">
+        <ClaimLine label="This step" claim={issue.this_claim} />
+        <div className="pl-3 text-[9px] uppercase tracking-wider text-rose-500">
+          ↕ vs.
+        </div>
+        <ClaimLine label="Other claim" claim={issue.other_claim} />
+      </div>
+      {issue.resolution_notes && (
+        <div className="mt-1.5 rounded border-l-2 border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10.5px] italic text-slate-600">
+          {issue.resolution_notes}
+        </div>
+      )}
+    </li>
+  );
+}
+
+function ClaimLine({
+  label,
+  claim,
+}: {
+  label: string;
+  claim: NodeIssueDetail["this_claim"];
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-1">
+        <span
+          className="rounded px-1 py-[1px] text-[9px] font-semibold uppercase tracking-wide text-slate-700"
+          style={{ background: KIND_TINT[claim.kind] ?? "#e2e8f0" }}
+        >
+          {claim.kind.replace(/_/g, " ")}
+        </span>
+        <span className="text-[9px] uppercase tracking-wider text-slate-400">
+          {label}
+        </span>
+      </div>
+      <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
+        {claim.subject}
+      </div>
+    </div>
   );
 }
 
