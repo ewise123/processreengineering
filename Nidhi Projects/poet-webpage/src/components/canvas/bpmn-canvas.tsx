@@ -69,7 +69,15 @@ export function BpmnCanvas({
   initialLanes: CanvasLane[];
   onSaveStatusChange?: (status: SaveStatus, error: string | null) => void;
   onSelectionChange?: (
-    selected: { id: string; kind: "node" | "edge"; name?: string } | null
+    selected:
+      | {
+          id: string;
+          kind: "node" | "edge";
+          name?: string;
+          nodeKind?: string;
+          laneId?: string | null;
+        }
+      | null
   ) => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -109,7 +117,13 @@ export function BpmnCanvas({
     }
     const node = nodesRef.current.find((n) => n.id === selectedId);
     if (node) {
-      onSelectionChange({ id: selectedId, kind: "node", name: node.label });
+      onSelectionChange({
+        id: selectedId,
+        kind: "node",
+        name: node.label,
+        nodeKind: node.kind,
+        laneId: node.laneId,
+      });
       return;
     }
     onSelectionChange({ id: selectedId, kind: "edge" });

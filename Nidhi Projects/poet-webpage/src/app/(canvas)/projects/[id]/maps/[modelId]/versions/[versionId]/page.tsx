@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, FileText, AlertTriangle } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
@@ -16,8 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { BpmnCanvas } from "@/components/canvas/bpmn-canvas";
-import { IssuesPanel } from "@/components/canvas/issues-panel";
-import { SourcesPanel } from "@/components/canvas/sources-panel";
+import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
@@ -38,7 +37,15 @@ const STATUS_COLOR: Record<SaveStatus, string> = {
   error: "#dc2626",
 };
 
-type Selected = { id: string; kind: "node" | "edge"; name?: string } | null;
+type Selected =
+  | {
+      id: string;
+      kind: "node" | "edge";
+      name?: string;
+      nodeKind?: string;
+      laneId?: string | null;
+    }
+  | null;
 
 export default function CanvasPage() {
   const params = useParams<{
@@ -50,8 +57,6 @@ export default function CanvasPage() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selected>(null);
-  const [showSources, setShowSources] = useState(true);
-  const [showIssues, setShowIssues] = useState(false);
 
   const handleSaveStatusChange = useCallback(
     (status: SaveStatus, error: string | null) => {
@@ -76,11 +81,11 @@ export default function CanvasPage() {
     [data]
   );
 
-  const selectedNodeId =
-    selected?.kind === "node" ? selected.id : null;
+  const selectedNode = selected?.kind === "node" ? selected : null;
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      {/* Top floating bar */}
       <div
         style={{
           position: "absolute",
@@ -146,28 +151,6 @@ export default function CanvasPage() {
           <SaveIndicator status={saveStatus} error={saveError} />
           <Button
             size="sm"
-            variant={showSources ? "default" : "outline"}
-            onClick={() => setShowSources((s) => !s)}
-            disabled={!selectedNodeId}
-            title={
-              selectedNodeId
-                ? "Toggle Sources panel"
-                : "Select a node to see its sources"
-            }
-          >
-            <FileText size={14} />
-            Sources
-          </Button>
-          <Button
-            size="sm"
-            variant={showIssues ? "default" : "outline"}
-            onClick={() => setShowIssues((s) => !s)}
-          >
-            <AlertTriangle size={14} />
-            Issues
-          </Button>
-          <Button
-            size="sm"
             variant="outline"
             disabled={!data?.version.bpmn_xml}
             onClick={() => setShowXml(true)}
@@ -218,39 +201,27 @@ export default function CanvasPage() {
         />
       )}
 
-      {/* Right-side panel stack — Sources (per node) + Issues (project) */}
-      <div
-        style={{
-          position: "absolute",
-          top: 64,
-          right: 0,
-          bottom: 0,
-          display: "flex",
-          alignItems: "stretch",
-          zIndex: 25,
-          pointerEvents: "none",
-        }}
-      >
-        {showSources && selectedNodeId && (
-          <div style={{ pointerEvents: "auto", height: "100%" }}>
-            <SourcesPanel
-              projectId={params.id}
-              nodeId={selectedNodeId}
-              nodeName={selected?.name}
-              onClose={() => setShowSources(false)}
-            />
-          </div>
-        )}
-        {showIssues && (
-          <div style={{ pointerEvents: "auto", height: "100%" }}>
-            <IssuesPanel
-              projectId={params.id}
-              selectedNodeId={selectedNodeId}
-              onClose={() => setShowIssues(false)}
-            />
-          </div>
-        )}
-      </div>
+      {/* Per-selection Properties panel — auto-shown when a node is selected.
+          Matches the prototype's poet-props layout: floating right, single panel. */}
+      {selectedNode && data && (
+        <div
+          style={{
+            position: "absolute",
+            right: 12,
+            top: 60,
+            bottom: 60,
+            zIndex: 25,
+            display: "flex",
+          }}
+        >
+          <PropertiesPanel
+            projectId={params.id}
+            selected={selectedNode}
+            lanes={data.lanes}
+            onClose={() => setSelected(null)}
+          />
+        </div>
+      )}
 
       <div
         style={{
@@ -268,7 +239,7 @@ export default function CanvasPage() {
           zIndex: 20,
         }}
       >
-        Click a node to see its claim sources · Drag nodes / lanes to edit ·
+        Click a node for properties + provenance · Drag nodes / lanes to edit ·
         Wheel pans, Cmd+wheel zooms · Edits auto-save
       </div>
 
