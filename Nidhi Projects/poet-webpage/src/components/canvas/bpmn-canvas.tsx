@@ -33,6 +33,7 @@ import type {
   Viewport,
 } from "./types";
 import { useGraphPersistence, type SaveStatus } from "./use-persistence";
+import { useUndoStack } from "./use-undo-stack";
 
 const WORLD_WIDTH_MIN = 1700;
 const WORLD_RIGHT_PADDING = 240;
@@ -50,7 +51,16 @@ const LANE_PALETTE = [
 ];
 
 type Drag =
-  | { type: "node"; id: string; offX: number; offY: number }
+  | {
+      type: "node";
+      id: string;
+      offX: number;
+      offY: number;
+      // Captured at drag-start so we can record the inverse for undo.
+      origX: number;
+      origRelativeY: number;
+      origLaneId: UUID | null;
+    }
   | { type: "pan"; startX: number; startY: number; tx0: number; ty0: number };
 
 function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
@@ -123,6 +133,8 @@ function BpmnCanvas({
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
 
+  const { record, undo, redo, canUndo, canRedo } = useUndoStack();
+
   const deleteNodeImpl = useCallback(
     async (id: UUID) => {
       await api.deleteNode(projectId, id);
@@ -138,30 +150,46 @@ function BpmnCanvas({
     deleteNodeImpl,
   ]);
 
-  // Keyboard delete: when a node is selected and the user isn't typing in
-  // an input, Delete/Backspace removes it. Same code path as the panel's
-  // Delete button.
+  // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
+  // Cmd/Ctrl+Shift+Z (or Cmd/Ctrl+Y) for undo/redo. All of them no-op
+  // when the user is typing in an input/textarea/contenteditable.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Delete" && e.key !== "Backspace") return;
       const target = e.target as HTMLElement | null;
-      if (
-        target &&
+      const inEditable =
+        !!target &&
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
-          target.isContentEditable)
-      ) {
+          target.isContentEditable);
+      if (inEditable) return;
+
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        if (e.shiftKey) {
+          void redo();
+        } else {
+          void undo();
+        }
         return;
       }
-      if (!selectedId) return;
-      const isNode = nodesRef.current.some((n) => n.id === selectedId);
-      if (!isNode) return;
-      e.preventDefault();
-      void deleteNodeImpl(selectedId);
+      if (mod && (e.key === "y" || e.key === "Y")) {
+        e.preventDefault();
+        void redo();
+        return;
+      }
+
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (!selectedId) return;
+        const isNode = nodesRef.current.some((n) => n.id === selectedId);
+        if (!isNode) return;
+        e.preventDefault();
+        void deleteNodeImpl(selectedId);
+      }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [selectedId, deleteNodeImpl]);
+  }, [selectedId, deleteNodeImpl, undo, redo]);
 
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
@@ -265,9 +293,18 @@ function BpmnCanvas({
     e.stopPropagation();
     setSelectedId(id);
     const resolved = renderNodes.find((n) => n.id === id);
-    if (!resolved) return;
+    const stored = nodesRef.current.find((n) => n.id === id);
+    if (!resolved || !stored) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
-    setDrag({ type: "node", id, offX: x - resolved.x, offY: y - resolved.y });
+    setDrag({
+      type: "node",
+      id,
+      offX: x - resolved.x,
+      offY: y - resolved.y,
+      origX: stored.x,
+      origRelativeY: stored.relativeY,
+      origLaneId: stored.laneId,
+    });
   };
 
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
@@ -350,6 +387,29 @@ function BpmnCanvas({
             relative_y: final.relativeY,
             lane_id: final.laneId ?? undefined,
           });
+          // Only register an undo entry if the node actually moved —
+          // a click without drag should not pollute the history.
+          const moved =
+            final.x !== drag.origX ||
+            final.relativeY !== drag.origRelativeY ||
+            final.laneId !== drag.origLaneId;
+          if (moved) {
+            const newPos = {
+              x: final.x,
+              relativeY: final.relativeY,
+              laneId: final.laneId,
+            };
+            const oldPos = {
+              x: drag.origX,
+              relativeY: drag.origRelativeY,
+              laneId: drag.origLaneId,
+            };
+            record({
+              description: "Move node",
+              do: () => applyNodePositionLocal(drag.id, newPos),
+              undo: () => applyNodePositionLocal(drag.id, oldPos),
+            });
+          }
         }
       }
       setDrag(null);
@@ -361,7 +421,7 @@ function BpmnCanvas({
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
-  }, [drag, markNode]);
+  }, [drag, markNode, record]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
   const onCanvasDragOver = (e: ReactDragEvent<SVGSVGElement>) => {
@@ -432,6 +492,29 @@ function BpmnCanvas({
     });
   }, [worldWidth, worldHeight]);
 
+  // Low-level mutator used by undo/redo callbacks for node moves. Bypasses
+  // record() so undo replay does not pollute the history stack.
+  const applyNodePositionLocal = useCallback(
+    (
+      id: UUID,
+      pos: { x: number; relativeY: number; laneId: UUID | null }
+    ) => {
+      setNodes((curr) =>
+        curr.map((n) =>
+          n.id === id
+            ? { ...n, x: pos.x, relativeY: pos.relativeY, laneId: pos.laneId }
+            : n
+        )
+      );
+      markNode(id, {
+        x: pos.x,
+        relative_y: pos.relativeY,
+        lane_id: pos.laneId ?? undefined,
+      });
+    },
+    [markNode]
+  );
+
   const recomputeY = (ls: CanvasLane[]): CanvasLane[] => {
     let y = 0;
     return ls.map((l) => {
@@ -441,21 +524,21 @@ function BpmnCanvas({
     });
   };
 
-  const moveLane = useCallback(
+  const moveLaneLocal = useCallback(
     (laneId: string, targetIdx: number) => {
       const curr = lanesRef.current;
       const idx = curr.findIndex((l) => l.id === laneId);
       if (idx === -1) return;
       const removed = [...curr.slice(0, idx), ...curr.slice(idx + 1)];
       const target = targetIdx > idx ? targetIdx - 1 : targetIdx;
+      const clampedTarget = Math.max(0, Math.min(removed.length, target));
       const reordered = [
-        ...removed.slice(0, target),
+        ...removed.slice(0, clampedTarget),
         curr[idx],
-        ...removed.slice(target),
+        ...removed.slice(clampedTarget),
       ];
       const next = recomputeY(reordered);
       setLanes(next);
-      // Mark every lane whose index changed (defensive: just re-PATCH them all)
       next.forEach((l, i) => {
         const oldIdx = curr.findIndex((c) => c.id === l.id);
         if (oldIdx !== i) markLane(l.id, { order_index: i });
@@ -464,7 +547,24 @@ function BpmnCanvas({
     [markLane]
   );
 
-  const resizeLane = useCallback(
+  const moveLane = useCallback(
+    (laneId: string, targetIdx: number) => {
+      const curr = lanesRef.current;
+      const oldIdx = curr.findIndex((l) => l.id === laneId);
+      if (oldIdx === -1) return;
+      moveLaneLocal(laneId, targetIdx);
+      const newIdx = lanesRef.current.findIndex((l) => l.id === laneId);
+      if (newIdx === oldIdx) return;
+      record({
+        description: "Move lane",
+        do: () => moveLaneLocal(laneId, targetIdx),
+        undo: () => moveLaneLocal(laneId, oldIdx),
+      });
+    },
+    [moveLaneLocal, record]
+  );
+
+  const resizeLaneLocal = useCallback(
     (laneId: string, newH: number) => {
       const curr = lanesRef.current;
       const idx = curr.findIndex((l) => l.id === laneId);
@@ -479,7 +579,24 @@ function BpmnCanvas({
     [markLane]
   );
 
-  const renameLane = useCallback(
+  const resizeLane = useCallback(
+    (laneId: string, newH: number) => {
+      const old = lanesRef.current.find((l) => l.id === laneId);
+      if (!old) return;
+      const oldH = old.h;
+      const clamped = Math.max(MIN_LANE_HEIGHT, Math.round(newH));
+      if (clamped === oldH) return;
+      resizeLaneLocal(laneId, clamped);
+      record({
+        description: "Resize lane",
+        do: () => resizeLaneLocal(laneId, clamped),
+        undo: () => resizeLaneLocal(laneId, oldH),
+      });
+    },
+    [resizeLaneLocal, record]
+  );
+
+  const renameLaneLocal = useCallback(
     (laneId: string, newName: string) => {
       setLanes((curr) =>
         curr.map((l) => (l.id === laneId ? { ...l, label: newName } : l))
@@ -487,6 +604,21 @@ function BpmnCanvas({
       markLane(laneId, { name: newName });
     },
     [markLane]
+  );
+
+  const renameLane = useCallback(
+    (laneId: string, newName: string) => {
+      const old = lanesRef.current.find((l) => l.id === laneId);
+      if (!old || old.label === newName) return;
+      const oldName = old.label;
+      renameLaneLocal(laneId, newName);
+      record({
+        description: "Rename lane",
+        do: () => renameLaneLocal(laneId, newName),
+        undo: () => renameLaneLocal(laneId, oldName),
+      });
+    },
+    [renameLaneLocal, record]
   );
 
   const addLaneAt = useCallback(
@@ -677,6 +809,10 @@ function BpmnCanvas({
         reviewMode={reviewMode}
         onReviewModeChange={setReviewMode}
         issueCount={issueCount}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={() => void undo()}
+        onRedo={() => void redo()}
       />
     </div>
   );
