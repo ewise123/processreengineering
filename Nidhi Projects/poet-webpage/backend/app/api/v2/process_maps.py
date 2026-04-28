@@ -500,6 +500,22 @@ def update_node(
     return node
 
 
+@router.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_node(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    node_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Delete a node. FK cascades drop the connected edges and node-claim
+    links automatically."""
+    node = db.get(ProcessNode, node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    _check_node_in_project(node, project.id, db)
+    db.delete(node)
+    db.commit()
+
+
 @router.patch("/lanes/{lane_id}", response_model=ProcessLaneRead)
 def update_lane(
     project: Annotated[Project, Depends(get_project_or_404)],

@@ -43,11 +43,13 @@ export function PropertiesPanel({
   selected,
   lanes,
   onClose,
+  onDelete,
 }: {
   projectId: UUID;
   selected: SelectedNode;
   lanes: ProcessLane[];
   onClose: () => void;
+  onDelete?: (id: UUID) => Promise<void> | void;
 }) {
   const { data, isLoading } = useQuery({
     queryKey: ["node-citations", projectId, selected.id],
@@ -64,6 +66,17 @@ export function PropertiesPanel({
   const issues = issuesData?.issues ?? [];
   const [issuesExpanded, setIssuesExpanded] = useState(true);
   const [provenanceExpanded, setProvenanceExpanded] = useState(true);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (!onDelete || deleting) return;
+    setDeleting(true);
+    try {
+      await onDelete(selected.id);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <div
@@ -79,11 +92,13 @@ export function PropertiesPanel({
         </div>
         <div className="flex items-center gap-2">
           <button
-            disabled
-            title="Delete coming soon"
-            className="text-[11px] text-slate-300"
+            type="button"
+            onClick={handleDelete}
+            disabled={!onDelete || deleting}
+            title={onDelete ? "Delete this node" : "Delete unavailable"}
+            className="text-[11px] text-slate-400 hover:text-rose-600 disabled:cursor-not-allowed disabled:text-slate-300"
           >
-            Delete
+            {deleting ? "Deleting…" : "Delete"}
           </button>
           <Button
             size="sm"
