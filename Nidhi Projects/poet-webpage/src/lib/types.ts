@@ -246,6 +246,15 @@ export interface NodeIssuesDetail {
   issues: NodeIssueDetail[];
 }
 
+export interface NodeAIEditRequest {
+  instruction: string;
+}
+
+export interface NodeAIEditResponse {
+  suggested_label: string;
+  rationale: string;
+}
+
 export interface ProcessMapGenerateRequest {
   name: string;
   level: string;

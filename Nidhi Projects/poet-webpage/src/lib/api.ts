@@ -10,6 +10,8 @@ import type {
   EdgeUpdate,
   LaneCreate,
   LaneUpdate,
+  NodeAIEditRequest,
+  NodeAIEditResponse,
   NodeCitations,
   NodeCreate,
   NodeIssue,
@@ -236,5 +238,14 @@ export const api = {
   getNodeIssues: (projectId: UUID, nodeId: UUID) =>
     request<NodeIssuesDetail>(
       `/api/v2/projects/${projectId}/nodes/${nodeId}/issues`
+    ),
+  aiSuggestNodeEdit: (
+    projectId: UUID,
+    nodeId: UUID,
+    body: NodeAIEditRequest
+  ) =>
+    request<NodeAIEditResponse>(
+      `/api/v2/projects/${projectId}/nodes/${nodeId}/ai-suggest-edit`,
+      { method: "POST", json: body }
     ),
 };

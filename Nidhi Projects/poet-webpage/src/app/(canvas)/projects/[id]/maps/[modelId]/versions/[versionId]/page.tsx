@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { AIEditModal } from "@/components/canvas/ai-edit-modal";
 import { BpmnCanvas, type BpmnCanvasHandle } from "@/components/canvas/bpmn-canvas";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
@@ -58,6 +59,9 @@ export default function CanvasPage() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selected>(null);
+  const [aiEdit, setAiEdit] = useState<{ id: UUID; label: string } | null>(
+    null
+  );
   const canvasRef = useRef<BpmnCanvasHandle>(null);
   const queryClient = useQueryClient();
 
@@ -278,8 +282,22 @@ export default function CanvasPage() {
             onClose={() => setSelected(null)}
             onDelete={handleNodeDelete}
             onUpdate={handleNodeUpdate}
+            onAskAI={(id, label) => setAiEdit({ id, label })}
           />
         </div>
+      )}
+
+      {aiEdit && (
+        <AIEditModal
+          open={true}
+          projectId={params.id}
+          nodeId={aiEdit.id}
+          currentLabel={aiEdit.label}
+          onClose={() => setAiEdit(null)}
+          onApply={async (newLabel) => {
+            await handleNodeUpdate(aiEdit.id, { name: newLabel });
+          }}
+        />
       )}
 
       <Dialog open={showXml} onOpenChange={setShowXml}>

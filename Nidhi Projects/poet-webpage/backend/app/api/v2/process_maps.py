@@ -36,6 +36,8 @@ from app.schemas.process_map import (
     EdgeUpdate,
     LaneCreate,
     LaneUpdate,
+    NodeAIEditRequest,
+    NodeAIEditResponse,
     NodeCitationsRead,
     NodeCreate,
     NodeIssueDetail,
@@ -52,6 +54,7 @@ from app.schemas.process_map import (
     ProcessVersionRead,
 )
 from app.services.legacy_bpmn import build_bpmn_xml, validate_xml
+from app.services.node_ai_edit import suggest_node_edit
 from app.services.process_generation import generate_structure_from_claims
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
@@ -779,6 +782,77 @@ def get_node_citations(
             )
             for c in claims
         ],
+    )
+
+
+@router.post(
+    "/nodes/{node_id}/ai-suggest-edit", response_model=NodeAIEditResponse
+)
+def ai_suggest_node_edit(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    node_id: UUID,
+    payload: NodeAIEditRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> NodeAIEditResponse:
+    """Returns an AI-proposed label rewrite + rationale. Caller decides
+    whether to apply via the existing PATCH /nodes/{id} endpoint."""
+    node = db.get(ProcessNode, node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    _check_node_in_project(node, project.id, db)
+
+    lane_name: str | None = None
+    if node.lane_id:
+        lane = db.get(ProcessLane, node.lane_id)
+        if lane is not None:
+            lane_name = lane.name
+
+    # Pull supporting claims (kind + subject + first citation quote) so the
+    # model can reason about the source material rather than just the label.
+    claim_rows = list(
+        db.execute(
+            select(Claim.kind, Claim.subject, NodeClaimLink.claim_id)
+            .join(NodeClaimLink, NodeClaimLink.claim_id == Claim.id)
+            .where(NodeClaimLink.node_id == node.id)
+            .order_by(Claim.kind)
+        ).all()
+    )
+    quote_by_claim: dict[UUID, str] = {}
+    if claim_rows:
+        claim_ids = [row[2] for row in claim_rows]
+        quote_rows = list(
+            db.execute(
+                select(ClaimCitation.claim_id, ClaimCitation.quote)
+                .where(ClaimCitation.claim_id.in_(claim_ids))
+                .order_by(ClaimCitation.created_at)
+            ).all()
+        )
+        for cid, quote in quote_rows:
+            quote_by_claim.setdefault(cid, quote)
+
+    claims = [
+        {
+            "kind": kind,
+            "subject": subject,
+            "quote": quote_by_claim.get(claim_id, ""),
+        }
+        for (kind, subject, claim_id) in claim_rows
+    ]
+
+    try:
+        suggestion = suggest_node_edit(
+            instruction=payload.instruction,
+            current_label=node.name,
+            node_type=node.type,
+            lane_name=lane_name,
+            claims=claims,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return NodeAIEditResponse(
+        suggested_label=suggestion.suggested_label,
+        rationale=suggestion.rationale,
     )
 
 

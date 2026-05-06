@@ -45,6 +45,7 @@ export function PropertiesPanel({
   onClose,
   onDelete,
   onUpdate,
+  onAskAI,
 }: {
   projectId: UUID;
   selected: SelectedNode;
@@ -55,6 +56,7 @@ export function PropertiesPanel({
     id: UUID,
     patch: { name?: string; laneId?: UUID }
   ) => Promise<void> | void;
+  onAskAI?: (id: UUID, currentLabel: string) => void;
 }) {
   const { data, isLoading } = useQuery({
     queryKey: ["node-citations", projectId, selected.id],
@@ -205,9 +207,17 @@ export function PropertiesPanel({
         </div>
 
         <button
-          disabled
-          title="AI editing coming in Phase 3c"
-          className="flex w-full items-center justify-center gap-1.5 rounded-md bg-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-500"
+          type="button"
+          onClick={() =>
+            onAskAI && onAskAI(selected.id, selected.name ?? "")
+          }
+          disabled={!onAskAI}
+          title={
+            onAskAI
+              ? "Open the AI edit dialog"
+              : "AI editing temporarily unavailable"
+          }
+          className="flex w-full items-center justify-center gap-1.5 rounded-md bg-slate-900 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
         >
           <Sparkles size={11} />
           Ask AI to edit this step

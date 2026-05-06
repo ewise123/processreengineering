@@ -151,6 +151,18 @@ class NodeIssuesDetailRead(BaseModel):
     issues: list[NodeIssueDetail]
 
 
+class NodeAIEditRequest(BaseModel):
+    """Phase 3c-i: caller provides a free-text instruction; we return a
+    proposed label change + rationale. Application is a separate PATCH."""
+
+    instruction: str = Field(min_length=1, max_length=1000)
+
+
+class NodeAIEditResponse(BaseModel):
+    suggested_label: str
+    rationale: str
+
+
 class ProcessNodeRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
