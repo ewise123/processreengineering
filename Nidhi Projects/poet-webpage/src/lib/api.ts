@@ -1,4 +1,6 @@
 import type {
+  ChatRequest,
+  ChatResponse,
   Claim,
   ClaimConflict,
   ClaimExtractionResult,
@@ -236,5 +238,15 @@ export const api = {
   getNodeIssues: (projectId: UUID, nodeId: UUID) =>
     request<NodeIssuesDetail>(
       `/api/v2/projects/${projectId}/nodes/${nodeId}/issues`
+    ),
+  chatWithMap: (
+    projectId: UUID,
+    modelId: UUID,
+    versionId: UUID,
+    body: ChatRequest
+  ) =>
+    request<ChatResponse>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/chat`,
+      { method: "POST", json: body }
     ),
 };
