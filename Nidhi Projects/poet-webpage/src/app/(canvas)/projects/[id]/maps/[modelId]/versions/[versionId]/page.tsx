@@ -16,8 +16,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { BpmnCanvas, type BpmnCanvasHandle } from "@/components/canvas/bpmn-canvas";
-import { ChatSidebar } from "@/components/canvas/chat-sidebar";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
+import { RightPanel } from "@/components/canvas/right-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
@@ -59,7 +59,7 @@ export default function CanvasPage() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selected>(null);
-  const [chatOpen, setChatOpen] = useState(false);
+  const [rightOpen, setRightOpen] = useState(false);
   const canvasRef = useRef<BpmnCanvasHandle>(null);
   const queryClient = useQueryClient();
 
@@ -207,9 +207,9 @@ export default function CanvasPage() {
           <SaveIndicator status={saveStatus} error={saveError} />
           <Button
             size="sm"
-            variant={chatOpen ? "default" : "outline"}
-            onClick={() => setChatOpen((v) => !v)}
-            title="Toggle AI assistant"
+            variant={rightOpen ? "default" : "outline"}
+            onClick={() => setRightOpen((v) => !v)}
+            title="Toggle assistant + review panel"
           >
             <MessageSquare size={14} />
             Assistant
@@ -270,13 +270,13 @@ export default function CanvasPage() {
       )}
 
       {/* Per-selection Properties panel — auto-shown when a node is selected.
-          Floats right, but shifts left to make room for the chat sidebar
+          Floats right, but shifts left to make room for the right panel
           when both are open at once. */}
       {selectedNode && data && (
         <div
           style={{
             position: "absolute",
-            right: chatOpen ? 384 : 12,
+            right: rightOpen ? 384 : 12,
             top: 60,
             bottom: 60,
             zIndex: 25,
@@ -295,10 +295,9 @@ export default function CanvasPage() {
         </div>
       )}
 
-      {/* Chat sidebar — anchored to the right edge. Multi-turn history
-          lives inside the component for now; will move to persisted threads
-          per ai_assistant_vision.md. */}
-      {chatOpen && (
+      {/* Tabbed right panel — Chat / Versions / Issues / Review / Sources.
+          Anchored to the right edge; Properties panel floats to its left. */}
+      {rightOpen && data && (
         <div
           style={{
             position: "absolute",
@@ -309,18 +308,19 @@ export default function CanvasPage() {
             display: "flex",
           }}
         >
-          <ChatSidebar
+          <RightPanel
             projectId={params.id}
             modelId={params.modelId}
             versionId={params.versionId}
-            selectedNodeId={
-              selected?.kind === "node" ? (selected.id as UUID) : null
-            }
-            selectedEdgeId={
-              selected?.kind === "edge" ? (selected.id as UUID) : null
-            }
-            selectedLabel={selected?.name ?? null}
-            onClose={() => setChatOpen(false)}
+            version={data.version}
+            nodes={data.nodes.map((n) => ({
+              id: n.id,
+              name: n.name,
+              type: n.type,
+              lane_id: n.lane_id,
+            }))}
+            selected={selected as { id: UUID; kind: "node" | "edge"; name?: string; nodeKind?: string } | null}
+            onFocusNode={(id) => canvasRef.current?.selectNode(id)}
           />
         </div>
       )}

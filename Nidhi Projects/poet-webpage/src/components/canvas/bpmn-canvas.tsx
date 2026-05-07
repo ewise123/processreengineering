@@ -123,6 +123,9 @@ export interface BpmnCanvasHandle {
     id: UUID,
     patch: { name?: string; laneId?: UUID }
   ) => Promise<void>;
+  /** Select a node (drives Properties panel + chat context) from outside
+   * the canvas, e.g. clicking a node link in the Issues tab. */
+  selectNode: (id: UUID) => void;
 }
 
 interface BpmnCanvasProps {
@@ -366,7 +369,11 @@ function BpmnCanvas({
 
   useImperativeHandle(
     ref,
-    () => ({ deleteNode: deleteNodeImpl, updateNode: updateNodeImpl }),
+    () => ({
+      deleteNode: deleteNodeImpl,
+      updateNode: updateNodeImpl,
+      selectNode: (id) => setSelectedId(id),
+    }),
     [deleteNodeImpl, updateNodeImpl]
   );
 
