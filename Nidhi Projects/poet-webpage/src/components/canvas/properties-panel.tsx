@@ -3,14 +3,13 @@
 import {
   AlertTriangle,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Sparkles,
-  X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import type {
   CitationDetail,
@@ -42,14 +41,12 @@ export function PropertiesPanel({
   projectId,
   selected,
   lanes,
-  onClose,
   onDelete,
   onUpdate,
 }: {
   projectId: UUID;
   selected: SelectedNode;
   lanes: ProcessLane[];
-  onClose: () => void;
   onDelete?: (id: UUID) => Promise<void> | void;
   onUpdate?: (
     id: UUID,
@@ -72,6 +69,13 @@ export function PropertiesPanel({
   const [issuesExpanded, setIssuesExpanded] = useState(true);
   const [provenanceExpanded, setProvenanceExpanded] = useState(true);
   const [deleting, setDeleting] = useState(false);
+
+  // Whether the panel itself is collapsed to a narrow strip. Selection is
+  // preserved across collapse — picking a different node always re-expands.
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    setCollapsed(false);
+  }, [selected.id]);
 
   // Local label state lets the input feel responsive while debouncing the
   // PATCH until blur/Enter. Reset whenever the selection changes.
@@ -105,6 +109,44 @@ export function PropertiesPanel({
     void onUpdate(selected.id, { laneId });
   };
 
+  if (collapsed) {
+    return (
+      <div
+        className="flex h-full w-9 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white"
+        style={{
+          boxShadow:
+            "0 8px 28px -8px rgba(15, 23, 42, 0.18), 0 2px 6px -1px rgba(15, 23, 42, 0.08)",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setCollapsed(false)}
+          title="Expand properties"
+          className="flex h-9 shrink-0 items-center justify-center border-b border-slate-100 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+        >
+          <ChevronLeft size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => setCollapsed(false)}
+          className="flex flex-1 items-center justify-center px-1 text-slate-700 hover:bg-slate-50"
+          title={selected.name ?? "Selected node"}
+        >
+          <span
+            className="overflow-hidden truncate text-[10px] font-semibold uppercase tracking-wider"
+            style={{
+              writingMode: "vertical-rl",
+              transform: "rotate(180deg)",
+              maxHeight: "calc(100% - 16px)",
+            }}
+          >
+            {selected.name || "Properties"}
+          </span>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       className="flex h-full w-[270px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white"
@@ -117,7 +159,7 @@ export function PropertiesPanel({
         <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
           Properties
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <button
             type="button"
             onClick={handleDelete}
@@ -127,15 +169,15 @@ export function PropertiesPanel({
           >
             {deleting ? "Deleting…" : "Delete"}
           </button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={onClose}
-            className="h-6 w-6 p-0"
-            aria-label="Close"
+          <button
+            type="button"
+            onClick={() => setCollapsed(true)}
+            title="Collapse properties"
+            aria-label="Collapse"
+            className="flex h-6 w-6 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
           >
-            <X size={14} />
-          </Button>
+            <ChevronRight size={14} />
+          </button>
         </div>
       </div>
 

@@ -282,7 +282,6 @@ export default function CanvasPage() {
             projectId={params.id}
             selected={selectedNode}
             lanes={data.lanes}
-            onClose={() => setSelected(null)}
             onDelete={handleNodeDelete}
             onUpdate={handleNodeUpdate}
           />
