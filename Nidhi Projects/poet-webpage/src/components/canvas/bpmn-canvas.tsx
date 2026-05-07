@@ -640,7 +640,9 @@ function BpmnCanvas({
       target === svgRef.current ||
       (target.tagName === "rect" && target.getAttribute("data-bg") === "1");
     if (!isBg) return;
-    setSelectedId(null);
+    // Don't deselect yet — onUp checks whether the cursor actually moved
+    // (drag → keep selection so the Properties panel stays put while panning,
+    // pure click → deselect).
     setDrag({
       type: "pan",
       startX: e.clientX,
@@ -821,6 +823,16 @@ function BpmnCanvas({
               undo: () => applyNodePositionLocal(drag.id, oldPos),
             });
           }
+        }
+      }
+      if (drag.type === "pan") {
+        // Distinguish a true background click (deselect) from a pan-drag
+        // (preserve selection so the Properties panel stays put while
+        // panning). 4px threshold is the usual click-vs-drag cutoff.
+        const dx = e.clientX - drag.startX;
+        const dy = e.clientY - drag.startY;
+        if (dx * dx + dy * dy < 16) {
+          setSelectedId(null);
         }
       }
       setDrag(null);
