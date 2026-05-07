@@ -72,6 +72,8 @@ export function RightPanel({
   nodes,
   selected,
   onFocusNode,
+  collapsed,
+  onCollapsedChange,
   initialTab = "chat",
 }: {
   projectId: UUID;
@@ -82,10 +84,13 @@ export function RightPanel({
   selected: SelectedRef | null;
   /** Sets the canvas selection. Used by Issues "→ Node" links. */
   onFocusNode: (id: UUID) => void;
+  /** Controlled collapse state — the page lifts this so the Properties
+   * panel can shift when the right panel collapses. */
+  collapsed: boolean;
+  onCollapsedChange: (next: boolean) => void;
   initialTab?: TabId;
 }) {
   const [tab, setTab] = useState<TabId>(initialTab);
-  const [collapsed, setCollapsed] = useState(false);
 
   const issuesQuery = useQuery({
     queryKey: ["issues", projectId, modelId, versionId],
@@ -103,9 +108,15 @@ export function RightPanel({
 
   if (collapsed) {
     return (
-      <div className="flex h-full w-10 flex-col bg-white">
+      <div
+        className="flex h-full w-10 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white"
+        style={{
+          boxShadow:
+            "0 8px 28px -8px rgba(15, 23, 42, 0.18), 0 2px 6px -1px rgba(15, 23, 42, 0.08)",
+        }}
+      >
         <button
-          onClick={() => setCollapsed(false)}
+          onClick={() => onCollapsedChange(false)}
           title="Expand panel"
           className="flex h-9 items-center justify-center border-b border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
         >
@@ -117,7 +128,7 @@ export function RightPanel({
               key={t.id}
               onClick={() => {
                 setTab(t.id);
-                setCollapsed(false);
+                onCollapsedChange(false);
               }}
               title={TAB_LABELS[t.id]}
               className={
@@ -151,7 +162,7 @@ export function RightPanel({
       {/* Header — collapse + tabs */}
       <div className="flex h-9 shrink-0 items-center border-b border-slate-200">
         <button
-          onClick={() => setCollapsed(true)}
+          onClick={() => onCollapsedChange(true)}
           title="Minimize panel"
           className="flex h-full w-8 items-center justify-center border-r border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-900"
         >
@@ -216,12 +227,7 @@ export function RightPanel({
           />
         )}
         {tab === "review" && <ReviewTab nodes={nodes} onFocusNode={onFocusNode} />}
-        {tab === "sources" && (
-          <SourcesTab
-            projectId={projectId}
-            selected={selected}
-          />
-        )}
+        {tab === "sources" && <SourcesTab projectId={projectId} />}
       </div>
     </div>
   );
@@ -409,7 +415,7 @@ function ChatMsg({ turn }: { turn: ChatTurn }) {
 // ─── Versions tab ───────────────────────────────────────────
 function VersionsTab({ version }: { version: ProcessVersion | null }) {
   return (
-    <div className="overflow-y-auto px-3 py-3">
+    <div className="h-full overflow-y-auto px-3 py-3">
       <div className="mb-3 flex items-center justify-between">
         <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
           Version History
@@ -485,7 +491,7 @@ function IssuesTab({
   }, [nodes]);
 
   return (
-    <div className="overflow-y-auto px-3 py-3">
+    <div className="h-full overflow-y-auto px-3 py-3">
       <div className="mb-2 flex items-center justify-between">
         <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
           Issues found
@@ -565,7 +571,7 @@ function ReviewTab({
   const approved = 0;
   const pct = total === 0 ? 0 : Math.round((approved / total) * 100);
   return (
-    <div className="overflow-y-auto px-3 py-3">
+    <div className="h-full overflow-y-auto px-3 py-3">
       <div className="mb-3 rounded-lg bg-gradient-to-br from-slate-800 to-slate-900 p-3 text-white">
         <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
           Sign-off progress
@@ -664,79 +670,14 @@ function Bucket({
 }
 
 // ─── Sources tab ────────────────────────────────────────────
-function SourcesTab({
-  projectId,
-  selected,
-}: {
-  projectId: UUID;
-  selected: SelectedRef | null;
-}) {
+function SourcesTab({ projectId }: { projectId: UUID }) {
   const inputsQuery = useQuery({
     queryKey: ["inputs", projectId],
-    queryFn: () => api.listInputs(projectId, { limit: 100 }),
+    queryFn: () => api.listInputs(projectId, { limit: 200 }),
   });
-
-  const nodeCitationsQuery = useQuery({
-    queryKey: ["node-citations", projectId, selected?.id],
-    queryFn: () =>
-      api.getNodeCitations(projectId, selected!.id),
-    enabled: !!selected && selected.kind === "node",
-  });
-
-  if (selected && selected.kind === "node") {
-    const claims = nodeCitationsQuery.data?.claims ?? [];
-    const total = claims.reduce((acc, c) => acc + c.citations.length, 0);
-    return (
-      <div className="overflow-y-auto px-3 py-3">
-        <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-          Provenance for
-        </div>
-        <div className="mb-3 text-sm font-semibold text-slate-900">
-          {selected.name ?? "selected node"}
-        </div>
-        <div className="mb-1.5 text-[10px] font-semibold text-slate-500">
-          Source citations ({total})
-        </div>
-        {nodeCitationsQuery.isLoading && (
-          <div className="text-[11px] italic text-slate-400">Loading…</div>
-        )}
-        {!nodeCitationsQuery.isLoading && claims.length === 0 && (
-          <div className="text-[11px] italic text-slate-400">
-            No source citations linked to this node.
-          </div>
-        )}
-        {claims.map((claim) =>
-          claim.citations.map((cit) => (
-            <div
-              key={cit.citation_id}
-              className="mb-2 rounded-lg border border-slate-200 bg-white p-2.5"
-            >
-              <div className="mb-1 flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-slate-800">
-                  {cit.input_name}
-                </span>
-                {cit.confidence != null && (
-                  <span className="text-[10px] tabular-nums text-slate-400">
-                    conf. {Math.round(cit.confidence * 100)}%
-                  </span>
-                )}
-              </div>
-              <div className="border-l-2 border-slate-200 pl-2 text-[11px] italic leading-snug text-slate-600">
-                &ldquo;{cit.quote}&rdquo;
-              </div>
-              <div className="mt-1 text-[9.5px] uppercase tracking-wider text-slate-400">
-                [{claim.kind.replace(/_/g, " ")}]
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    );
-  }
-
   const items = inputsQuery.data?.items ?? [];
   return (
-    <div className="overflow-y-auto px-3 py-3">
+    <div className="h-full overflow-y-auto px-3 py-3">
       <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
         Source documents · {items.length}
       </div>
@@ -754,7 +695,7 @@ function SourcesTab({
         </div>
       )}
       <div className="mt-4 text-center text-[10.5px] italic text-slate-400">
-        Click a node to see its specific provenance.
+        Per-node citations live in the Properties panel when a node is selected.
       </div>
     </div>
   );

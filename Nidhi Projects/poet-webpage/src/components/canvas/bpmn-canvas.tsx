@@ -367,14 +367,38 @@ function BpmnCanvas({
     [projectId, modelId, versionId, record]
   );
 
+  // Recenter the viewport on a node so it's actually visible after a remote
+  // selection (e.g. clicking a node in the Issues tab).
+  const focusNodeInViewport = useCallback((id: UUID) => {
+    const node = nodesRef.current.find((n) => n.id === id);
+    if (!node) return;
+    const lane = lanesRef.current.find((l) => l.id === node.laneId);
+    const nodeAbsY = lane ? lane.y + node.relativeY : node.relativeY;
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const v = viewportRef.current;
+    const cx = node.x + node.w / 2;
+    const cy = nodeAbsY + node.h / 2;
+    setViewport({
+      scale: v.scale,
+      tx: rect.width / 2 - cx * v.scale,
+      ty: rect.height / 2 - cy * v.scale,
+    });
+  }, []);
+
   useImperativeHandle(
     ref,
     () => ({
       deleteNode: deleteNodeImpl,
       updateNode: updateNodeImpl,
-      selectNode: (id) => setSelectedId(id),
+      selectNode: (id) => {
+        setSelectedId(id);
+        focusNodeInViewport(id);
+      },
     }),
-    [deleteNodeImpl, updateNodeImpl]
+    [deleteNodeImpl, updateNodeImpl, focusNodeInViewport]
   );
 
   // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and

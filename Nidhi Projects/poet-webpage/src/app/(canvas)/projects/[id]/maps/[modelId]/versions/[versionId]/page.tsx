@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, MessageSquare } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -59,7 +59,10 @@ export default function CanvasPage() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selected>(null);
-  const [rightOpen, setRightOpen] = useState(false);
+  // The right panel is always present; only its collapsed/expanded state
+  // varies. Lifting it to the page so the Properties panel can shift as
+  // the right panel changes width.
+  const [rightCollapsed, setRightCollapsed] = useState(false);
   const canvasRef = useRef<BpmnCanvasHandle>(null);
   const queryClient = useQueryClient();
 
@@ -207,15 +210,6 @@ export default function CanvasPage() {
           <SaveIndicator status={saveStatus} error={saveError} />
           <Button
             size="sm"
-            variant={rightOpen ? "default" : "outline"}
-            onClick={() => setRightOpen((v) => !v)}
-            title="Toggle assistant + review panel"
-          >
-            <MessageSquare size={14} />
-            Assistant
-          </Button>
-          <Button
-            size="sm"
             variant="outline"
             disabled={!data?.version.bpmn_xml}
             onClick={() => setShowXml(true)}
@@ -269,14 +263,14 @@ export default function CanvasPage() {
         />
       )}
 
-      {/* Per-selection Properties panel — auto-shown when a node is selected.
-          Floats right, but shifts left to make room for the right panel
-          when both are open at once. */}
+      {/* Per-selection Properties panel — floats right, sits to the LEFT
+          of the always-visible RightPanel. Shifts based on whether the
+          right panel is collapsed (40px) or expanded (360px). */}
       {selectedNode && data && (
         <div
           style={{
             position: "absolute",
-            right: rightOpen ? 384 : 12,
+            right: rightCollapsed ? 64 : 384,
             top: 60,
             bottom: 60,
             zIndex: 25,
@@ -295,9 +289,9 @@ export default function CanvasPage() {
         </div>
       )}
 
-      {/* Tabbed right panel — Chat / Versions / Issues / Review / Sources.
-          Anchored to the right edge; Properties panel floats to its left. */}
-      {rightOpen && data && (
+      {/* Tabbed right panel — always visible, anchored to the right edge.
+          User collapses it via the chevron inside the panel. */}
+      {data && (
         <div
           style={{
             position: "absolute",
@@ -306,6 +300,7 @@ export default function CanvasPage() {
             bottom: 60,
             zIndex: 26,
             display: "flex",
+            transition: "width 150ms ease",
           }}
         >
           <RightPanel
@@ -321,6 +316,8 @@ export default function CanvasPage() {
             }))}
             selected={selected as { id: UUID; kind: "node" | "edge"; name?: string; nodeKind?: string } | null}
             onFocusNode={(id) => canvasRef.current?.selectNode(id)}
+            collapsed={rightCollapsed}
+            onCollapsedChange={setRightCollapsed}
           />
         </div>
       )}
