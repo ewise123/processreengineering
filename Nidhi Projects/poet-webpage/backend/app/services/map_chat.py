@@ -76,6 +76,7 @@ def chat(
         max_tokens=MAX_TOKENS,
         system=full_system,
         messages=messages,
+        timeout=60.0,
     )
     parts: list[str] = []
     for block in response.content:
