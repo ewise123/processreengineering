@@ -63,6 +63,9 @@ export default function CanvasPage() {
   // varies. Lifting it to the page so the Properties panel can shift as
   // the right panel changes width.
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  // Properties panel collapse state lifted so the page can resize the
+  // wrapper to a small button when collapsed.
+  const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
   const canvasRef = useRef<BpmnCanvasHandle>(null);
   const queryClient = useQueryClient();
 
@@ -113,6 +116,9 @@ export default function CanvasPage() {
 
   const handleSelectionChange = useCallback((s: Selected) => {
     setSelected(s);
+    // A new selection should always re-expand the panel — without this the
+    // user can lose the panel after a previous collapse.
+    if (s) setPropertiesCollapsed(false);
   }, []);
 
   const { data, isLoading, error } = useQuery({
@@ -265,14 +271,18 @@ export default function CanvasPage() {
 
       {/* Per-selection Properties panel — floats right, sits to the LEFT
           of the always-visible RightPanel. Shifts based on whether the
-          right panel is collapsed (40px) or expanded (360px). */}
+          right panel is collapsed (40px) or expanded (360px). When
+          collapsed, the wrapper sizes down to just the small expand
+          button (no full-height column). */}
       {selectedNode && data && (
         <div
           style={{
             position: "absolute",
             right: rightCollapsed ? 64 : 384,
             top: 60,
-            bottom: 60,
+            ...(propertiesCollapsed
+              ? { height: 36 }
+              : { bottom: 60 }),
             zIndex: 25,
             display: "flex",
             transition: "right 150ms ease",
@@ -282,6 +292,8 @@ export default function CanvasPage() {
             projectId={params.id}
             selected={selectedNode}
             lanes={data.lanes}
+            collapsed={propertiesCollapsed}
+            onCollapsedChange={setPropertiesCollapsed}
             onDelete={handleNodeDelete}
             onUpdate={handleNodeUpdate}
           />

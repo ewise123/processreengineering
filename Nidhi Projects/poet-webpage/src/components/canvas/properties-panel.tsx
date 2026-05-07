@@ -41,12 +41,18 @@ export function PropertiesPanel({
   projectId,
   selected,
   lanes,
+  collapsed,
+  onCollapsedChange,
   onDelete,
   onUpdate,
 }: {
   projectId: UUID;
   selected: SelectedNode;
   lanes: ProcessLane[];
+  /** Controlled collapse state — the page lifts this so it can resize the
+   * wrapper to a single small button when the panel is collapsed. */
+  collapsed: boolean;
+  onCollapsedChange: (next: boolean) => void;
   onDelete?: (id: UUID) => Promise<void> | void;
   onUpdate?: (
     id: UUID,
@@ -69,13 +75,6 @@ export function PropertiesPanel({
   const [issuesExpanded, setIssuesExpanded] = useState(true);
   const [provenanceExpanded, setProvenanceExpanded] = useState(true);
   const [deleting, setDeleting] = useState(false);
-
-  // Whether the panel itself is collapsed to a narrow strip. Selection is
-  // preserved across collapse — picking a different node always re-expands.
-  const [collapsed, setCollapsed] = useState(false);
-  useEffect(() => {
-    setCollapsed(false);
-  }, [selected.id]);
 
   // Local label state lets the input feel responsive while debouncing the
   // PATCH until blur/Enter. Reset whenever the selection changes.
@@ -111,39 +110,19 @@ export function PropertiesPanel({
 
   if (collapsed) {
     return (
-      <div
-        className="flex h-full w-9 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white"
+      <button
+        type="button"
+        onClick={() => onCollapsedChange(false)}
+        title={`Expand properties — ${selected.name ?? "selected node"}`}
+        aria-label="Expand properties panel"
+        className="flex h-9 w-10 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900"
         style={{
           boxShadow:
             "0 8px 28px -8px rgba(15, 23, 42, 0.18), 0 2px 6px -1px rgba(15, 23, 42, 0.08)",
         }}
       >
-        <button
-          type="button"
-          onClick={() => setCollapsed(false)}
-          title="Expand properties"
-          className="flex h-9 shrink-0 items-center justify-center border-b border-slate-100 text-slate-500 hover:bg-slate-50 hover:text-slate-900"
-        >
-          <ChevronLeft size={14} />
-        </button>
-        <button
-          type="button"
-          onClick={() => setCollapsed(false)}
-          className="flex flex-1 items-center justify-center px-1 text-slate-700 hover:bg-slate-50"
-          title={selected.name ?? "Selected node"}
-        >
-          <span
-            className="overflow-hidden truncate text-[10px] font-semibold uppercase tracking-wider"
-            style={{
-              writingMode: "vertical-rl",
-              transform: "rotate(180deg)",
-              maxHeight: "calc(100% - 16px)",
-            }}
-          >
-            {selected.name || "Properties"}
-          </span>
-        </button>
-      </div>
+        <ChevronLeft size={14} />
+      </button>
     );
   }
 
@@ -171,7 +150,7 @@ export function PropertiesPanel({
           </button>
           <button
             type="button"
-            onClick={() => setCollapsed(true)}
+            onClick={() => onCollapsedChange(true)}
             title="Collapse properties"
             aria-label="Collapse"
             className="flex h-6 w-6 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
