@@ -246,6 +246,22 @@ export interface NodeIssuesDetail {
   issues: NodeIssueDetail[];
 }
 
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatRequest {
+  history: ChatTurn[];
+  user_message: string;
+  selected_node_id?: UUID | null;
+  selected_edge_id?: UUID | null;
+}
+
+export interface ChatResponse {
+  content: string;
+}
+
 export interface ProcessMapGenerateRequest {
   name: string;
   level: string;

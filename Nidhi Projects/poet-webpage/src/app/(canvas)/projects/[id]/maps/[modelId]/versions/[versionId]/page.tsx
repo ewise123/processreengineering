@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, MessageSquare } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { BpmnCanvas, type BpmnCanvasHandle } from "@/components/canvas/bpmn-canvas";
+import { ChatSidebar } from "@/components/canvas/chat-sidebar";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
@@ -58,6 +59,7 @@ export default function CanvasPage() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selected>(null);
+  const [chatOpen, setChatOpen] = useState(false);
   const canvasRef = useRef<BpmnCanvasHandle>(null);
   const queryClient = useQueryClient();
 
@@ -205,6 +207,15 @@ export default function CanvasPage() {
           <SaveIndicator status={saveStatus} error={saveError} />
           <Button
             size="sm"
+            variant={chatOpen ? "default" : "outline"}
+            onClick={() => setChatOpen((v) => !v)}
+            title="Toggle AI assistant"
+          >
+            <MessageSquare size={14} />
+            Assistant
+          </Button>
+          <Button
+            size="sm"
             variant="outline"
             disabled={!data?.version.bpmn_xml}
             onClick={() => setShowXml(true)}
@@ -259,16 +270,18 @@ export default function CanvasPage() {
       )}
 
       {/* Per-selection Properties panel — auto-shown when a node is selected.
-          Matches the prototype's poet-props layout: floating right, single panel. */}
+          Floats right, but shifts left to make room for the chat sidebar
+          when both are open at once. */}
       {selectedNode && data && (
         <div
           style={{
             position: "absolute",
-            right: 12,
+            right: chatOpen ? 384 : 12,
             top: 60,
             bottom: 60,
             zIndex: 25,
             display: "flex",
+            transition: "right 150ms ease",
           }}
         >
           <PropertiesPanel
@@ -278,6 +291,36 @@ export default function CanvasPage() {
             onClose={() => setSelected(null)}
             onDelete={handleNodeDelete}
             onUpdate={handleNodeUpdate}
+          />
+        </div>
+      )}
+
+      {/* Chat sidebar — anchored to the right edge. Multi-turn history
+          lives inside the component for now; will move to persisted threads
+          per ai_assistant_vision.md. */}
+      {chatOpen && (
+        <div
+          style={{
+            position: "absolute",
+            right: 12,
+            top: 60,
+            bottom: 60,
+            zIndex: 26,
+            display: "flex",
+          }}
+        >
+          <ChatSidebar
+            projectId={params.id}
+            modelId={params.modelId}
+            versionId={params.versionId}
+            selectedNodeId={
+              selected?.kind === "node" ? (selected.id as UUID) : null
+            }
+            selectedEdgeId={
+              selected?.kind === "edge" ? (selected.id as UUID) : null
+            }
+            selectedLabel={selected?.name ?? null}
+            onClose={() => setChatOpen(false)}
           />
         </div>
       )}

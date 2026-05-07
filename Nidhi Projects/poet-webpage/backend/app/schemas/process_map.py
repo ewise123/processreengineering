@@ -151,6 +151,27 @@ class NodeIssuesDetailRead(BaseModel):
     issues: list[NodeIssueDetail]
 
 
+class ChatTurn(BaseModel):
+    """One turn in the in-canvas chat. Mirrors Anthropic's message shape."""
+
+    role: str = Field(pattern=r"^(user|assistant)$")
+    content: str = Field(min_length=1, max_length=20_000)
+
+
+class ChatRequest(BaseModel):
+    """Body for POST /process-maps/{m}/versions/{v}/chat. The frontend keeps
+    history client-side for now; full thread is sent each turn."""
+
+    history: list[ChatTurn] = Field(default_factory=list, max_length=40)
+    user_message: str = Field(min_length=1, max_length=4000)
+    selected_node_id: UUID | None = None
+    selected_edge_id: UUID | None = None
+
+
+class ChatResponse(BaseModel):
+    content: str
+
+
 class ProcessNodeRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID

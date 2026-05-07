@@ -29,6 +29,8 @@ from app.models.project import Project
 from app.models.claim import Claim, ClaimCitation, ClaimConflict
 from app.models.input import Chunk, DocumentSection, Input
 from app.schemas.process_map import (
+    ChatRequest,
+    ChatResponse,
     CitationDetail,
     ClaimSummary,
     ClaimWithCitations,
@@ -52,6 +54,7 @@ from app.schemas.process_map import (
     ProcessVersionRead,
 )
 from app.services.legacy_bpmn import build_bpmn_xml, validate_xml
+from app.services.map_chat import ChatTurn as MapChatTurn, build_map_context, chat as run_map_chat
 from app.services.process_generation import generate_structure_from_claims
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
@@ -1010,3 +1013,167 @@ def list_process_map_issues(
             NodeIssueRead(node_id=node_id, severity=severity, conflict_count=cnt)
         )
     return issues
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/chat",
+    response_model=ChatResponse,
+)
+def chat_with_map(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    payload: ChatRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> ChatResponse:
+    """Conversational AI bound to a specific process map version. Each turn
+    re-sends the full client-held history plus the new user message; the
+    backend renders a compact map context (lanes/nodes/edges/claims) and
+    asks Claude to respond grounded in those sources."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+
+    # Load the current map state so the model has a grounded view of it.
+    lanes = list(
+        db.scalars(
+            select(ProcessLane)
+            .where(ProcessLane.version_id == version.id)
+            .order_by(ProcessLane.order_index)
+        ).all()
+    )
+    nodes = list(
+        db.scalars(
+            select(ProcessNode).where(ProcessNode.version_id == version.id)
+        ).all()
+    )
+    edges = list(
+        db.scalars(
+            select(ProcessEdge).where(ProcessEdge.version_id == version.id)
+        ).all()
+    )
+
+    # Build short-id refs the model can cite back.
+    lane_ref_by_id: dict = {l.id: f"L{i + 1}" for i, l in enumerate(lanes)}
+    node_ref_by_id: dict = {n.id: f"N{i + 1}" for i, n in enumerate(nodes)}
+
+    lanes_ctx = [
+        {"idx": i + 1, "name": l.name} for i, l in enumerate(lanes)
+    ]
+    nodes_ctx = [
+        {
+            "idx": i + 1,
+            "label": n.name,
+            "type": n.type,
+            "lane_ref": lane_ref_by_id.get(n.lane_id) if n.lane_id else None,
+        }
+        for i, n in enumerate(nodes)
+    ]
+    edges_ctx = [
+        {
+            "idx": i + 1,
+            "source_ref": node_ref_by_id.get(e.source_node_id, "?"),
+            "target_ref": node_ref_by_id.get(e.target_node_id, "?"),
+            "label": e.label,
+        }
+        for i, e in enumerate(edges)
+    ]
+
+    # Pull all claims attached to any node in this version, plus their first
+    # citation (if any) so the model can quote source text directly.
+    node_claim_rows = list(
+        db.execute(
+            select(NodeClaimLink.claim_id, NodeClaimLink.node_id)
+            .join(ProcessNode, NodeClaimLink.node_id == ProcessNode.id)
+            .where(ProcessNode.version_id == version.id)
+        ).all()
+    )
+    attached_node_by_claim: dict = {
+        claim_id: node_ref_by_id.get(node_id, "?")
+        for claim_id, node_id in node_claim_rows
+    }
+
+    project_claim_ids = list(
+        db.scalars(
+            select(Claim.id).where(Claim.project_id == project.id)
+        ).all()
+    )
+    project_claims = list(
+        db.scalars(
+            select(Claim).where(Claim.id.in_(project_claim_ids))
+        ).all()
+    ) if project_claim_ids else []
+
+    quote_by_claim: dict = {}
+    source_by_claim: dict = {}
+    if project_claim_ids:
+        cit_rows = list(
+            db.execute(
+                select(
+                    ClaimCitation.claim_id,
+                    ClaimCitation.quote,
+                    Input.name,
+                )
+                .join(Chunk, Chunk.id == ClaimCitation.chunk_id)
+                .join(DocumentSection, DocumentSection.id == Chunk.section_id)
+                .join(Input, Input.id == DocumentSection.input_id)
+                .where(ClaimCitation.claim_id.in_(project_claim_ids))
+                .order_by(ClaimCitation.created_at)
+            ).all()
+        )
+        for claim_id, quote, input_name in cit_rows:
+            if claim_id not in quote_by_claim:
+                quote_by_claim[claim_id] = quote
+                source_by_claim[claim_id] = input_name
+
+    claims_ctx = [
+        {
+            "idx": i + 1,
+            "kind": c.kind,
+            "subject": c.subject,
+            "attached_to": attached_node_by_claim.get(c.id),
+            "quote": quote_by_claim.get(c.id),
+            "source": source_by_claim.get(c.id),
+        }
+        for i, c in enumerate(project_claims)
+    ]
+
+    # Render the selection label for the prompt.
+    selected_label: str | None = None
+    if payload.selected_node_id:
+        n = next((n for n in nodes if n.id == payload.selected_node_id), None)
+        if n is not None:
+            ref = node_ref_by_id.get(n.id, "?")
+            selected_label = f"{ref} (node) — \"{n.name}\""
+    elif payload.selected_edge_id:
+        e = next((e for e in edges if e.id == payload.selected_edge_id), None)
+        if e is not None:
+            src = node_ref_by_id.get(e.source_node_id, "?")
+            tgt = node_ref_by_id.get(e.target_node_id, "?")
+            label = f" '{e.label}'" if e.label else ""
+            selected_label = f"edge {src}->{tgt}{label}"
+
+    map_context_text = build_map_context(
+        lanes=lanes_ctx,
+        nodes=nodes_ctx,
+        edges=edges_ctx,
+        claims=claims_ctx,
+        selected_label=selected_label,
+    )
+
+    history = [
+        MapChatTurn(role=t.role, content=t.content) for t in payload.history
+    ]
+    try:
+        content = run_map_chat(
+            history=history,
+            user_message=payload.user_message,
+            map_context_text=map_context_text,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return ChatResponse(content=content)
