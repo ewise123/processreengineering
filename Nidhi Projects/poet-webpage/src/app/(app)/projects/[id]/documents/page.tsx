@@ -24,9 +24,11 @@ import {
 } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { UploadForm } from "@/components/upload-form";
+import { ExtractionProgressCell } from "@/components/extraction-progress-cell";
 import type { InputRow } from "@/lib/types";
 
 const PAGE_SIZE = 50;
+const POLL_INTERVAL_MS = 3000;
 
 export default function DocumentsPage() {
   const { id } = useParams<{ id: string }>();
@@ -37,19 +39,21 @@ export default function DocumentsPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["inputs", id, "page", offset],
     queryFn: () => api.listInputs(id, { limit: PAGE_SIZE, offset }),
+    refetchInterval: (query) => {
+      const items = query.state.data?.items ?? [];
+      return items.some((r) => r.status === "extracting")
+        ? POLL_INTERVAL_MS
+        : false;
+    },
   });
 
   const extract = useMutation({
     mutationFn: ({ inputId }: { inputId: string }) =>
       api.extractClaims(id, inputId),
     onSuccess: (res) => {
-      toast.success(
-        `Extracted ${res.claim_count} claim(s) from input.`
-      );
+      toast.success(`Extracted ${res.claim_count} claim(s) from input.`);
       qc.invalidateQueries({ queryKey: ["inputs", id] });
       qc.invalidateQueries({ queryKey: ["claims", id] });
-      // Re-extracting wipes prior claims for this input, so any cached
-      // conflicts referencing them are now stale.
       qc.invalidateQueries({ queryKey: ["conflicts", id] });
     },
     onError: (e: Error) => toast.error(`Extraction failed: ${e.message}`),
@@ -79,9 +83,7 @@ export default function DocumentsPage() {
         <UploadForm projectId={id} />
       </div>
 
-      {isLoading && (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      )}
+      {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
       {error && (
         <p className="text-sm text-red-600">{(error as Error).message}</p>
       )}
@@ -93,6 +95,7 @@ export default function DocumentsPage() {
               <TableHead>Name</TableHead>
               <TableHead>Type</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Progress</TableHead>
               <TableHead className="text-right">Claims</TableHead>
               <TableHead>Size</TableHead>
               <TableHead>Uploaded</TableHead>
@@ -102,15 +105,17 @@ export default function DocumentsPage() {
           <TableBody>
             {data.items.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className="text-center text-sm text-muted-foreground py-8">
+                <TableCell
+                  colSpan={8}
+                  className="text-center text-sm text-muted-foreground py-8"
+                >
                   No documents yet. Upload one to get started.
                 </TableCell>
               </TableRow>
             )}
             {data.items.map((row) => {
-              const isThisExtracting =
-                extract.isPending && extract.variables?.inputId === row.id;
-              const buttonLabel = isThisExtracting
+              const isExtracting = row.status === "extracting";
+              const buttonLabel = isExtracting
                 ? "Extracting…"
                 : row.claim_count > 0
                   ? "Re-extract"
@@ -122,7 +127,19 @@ export default function DocumentsPage() {
                     {row.type.replace(/_/g, " ")}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
+                    <Badge
+                      variant={statusVariant(row.status)}
+                      title={
+                        row.status === "failed" && row.extraction_error
+                          ? row.extraction_error
+                          : undefined
+                      }
+                    >
+                      {row.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <ExtractionProgressCell row={row} />
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {row.claim_count > 0 ? row.claim_count : "—"}
@@ -137,7 +154,10 @@ export default function DocumentsPage() {
                     <Button
                       size="sm"
                       variant={row.claim_count > 0 ? "secondary" : "outline"}
-                      disabled={row.status !== "parsed" || isThisExtracting}
+                      disabled={
+                        row.status !== "parsed" &&
+                        row.status !== "failed"
+                      }
                       onClick={() => onExtractClick(row)}
                     >
                       {buttonLabel}
@@ -153,7 +173,8 @@ export default function DocumentsPage() {
       {data && data.total > PAGE_SIZE && (
         <div className="flex items-center justify-between pt-2">
           <p className="text-sm text-muted-foreground tabular-nums">
-            {data.total === 0 ? 0 : offset + 1}–{Math.min(offset + PAGE_SIZE, data.total)} of {data.total}
+            {data.total === 0 ? 0 : offset + 1}–
+            {Math.min(offset + PAGE_SIZE, data.total)} of {data.total}
           </p>
           <div className="flex gap-2">
             <Button
@@ -176,7 +197,10 @@ export default function DocumentsPage() {
         </div>
       )}
 
-      <Dialog open={confirmRow !== null} onOpenChange={(o) => !o && setConfirmRow(null)}>
+      <Dialog
+        open={confirmRow !== null}
+        onOpenChange={(o) => !o && setConfirmRow(null)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Re-extract claims?</DialogTitle>
@@ -186,9 +210,9 @@ export default function DocumentsPage() {
                 {confirmRow?.claim_count} existing claim
                 {confirmRow?.claim_count === 1 ? "" : "s"}
               </span>{" "}
-              for <span className="font-medium">{confirmRow?.name}</span> and run
-              extraction again. Any conflicts referencing these claims will also be
-              cleared on the next detection run.
+              for <span className="font-medium">{confirmRow?.name}</span> and
+              run extraction again. Any conflicts referencing these claims will
+              also be cleared on the next detection run.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -205,10 +229,12 @@ export default function DocumentsPage() {
   );
 }
 
-function statusVariant(s: string): "default" | "secondary" | "destructive" | "outline" {
+function statusVariant(
+  s: string,
+): "default" | "secondary" | "destructive" | "outline" {
   if (s === "parsed") return "default";
   if (s === "failed") return "destructive";
-  if (s === "parsing") return "secondary";
+  if (s === "parsing" || s === "extracting") return "secondary";
   return "outline";
 }
 
