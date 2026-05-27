@@ -1,9 +1,9 @@
 """BPMN 2.0 XML construction.
 
-The body of `build_bpmn_xml`, `_strip_actor`, `_esc`, and `validate_xml` is
-reused verbatim from the legacy `main.py` (still in production for the static
-HTML tools). When `main.py` is eventually retired, the duplication can be
-removed.
+Canonical home for `build_bpmn_xml`, `_strip_actor`, `_esc`, and `validate_xml`.
+Originally duplicated here from the legacy `main.py` while the static-HTML
+tools were still in production; that code has now been removed, so this is
+the single source of truth.
 """
 import xml.etree.ElementTree as ET
 
