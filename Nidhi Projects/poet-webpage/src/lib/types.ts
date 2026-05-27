@@ -45,6 +45,10 @@ export interface InputRow {
   created_at: string;
   updated_at: string;
   claim_count: number;
+  chunks_processed: number;
+  chunks_total: number;
+  extraction_started_at: string | null;
+  extraction_error: string | null;
 }
 
 export interface InputParseResult {

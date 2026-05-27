@@ -28,6 +28,7 @@ class InputStatus(StrEnum):
     UPLOADED = "uploaded"
     PARSING = "parsing"
     PARSED = "parsed"
+    EXTRACTING = "extracting"
     FAILED = "failed"
 
 

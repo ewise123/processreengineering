@@ -18,6 +18,10 @@ class InputRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     claim_count: int = 0
+    chunks_processed: int = 0
+    chunks_total: int = 0
+    extraction_started_at: datetime | None = None
+    extraction_error: str | None = None
 
 
 class InputParseResult(BaseModel):
