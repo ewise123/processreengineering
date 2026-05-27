@@ -40,3 +40,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local dev runner (run-local.sh)
+/.run/
+
+# python bytecode
+__pycache__/
+*.pyc
