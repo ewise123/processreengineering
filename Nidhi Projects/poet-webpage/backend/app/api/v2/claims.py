@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.v2.deps import get_project_or_404
 from app.db.session import get_db
-from app.enums import ConflictStatus
+from app.enums import ConflictStatus, InputStatus
 from app.models.claim import Claim, ClaimCitation, ClaimConflict
 from app.models.input import Chunk, DocumentSection, Input
 from app.models.project import Project
@@ -49,7 +50,8 @@ def extract_input_claims(
             input_id=input_id, claim_count=0, citation_count=0
         )
 
-    # Wipe any prior claims linked to this input via citations
+    # Wipe any prior claims for this input via citations. Committed eagerly
+    # so the failure path doesn't resurrect the old claims.
     chunk_ids = [c.id for c in chunks]
     prior_claim_ids = list(
         db.scalars(
@@ -60,35 +62,60 @@ def extract_input_claims(
     )
     if prior_claim_ids:
         db.execute(delete(Claim).where(Claim.id.in_(prior_claim_ids)))
-        db.flush()
+    inp.status = InputStatus.EXTRACTING.value
+    inp.chunks_total = len(chunks)
+    inp.chunks_processed = 0
+    inp.extraction_started_at = datetime.now(timezone.utc)
+    inp.extraction_error = None
+    db.commit()
 
     claim_count = 0
     citation_count = 0
-    for chunk in chunks:
-        try:
+    try:
+        for chunk in chunks:
             extracted = extract_claims_from_text(chunk.text)
-        except RuntimeError as e:
-            raise HTTPException(status_code=503, detail=str(e))
-        for ec in extracted:
-            claim = Claim(
-                project_id=project.id,
-                kind=ec.kind,
-                subject=ec.subject,
-                normalized=ec.normalized,
-                confidence=ec.confidence,
-            )
-            db.add(claim)
-            db.flush()
-            db.add(
-                ClaimCitation(
-                    claim_id=claim.id,
-                    chunk_id=chunk.id,
-                    quote=ec.quote,
+            for ec in extracted:
+                claim = Claim(
+                    project_id=project.id,
+                    kind=ec.kind,
+                    subject=ec.subject,
+                    normalized=ec.normalized,
                     confidence=ec.confidence,
                 )
-            )
-            claim_count += 1
-            citation_count += 1
+                db.add(claim)
+                db.flush()
+                db.add(
+                    ClaimCitation(
+                        claim_id=claim.id,
+                        chunk_id=chunk.id,
+                        quote=ec.quote,
+                        confidence=ec.confidence,
+                    )
+                )
+                claim_count += 1
+                citation_count += 1
+            inp.chunks_processed += 1
+            db.commit()
+    except RuntimeError as e:
+        # Anthropic key missing or similar service error → 503
+        db.rollback()
+        inp_refresh = db.get(Input, input_id)
+        if inp_refresh is not None:
+            inp_refresh.status = InputStatus.FAILED.value
+            inp_refresh.extraction_error = str(e)
+            db.commit()
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        db.rollback()
+        inp_refresh = db.get(Input, input_id)
+        if inp_refresh is not None:
+            inp_refresh.status = InputStatus.FAILED.value
+            inp_refresh.extraction_error = str(e)
+            db.commit()
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {e}")
+
+    inp.status = InputStatus.PARSED.value
+    inp.extraction_error = None
     db.commit()
     return ClaimExtractionResult(
         input_id=input_id, claim_count=claim_count, citation_count=citation_count

@@ -25,7 +25,23 @@ from pptx import Presentation
 
 load_dotenv()
 
-app = FastAPI(title="POET API", version="1.0.0")
+from contextlib import asynccontextmanager  # noqa: E402
+
+from app.db.session import SessionLocal  # noqa: E402
+from app.services.startup import sweep_stale_extracting_inputs  # noqa: E402
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    # Startup: clean up any rows stuck in 'extracting' from a prior crash.
+    with SessionLocal() as db:
+        swept = sweep_stale_extracting_inputs(db)
+        if swept:
+            print(f"[startup] swept {swept} stale extracting input(s) to failed")
+    yield
+
+
+app = FastAPI(title="POET API", version="1.0.0", lifespan=lifespan)
 
 # === v2 API (Phase 1.5+) — registered before the catch-all at end of file ===
 from app.api.v2 import router as _v2_router  # noqa: E402
