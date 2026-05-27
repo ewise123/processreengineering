@@ -123,6 +123,9 @@ export interface BpmnCanvasHandle {
     id: UUID,
     patch: { name?: string; laneId?: UUID }
   ) => Promise<void>;
+  /** Select a node (drives Properties panel + chat context) from outside
+   * the canvas, e.g. clicking a node link in the Issues tab. */
+  selectNode: (id: UUID) => void;
 }
 
 interface BpmnCanvasProps {
@@ -364,10 +367,38 @@ function BpmnCanvas({
     [projectId, modelId, versionId, record]
   );
 
+  // Recenter the viewport on a node so it's actually visible after a remote
+  // selection (e.g. clicking a node in the Issues tab).
+  const focusNodeInViewport = useCallback((id: UUID) => {
+    const node = nodesRef.current.find((n) => n.id === id);
+    if (!node) return;
+    const lane = lanesRef.current.find((l) => l.id === node.laneId);
+    const nodeAbsY = lane ? lane.y + node.relativeY : node.relativeY;
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const v = viewportRef.current;
+    const cx = node.x + node.w / 2;
+    const cy = nodeAbsY + node.h / 2;
+    setViewport({
+      scale: v.scale,
+      tx: rect.width / 2 - cx * v.scale,
+      ty: rect.height / 2 - cy * v.scale,
+    });
+  }, []);
+
   useImperativeHandle(
     ref,
-    () => ({ deleteNode: deleteNodeImpl, updateNode: updateNodeImpl }),
-    [deleteNodeImpl, updateNodeImpl]
+    () => ({
+      deleteNode: deleteNodeImpl,
+      updateNode: updateNodeImpl,
+      selectNode: (id) => {
+        setSelectedId(id);
+        focusNodeInViewport(id);
+      },
+    }),
+    [deleteNodeImpl, updateNodeImpl, focusNodeInViewport]
   );
 
   // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
@@ -609,7 +640,9 @@ function BpmnCanvas({
       target === svgRef.current ||
       (target.tagName === "rect" && target.getAttribute("data-bg") === "1");
     if (!isBg) return;
-    setSelectedId(null);
+    // Don't deselect yet — onUp checks whether the cursor actually moved
+    // (drag → keep selection so the Properties panel stays put while panning,
+    // pure click → deselect).
     setDrag({
       type: "pan",
       startX: e.clientX,
@@ -790,6 +823,16 @@ function BpmnCanvas({
               undo: () => applyNodePositionLocal(drag.id, oldPos),
             });
           }
+        }
+      }
+      if (drag.type === "pan") {
+        // Distinguish a true background click (deselect) from a pan-drag
+        // (preserve selection so the Properties panel stays put while
+        // panning). 4px threshold is the usual click-vs-drag cutoff.
+        const dx = e.clientX - drag.startX;
+        const dy = e.clientY - drag.startY;
+        if (dx * dx + dy * dy < 16) {
+          setSelectedId(null);
         }
       }
       setDrag(null);

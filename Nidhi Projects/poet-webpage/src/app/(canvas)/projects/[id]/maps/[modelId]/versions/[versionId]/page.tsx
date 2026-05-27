@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, MessageSquare } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -16,8 +16,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { BpmnCanvas, type BpmnCanvasHandle } from "@/components/canvas/bpmn-canvas";
-import { ChatSidebar } from "@/components/canvas/chat-sidebar";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
+import { RightPanel } from "@/components/canvas/right-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
@@ -59,7 +59,13 @@ export default function CanvasPage() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selected>(null);
-  const [chatOpen, setChatOpen] = useState(false);
+  // The right panel is always present; only its collapsed/expanded state
+  // varies. Lifting it to the page so the Properties panel can shift as
+  // the right panel changes width.
+  const [rightCollapsed, setRightCollapsed] = useState(false);
+  // Properties panel collapse state lifted so the page can resize the
+  // wrapper to a small button when collapsed.
+  const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
   const canvasRef = useRef<BpmnCanvasHandle>(null);
   const queryClient = useQueryClient();
 
@@ -110,6 +116,9 @@ export default function CanvasPage() {
 
   const handleSelectionChange = useCallback((s: Selected) => {
     setSelected(s);
+    // A new selection should always re-expand the panel — without this the
+    // user can lose the panel after a previous collapse.
+    if (s) setPropertiesCollapsed(false);
   }, []);
 
   const { data, isLoading, error } = useQuery({
@@ -207,15 +216,6 @@ export default function CanvasPage() {
           <SaveIndicator status={saveStatus} error={saveError} />
           <Button
             size="sm"
-            variant={chatOpen ? "default" : "outline"}
-            onClick={() => setChatOpen((v) => !v)}
-            title="Toggle AI assistant"
-          >
-            <MessageSquare size={14} />
-            Assistant
-          </Button>
-          <Button
-            size="sm"
             variant="outline"
             disabled={!data?.version.bpmn_xml}
             onClick={() => setShowXml(true)}
@@ -269,16 +269,20 @@ export default function CanvasPage() {
         />
       )}
 
-      {/* Per-selection Properties panel — auto-shown when a node is selected.
-          Floats right, but shifts left to make room for the chat sidebar
-          when both are open at once. */}
+      {/* Per-selection Properties panel — floats right, sits to the LEFT
+          of the always-visible RightPanel. Shifts based on whether the
+          right panel is collapsed (40px) or expanded (360px). When
+          collapsed, the wrapper sizes down to just the small expand
+          button (no full-height column). */}
       {selectedNode && data && (
         <div
           style={{
             position: "absolute",
-            right: chatOpen ? 384 : 12,
+            right: rightCollapsed ? 64 : 384,
             top: 60,
-            bottom: 60,
+            ...(propertiesCollapsed
+              ? { height: 36 }
+              : { bottom: 60 }),
             zIndex: 25,
             display: "flex",
             transition: "right 150ms ease",
@@ -288,17 +292,17 @@ export default function CanvasPage() {
             projectId={params.id}
             selected={selectedNode}
             lanes={data.lanes}
-            onClose={() => setSelected(null)}
+            collapsed={propertiesCollapsed}
+            onCollapsedChange={setPropertiesCollapsed}
             onDelete={handleNodeDelete}
             onUpdate={handleNodeUpdate}
           />
         </div>
       )}
 
-      {/* Chat sidebar — anchored to the right edge. Multi-turn history
-          lives inside the component for now; will move to persisted threads
-          per ai_assistant_vision.md. */}
-      {chatOpen && (
+      {/* Tabbed right panel — always visible, anchored to the right edge.
+          User collapses it via the chevron inside the panel. */}
+      {data && (
         <div
           style={{
             position: "absolute",
@@ -307,20 +311,24 @@ export default function CanvasPage() {
             bottom: 60,
             zIndex: 26,
             display: "flex",
+            transition: "width 150ms ease",
           }}
         >
-          <ChatSidebar
+          <RightPanel
             projectId={params.id}
             modelId={params.modelId}
             versionId={params.versionId}
-            selectedNodeId={
-              selected?.kind === "node" ? (selected.id as UUID) : null
-            }
-            selectedEdgeId={
-              selected?.kind === "edge" ? (selected.id as UUID) : null
-            }
-            selectedLabel={selected?.name ?? null}
-            onClose={() => setChatOpen(false)}
+            version={data.version}
+            nodes={data.nodes.map((n) => ({
+              id: n.id,
+              name: n.name,
+              type: n.type,
+              lane_id: n.lane_id,
+            }))}
+            selected={selected as { id: UUID; kind: "node" | "edge"; name?: string; nodeKind?: string } | null}
+            onFocusNode={(id) => canvasRef.current?.selectNode(id)}
+            collapsed={rightCollapsed}
+            onCollapsedChange={setRightCollapsed}
           />
         </div>
       )}

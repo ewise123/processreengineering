@@ -3,14 +3,13 @@
 import {
   AlertTriangle,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Sparkles,
-  X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import type {
   CitationDetail,
@@ -42,14 +41,18 @@ export function PropertiesPanel({
   projectId,
   selected,
   lanes,
-  onClose,
+  collapsed,
+  onCollapsedChange,
   onDelete,
   onUpdate,
 }: {
   projectId: UUID;
   selected: SelectedNode;
   lanes: ProcessLane[];
-  onClose: () => void;
+  /** Controlled collapse state — the page lifts this so it can resize the
+   * wrapper to a single small button when the panel is collapsed. */
+  collapsed: boolean;
+  onCollapsedChange: (next: boolean) => void;
   onDelete?: (id: UUID) => Promise<void> | void;
   onUpdate?: (
     id: UUID,
@@ -105,6 +108,24 @@ export function PropertiesPanel({
     void onUpdate(selected.id, { laneId });
   };
 
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={() => onCollapsedChange(false)}
+        title={`Expand properties — ${selected.name ?? "selected node"}`}
+        aria-label="Expand properties panel"
+        className="flex h-9 w-10 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+        style={{
+          boxShadow:
+            "0 8px 28px -8px rgba(15, 23, 42, 0.18), 0 2px 6px -1px rgba(15, 23, 42, 0.08)",
+        }}
+      >
+        <ChevronLeft size={14} />
+      </button>
+    );
+  }
+
   return (
     <div
       className="flex h-full w-[270px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white"
@@ -117,7 +138,7 @@ export function PropertiesPanel({
         <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
           Properties
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <button
             type="button"
             onClick={handleDelete}
@@ -127,15 +148,15 @@ export function PropertiesPanel({
           >
             {deleting ? "Deleting…" : "Delete"}
           </button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={onClose}
-            className="h-6 w-6 p-0"
-            aria-label="Close"
+          <button
+            type="button"
+            onClick={() => onCollapsedChange(true)}
+            title="Collapse properties"
+            aria-label="Collapse"
+            className="flex h-6 w-6 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"
           >
-            <X size={14} />
-          </Button>
+            <ChevronRight size={14} />
+          </button>
         </div>
       </div>
 
