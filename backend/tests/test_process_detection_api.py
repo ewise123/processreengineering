@@ -261,3 +261,32 @@ def test_create_empty_segment(client, db):
     assert body["name"] == "Manual cluster"
     assert body["claim_count"] == 0
     assert body["is_unassigned"] is False
+
+
+def test_merge_segment_moves_memberships(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    a_id = created["segments"][0]["id"]
+    b_id = created["segments"][1]["id"]
+
+    resp = client.post(
+        f"/api/v2/projects/{proj.id}/segments/{a_id}/merge",
+        json={"into_segment_id": b_id},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == b_id
+    assert body["claim_count"] == 2
+
+    # Source segment should be gone.
+    resp2 = client.patch(
+        f"/api/v2/projects/{proj.id}/segments/{a_id}",
+        json={"name": "x"},
+    )
+    assert resp2.status_code == 404

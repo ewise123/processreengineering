@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update as sql_update
 from sqlalchemy.orm import Session
 
 from app.api.v2.deps import get_current_user, get_project_or_404
@@ -255,3 +255,37 @@ def update_segment(
     db.commit()
     db.refresh(seg)
     return _segment_to_read(db, seg)
+
+
+@router.post(
+    "/segments/{segment_id}/merge",
+    response_model=ProcessSegmentRead,
+)
+def merge_segment(
+    segment_id: UUID,
+    payload: SegmentMergeRequest,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessSegmentRead:
+    source = _get_draft_segment(db, project.id, segment_id)
+    target = _get_draft_segment(db, project.id, payload.into_segment_id)
+    if source.id == target.id:
+        raise HTTPException(
+            status_code=422, detail="Cannot merge a segment into itself"
+        )
+    if source.detection_run_id != target.detection_run_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot merge segments from different detection runs",
+        )
+
+    db.execute(
+        sql_update(ClaimSegmentMembership)
+        .where(ClaimSegmentMembership.segment_id == source.id)
+        .values(segment_id=target.id)
+    )
+    target.claim_count = target.claim_count + source.claim_count
+    db.delete(source)
+    db.commit()
+    db.refresh(target)
+    return _segment_to_read(db, target)
