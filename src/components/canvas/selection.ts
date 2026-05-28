@@ -43,6 +43,6 @@ export function rectsIntersect(a: Rect, b: Rect): boolean {
 /** Ids of nodes whose bbox intersects the marquee rect. */
 export function nodesInMarquee(nodes: PositionedNode[], marquee: Rect): string[] {
   return nodes
-    .filter((n) => rectsIntersect(marquee, { x: n.x, y: n.y, w: n.w, h: n.h }))
+    .filter((n) => rectsIntersect(marquee, n))
     .map((n) => n.id);
 }
