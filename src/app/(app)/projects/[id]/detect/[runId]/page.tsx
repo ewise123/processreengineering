@@ -6,6 +6,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
+import { SegmentCard } from "@/components/detect/segment-card";
+import { NewEmptyClusterButton } from "@/components/detect/new-empty-cluster-button";
 
 export default function DetectionReviewPage() {
   const params = useParams<{ id: string; runId: string }>();
@@ -76,10 +78,18 @@ export default function DetectionReviewPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
         <div className="space-y-4">
-          {/* segment cards mounted in Task 21 */}
-          <p className="text-sm text-muted-foreground">
-            ({segCount} segments — cards rendered in the next task.)
-          </p>
+          {run.segments.map((seg) => (
+            <SegmentCard
+              key={seg.id}
+              projectId={projectId}
+              runId={runId}
+              segment={seg}
+              allSegments={run.segments}
+              unassignedSegment={run.unassigned_segment}
+              disabled={!isDraft}
+            />
+          ))}
+          {isDraft && <NewEmptyClusterButton projectId={projectId} runId={runId} />}
         </div>
         <aside className="space-y-4">
           {run.reasoning_summary && (
