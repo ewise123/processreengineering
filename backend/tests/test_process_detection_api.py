@@ -452,3 +452,88 @@ def test_accept_run_422_on_duplicate_names(client, db):
         f"/api/v2/projects/{proj.id}/detection-runs/{created['id']}/accept"
     )
     assert resp.status_code == 422
+
+
+def test_discard_draft_run_archives_it(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+
+    resp = client.delete(
+        f"/api/v2/projects/{proj.id}/detection-runs/{created['id']}"
+    )
+    assert resp.status_code == 204
+
+    # Run is still queryable, now archived.
+    detail = client.get(
+        f"/api/v2/projects/{proj.id}/detection-runs/{created['id']}"
+    ).json()
+    assert detail["status"] == "archived"
+
+
+def test_discard_non_draft_run_409(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    # Name segments + accept so the run is no longer draft.
+    # Use an index-based name to guarantee uniqueness across segments.
+    for i, seg in enumerate(created["segments"]):
+        client.patch(
+            f"/api/v2/projects/{proj.id}/segments/{seg['id']}",
+            json={"name": f"Segment-{i}"},
+        )
+    client.post(f"/api/v2/projects/{proj.id}/detection-runs/{created['id']}/accept")
+
+    resp = client.delete(
+        f"/api/v2/projects/{proj.id}/detection-runs/{created['id']}"
+    )
+    assert resp.status_code == 409
+
+
+def test_discard_draft_allows_new_detection_run(client, db):
+    """After discarding the draft, the at-most-one-draft invariant should
+    release and a fresh detection should be possible."""
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        first = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    # While a draft exists, a second detect call returns 409.
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        blocked = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        )
+    assert blocked.status_code == 409
+
+    # Discard the draft.
+    discard = client.delete(
+        f"/api/v2/projects/{proj.id}/detection-runs/{first['id']}"
+    )
+    assert discard.status_code == 204
+
+    # A new detection should now succeed.
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        second = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        )
+    assert second.status_code == 201
+    assert second.json()["id"] != first["id"]

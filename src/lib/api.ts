@@ -315,4 +315,9 @@ export const api = {
       `/api/v2/projects/${projectId}/detection-runs/${runId}/accept`,
       { method: "POST" }
     ),
+  discardDetectionRun: (projectId: UUID, runId: UUID) =>
+    request<void>(
+      `/api/v2/projects/${projectId}/detection-runs/${runId}`,
+      { method: "DELETE" }
+    ),
 };

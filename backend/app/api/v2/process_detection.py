@@ -365,6 +365,31 @@ def move_claim_to_segment(
     return _segment_to_read(db, target)
 
 
+@router.delete(
+    "/detection-runs/{run_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def discard_detection_run(
+    run_id: UUID,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Archive a draft detection run. Accepted or already-archived runs cannot
+    be discarded (409). The run remains in the DB for audit, just with
+    status=archived; segments and memberships are kept untouched."""
+    run = _get_run_in_project(db, project.id, run_id)
+    # Refresh to get the latest committed status — guarding against a shared
+    # session (expire_on_commit=False) returning a stale cached instance.
+    db.refresh(run)
+    if run.status != DetectionRunStatus.DRAFT.value:
+        raise HTTPException(
+            status_code=409,
+            detail="Only draft runs can be discarded.",
+        )
+    run.status = DetectionRunStatus.ARCHIVED.value
+    db.commit()
+
+
 @router.post(
     "/detection-runs/{run_id}/accept",
     response_model=AcceptDetectionRunResult,

@@ -31,6 +31,16 @@ export default function DetectionReviewPage() {
     onError: (e: Error) => toast.error(`Accept failed: ${e.message}`),
   });
 
+  const discard = useMutation({
+    mutationFn: () => api.discardDetectionRun(projectId, runId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["detection-runs", projectId] });
+      qc.invalidateQueries({ queryKey: ["detection-run", projectId, runId] });
+      router.push(`/projects/${projectId}/documents`);
+    },
+    onError: (e: Error) => toast.error(`Discard failed: ${e.message}`),
+  });
+
   if (runQuery.isLoading) {
     return <p className="text-sm text-muted-foreground">Loading…</p>;
   }
@@ -59,6 +69,19 @@ export default function DetectionReviewPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          {isDraft && (
+            <Button
+              variant="ghost"
+              disabled={discard.isPending}
+              onClick={() => {
+                if (window.confirm("Discard this detection draft? Segments and memberships will be archived (not deleted), but the run will no longer be active.")) {
+                  discard.mutate();
+                }
+              }}
+            >
+              {discard.isPending ? "Discarding…" : "Discard draft"}
+            </Button>
+          )}
           <Button
             variant="default"
             disabled={!isDraft || accept.isPending}
