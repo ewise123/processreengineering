@@ -2,6 +2,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy import select
 
 from app.services.process_detection import (
     DetectionResult,
@@ -233,3 +234,72 @@ def test_run_detection_rejects_zero_segments(db):
             raise AssertionError("Expected RuntimeError")
     # No run row created.
     assert db.query(DetectionRun).count() == 0
+
+
+def test_run_detection_routes_unassigned_claim_refs_to_unassigned_segment(db):
+    """Claims explicitly listed in unassigned_claim_refs must end up in the
+    Unassigned segment (not silently dropped)."""
+    org = Organization(name="t"); db.add(org); db.flush()
+    user = User(email="dev@local", name="dev", org_id=org.id)
+    db.add(user); db.flush()
+    proj = Project(name="p", org_id=org.id, status="active")
+    db.add(proj); db.flush()
+    inp = Input(
+        project_id=proj.id, type="interview_transcript",
+        name="i.txt", file_path="i.txt", file_size=10,
+        mime_type="text/plain", status="parsed", uploaded_by=user.id,
+    )
+    db.add(inp); db.flush()
+    sec = DocumentSection(input_id=inp.id, kind="page", order_index=0, ref={}, text="x")
+    db.add(sec); db.flush()
+    chunks = [
+        Chunk(section_id=sec.id, char_start=i * 10, char_end=(i + 1) * 10, text=f"c{i}", tokens=1)
+        for i in range(3)
+    ]
+    db.add_all(chunks); db.flush()
+    claims = [
+        Claim(project_id=proj.id, kind="task", subject=f"claim {i}", normalized={}, confidence=0.9)
+        for i in range(3)
+    ]
+    db.add_all(claims); db.flush()
+    db.add_all([
+        ClaimCitation(claim_id=claims[i].id, chunk_id=chunks[i].id, quote=f"q{i}", confidence=0.9)
+        for i in range(3)
+    ])
+    db.commit()
+
+    # The model assigns claims 0 and 2 to segments, and explicitly puts claim 1 in unassigned.
+    fake = DetectionResult(
+        segments=[
+            DetectedSegment("Process A", "a", [0], 0.9),
+            DetectedSegment("Process B", "b", [2], 0.7),
+        ],
+        unassigned_claim_refs=[1],
+        reasoning_summary="claim 1 is ambient",
+        model_used="claude-sonnet-4-6",
+        prompt_tokens=10,
+        output_tokens=10,
+    )
+    with _patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=fake,
+    ):
+        run = run_detection(db=db, project_id=proj.id, scope_input_ids=None)
+
+    unassigned = db.scalars(
+        select(ProcessSegment).where(
+            ProcessSegment.detection_run_id == run.id,
+            ProcessSegment.is_unassigned.is_(True),
+        )
+    ).first()
+    assert unassigned is not None
+    assert unassigned.claim_count == 1
+
+    # The one claim sitting at the Unassigned segment should be claim 1.
+    members = db.scalars(
+        select(ClaimSegmentMembership).where(
+            ClaimSegmentMembership.segment_id == unassigned.id,
+        )
+    ).all()
+    assert len(members) == 1
+    assert members[0].claim_id == claims[1].id

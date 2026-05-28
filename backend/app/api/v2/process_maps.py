@@ -102,8 +102,24 @@ def generate_process_map(
     # 1. Load claims (optionally scoped to a detection segment or input ids)
     claim_query = select(Claim).where(Claim.project_id == project.id)
     if payload.segment_id is not None:
-        from app.models.process_detection import ClaimSegmentMembership
+        from app.enums import DetectionRunStatus
+        from app.models.process_detection import (
+            ClaimSegmentMembership,
+            DetectionRun,
+            ProcessSegment,
+        )
 
+        segment = db.get(ProcessSegment, payload.segment_id)
+        if segment is None or segment.project_id != project.id:
+            raise HTTPException(
+                status_code=404, detail="Detection segment not found"
+            )
+        run = db.get(DetectionRun, segment.detection_run_id)
+        if run is None or run.status != DetectionRunStatus.ACCEPTED.value:
+            raise HTTPException(
+                status_code=409,
+                detail="Segment belongs to a detection run that is not accepted.",
+            )
         claim_query = (
             claim_query.join(
                 ClaimSegmentMembership,

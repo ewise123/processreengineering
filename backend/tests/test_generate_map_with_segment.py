@@ -88,6 +88,13 @@ def test_generate_with_segment_id_uses_only_segment_claims(client, db):
             gateways=[],
         )
 
+    # Accept the run so the guard allows generation.
+    accept_resp = client.post(
+        f"/api/v2/projects/{proj.id}/detection-runs/{run['id']}/accept",
+        json={},
+    )
+    assert accept_resp.status_code == 200, accept_resp.text
+
     with patch(
         "app.api.v2.process_maps.generate_structure_from_claims",
         side_effect=fake_generate,
@@ -107,3 +114,50 @@ def test_generate_with_segment_id_uses_only_segment_claims(client, db):
     version_id = resp.json()["version_id"]
     v = db.get(ProcessVersion, version_id)
     assert str(v.source_segment_id) == ap_seg["id"]
+
+
+def test_generate_with_segment_id_404_when_segment_missing(client, db):
+    proj = _seed_project_with_two_claims(db)
+    bogus_id = "00000000-0000-0000-0000-000000000000"
+    resp = client.post(
+        f"/api/v2/projects/{proj.id}/generate-process-map",
+        json={
+            "name": "Whatever",
+            "level": "2",
+            "segment_id": bogus_id,
+        },
+    )
+    assert resp.status_code == 404
+
+
+def test_generate_with_segment_id_409_when_run_not_accepted(client, db):
+    proj = _seed_project_with_two_claims(db)
+    fake = DetectionResult(
+        segments=[
+            DetectedSegment("AP", "ap", [0], 0.9),
+            DetectedSegment("OB", "ob", [1], 0.7),
+        ],
+        unassigned_claim_refs=[],
+        reasoning_summary="",
+        model_used="claude-sonnet-4-6",
+        prompt_tokens=10, output_tokens=10,
+    )
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=fake,
+    ):
+        run = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    # Do NOT accept the run — leave it in draft state.
+    ap_seg = next(s for s in run["segments"] if s["name"] == "AP")
+
+    resp = client.post(
+        f"/api/v2/projects/{proj.id}/generate-process-map",
+        json={
+            "name": "AP map",
+            "level": "2",
+            "segment_id": ap_seg["id"],
+        },
+    )
+    assert resp.status_code == 409
