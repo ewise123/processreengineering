@@ -172,7 +172,7 @@ No frontend test runner exists today (scripts are only `dev`/`build`/`start`/`li
 
 - **Static:** `npm run lint` and `npx tsc --noEmit` must pass clean.
 - **Manual:** against the running stack (`./run-local.sh`), exercise each item: stale-count fix, centered zoom, drop-failure toast (simulate by killing the backend mid-drop), V/H/C + Esc, Pan vs Select drag behavior, marquee select, shift-click, group move, group delete, bulk-action bar (delete/copy/move-to-lane), copy/paste, duplicate, all three context menus, lane collapse/expand (including hidden nodes/edges and drop-target skipping), and undo/redo of each grouped op.
-- **Unit (proposed — confirm at spec review):** add a **minimal Vitest** dev-dependency to unit-test the pure `selection.ts` helpers (marquee normalization, bbox, intersection, select-all). These are the bug-prone, side-effect-free pieces and are worth TDD-ing. If you'd rather not add a test runner in this sub-project, we fall back to static + manual only and defer a test harness to a later pass.
+- **Unit (decided):** add a **minimal Vitest** dev-dependency (+ a `test` script) and unit-test the pure `selection.ts` helpers (marquee normalization, bbox, intersection, select-all) test-first. These are the bug-prone, side-effect-free pieces. No jsdom needed — the helpers are pure functions. Interaction/React/DOM code stays verified via lint + `tsc` + manual.
 
 ## Risks
 
