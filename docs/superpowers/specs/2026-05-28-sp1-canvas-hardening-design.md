@@ -42,7 +42,7 @@ The other sub-projects (SP-2 node/lane editing, SP-3 stakeholder review, SP-4 ve
 - Paste places copies offset **+24 world px** in x and y, in the same lane (fallback to first lane if the original lane was deleted).
 - Collapsed lane display height = **28 px**.
 - Zoom step = **×1.2 / ÷1.2**, anchored to the **viewport center**, clamped to a shared **`MIN_SCALE = 0.2`, `MAX_SCALE = 2.5`**.
-- Each bulk operation (group move, group delete, paste) records a **single grouped undo entry**.
+- Group **move** and **paste** each record a **single grouped undo entry**. Group **delete** follows today's per-item semantics (node-delete non-undoable, standalone edge-delete individually undoable).
 
 ## Architecture
 
@@ -101,7 +101,7 @@ Update the SVG cursor logic (`:1133-1138`) to reflect `pan` (`grab`/`grabbing`) 
 
 **Group move:** if the node grabbed in `onNodeMouseDown` is already in `selectedIds` and `|selection| > 1`, the drag moves **all** selected nodes by the same world delta; each node's lane is recomputed from its own center (reusing `laneAtY`); positions persist via `markNode` for each; one grouped undo entry (`Move N nodes`) restores all original positions. If the grabbed node is **not** selected, behave as today: select only it, then move it.
 
-**Group delete:** `Delete`/`Backspace` removes every selected node (and its edges) plus every selected edge, as one grouped undo entry (`Delete N items`). Implemented with low-level multi-item mutators recorded in a single `record({do, undo})` (the undo stack supports this directly; actions must not call `record` themselves).
+**Group delete:** `Delete`/`Backspace` removes every selected node (and its touching edges) plus every selected standalone edge, batching today's existing per-item semantics. **Node deletion stays non-undoable** (as it is today — `deleteNodeImpl` records no undo, deliberately, because recreating a node would lose its claim-provenance links). Standalone edge deletions remain individually undoable via `deleteEdgeImpl` (as today). Group move and paste *are* grouped-undo (they lose no provenance); group delete is not.
 
 **Selection contract to the page** changes from the current single-object form to a union:
 
@@ -153,7 +153,8 @@ The `V`/`H`/`C` tooltips (`floating-toolbar.tsx:66,75,84`) become accurate once 
 - `BpmnCanvasHandle`: add `deleteSelection()`, `copySelection()`, `moveSelectionToLane(laneId)`; `selectNode` now sets a single-element selection.
 - `FloatingToolbar` props: add `onZoomIn` / `onZoomOut`; the inline scale math is removed. (`reviewMode`/`onReviewModeChange` unchanged.)
 - `LaneRail` props: add `collapsedLaneIds: Set<string>` and `onToggleCollapse(laneId)`.
-- No `src/lib/types.ts` backend-type changes; no `api.ts` changes.
+- `CanvasNode` (`src/components/canvas/types.ts`): add `type: string` (backend `NodeType`), populated in `buildCanvasState` (`layout.ts`) and at every node-construction site (palette drop, paste).
+- No `src/lib/types.ts` backend-type changes; no `api.ts` changes; no backend changes.
 
 ## Edge cases
 
@@ -163,7 +164,8 @@ The `V`/`H`/`C` tooltips (`floating-toolbar.tsx:66,75,84`) become accurate once 
 - Delete that removes a node whose edge is also individually selected — dedupe so the edge isn't deleted twice.
 - Context menu opened while a marquee/drag is mid-flight — opening a menu cancels any active drag.
 - Collapsing the lane that contains the only selected node — selection persists in state but the node is hidden; expanding reveals it (no auto-deselect).
-- Undo/redo of grouped ops restores the full group atomically (single stack entry).
+- Undo/redo of group **move** and **paste** restores the full group atomically (single stack entry). Group **delete** is not a single undo entry: pasted-node deletes are non-undoable like any node delete; standalone edge deletes undo individually.
+- `CanvasNode` gains a `type: string` (backend `NodeType`) field, populated in `buildCanvasState` and at node creation, so copy/paste recreates the exact backend type (gateways especially, which are lossy through `kind`).
 - `Esc` while editing an edge label must not also clear selection (the inline editor already `stopPropagation`s; keep that intact).
 
 ## Verification & testing
