@@ -143,3 +143,38 @@ def test_detect_processes_422_when_zero_segments(client, db):
         )
     assert resp.status_code == 422
     assert db.query(DetectionRun).count() == 0
+
+
+def test_get_detection_run_returns_full_detail(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+
+    resp = client.get(
+        f"/api/v2/projects/{proj.id}/detection-runs/{created['id']}"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == created["id"]
+    assert len(body["segments"]) == 2
+
+
+def test_list_detection_runs(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        client.post(f"/api/v2/projects/{proj.id}/detect-processes", json={})
+
+    resp = client.get(f"/api/v2/projects/{proj.id}/detection-runs")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    assert rows[0]["segment_count"] == 2
+    assert rows[0]["status"] == "draft"

@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.v2.deps import get_current_user, get_project_or_404
@@ -117,3 +117,60 @@ def detect_processes(
         raise HTTPException(status_code=503, detail=msg)
 
     return _run_detail(db, run)
+
+
+def _get_run_in_project(
+    db: Session, project_id: UUID, run_id: UUID
+) -> DetectionRun:
+    run = db.get(DetectionRun, run_id)
+    if run is None or run.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Detection run not found")
+    return run
+
+
+@router.get(
+    "/detection-runs/{run_id}",
+    response_model=DetectionRunDetail,
+)
+def get_detection_run(
+    run_id: UUID,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DetectionRunDetail:
+    run = _get_run_in_project(db, project.id, run_id)
+    return _run_detail(db, run)
+
+
+@router.get(
+    "/detection-runs",
+    response_model=list[DetectionRunListRow],
+)
+def list_detection_runs(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[DetectionRunListRow]:
+    rows = db.execute(
+        select(
+            DetectionRun.id,
+            DetectionRun.status,
+            DetectionRun.claim_count_at_run,
+            DetectionRun.created_at,
+            func.count(ProcessSegment.id).filter(
+                ProcessSegment.is_unassigned.is_(False)
+            ).label("segment_count"),
+        )
+        .outerjoin(ProcessSegment, ProcessSegment.detection_run_id == DetectionRun.id)
+        .where(DetectionRun.project_id == project.id)
+        .group_by(DetectionRun.id)
+        .order_by(DetectionRun.created_at.desc())
+    ).all()
+    return [
+        DetectionRunListRow(
+            id=r[0],
+            status=r[1],
+            claim_count_at_run=r[2],
+            segment_count=int(r[4] or 0),
+            created_at=r[3],
+        )
+        for r in rows
+    ]
