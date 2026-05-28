@@ -303,3 +303,88 @@ def test_run_detection_routes_unassigned_claim_refs_to_unassigned_segment(db):
     ).all()
     assert len(members) == 1
     assert members[0].claim_id == claims[1].id
+
+
+def test_run_detection_dedups_claims_across_overlapping_segments(db):
+    """If the model assigns the same claim to multiple segments (violating its
+    own prompt), the first segment to reference it wins. Subsequent segments
+    drop the duplicate so the (claim_id, run_id) unique constraint holds and
+    claim_count reflects the deduped total."""
+    org = Organization(name="t"); db.add(org); db.flush()
+    user = User(email="dev@local", name="dev", org_id=org.id)
+    db.add(user); db.flush()
+    proj = Project(name="p", org_id=org.id, status="active")
+    db.add(proj); db.flush()
+    inp = Input(
+        project_id=proj.id, type="interview_transcript",
+        name="i.txt", file_path="i.txt", file_size=10,
+        mime_type="text/plain", status="parsed", uploaded_by=user.id,
+    )
+    db.add(inp); db.flush()
+    sec = DocumentSection(input_id=inp.id, kind="page", order_index=0, ref={}, text="x")
+    db.add(sec); db.flush()
+    chunks = [
+        Chunk(section_id=sec.id, char_start=i * 10, char_end=(i + 1) * 10, text=f"c{i}", tokens=1)
+        for i in range(3)
+    ]
+    db.add_all(chunks); db.flush()
+    claims = [
+        Claim(project_id=proj.id, kind="task", subject=f"claim {i}", normalized={}, confidence=0.9)
+        for i in range(3)
+    ]
+    db.add_all(claims); db.flush()
+    db.add_all([
+        ClaimCitation(claim_id=claims[i].id, chunk_id=chunks[i].id, quote=f"q{i}", confidence=0.9)
+        for i in range(3)
+    ])
+    db.commit()
+
+    # Model misbehavior: claim 0 appears in both segments; claim 1 listed twice
+    # in segment B; claim 2 unassigned.
+    fake = DetectionResult(
+        segments=[
+            DetectedSegment("Process A", "a", [0], 0.9),
+            DetectedSegment("Process B", "b", [0, 1, 1], 0.7),
+        ],
+        unassigned_claim_refs=[2],
+        reasoning_summary="overlap",
+        model_used="claude-sonnet-4-6",
+        prompt_tokens=10,
+        output_tokens=10,
+    )
+    with _patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=fake,
+    ):
+        run = run_detection(db=db, project_id=proj.id, scope_input_ids=None)
+
+    segs = db.scalars(
+        select(ProcessSegment)
+        .where(ProcessSegment.detection_run_id == run.id, ProcessSegment.is_unassigned.is_(False))
+        .order_by(ProcessSegment.order_index)
+    ).all()
+    assert len(segs) == 2
+    assert segs[0].name == "Process A"
+    assert segs[0].claim_count == 1  # owns claim 0
+    assert segs[1].name == "Process B"
+    assert segs[1].claim_count == 1  # owns claim 1 once; claim 0 stolen by A
+
+    members = db.scalars(
+        select(ClaimSegmentMembership).where(
+            ClaimSegmentMembership.detection_run_id == run.id,
+        )
+    ).all()
+    # Exactly 3 memberships: one per claim. Unique constraint upheld.
+    assert len(members) == 3
+    by_claim = {m.claim_id: m.segment_id for m in members}
+    assert by_claim[claims[0].id] == segs[0].id
+    assert by_claim[claims[1].id] == segs[1].id
+    # claim 2 belongs to Unassigned
+    unassigned = db.scalars(
+        select(ProcessSegment).where(
+            ProcessSegment.detection_run_id == run.id,
+            ProcessSegment.is_unassigned.is_(True),
+        )
+    ).first()
+    assert by_claim[claims[2].id] == unassigned.id
+    assert unassigned.claim_count == 1

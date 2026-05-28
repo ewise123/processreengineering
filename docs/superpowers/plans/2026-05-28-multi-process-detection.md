@@ -580,7 +580,7 @@ import anthropic
 
 DETECTION_MODEL = os.getenv("PROCESS_DETECTION_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS = 6000
-MAX_CLAIMS_INPUT = 600
+MAX_CLAIMS_INPUT = 1200
 
 SEGMENT_TOOL = {
     "name": "record_process_segments",
@@ -677,7 +677,7 @@ def _get_client() -> anthropic.Anthropic:
 cd backend && python -c "from app.services.process_detection import SYSTEM_PROMPT, SEGMENT_TOOL, MAX_CLAIMS_INPUT; print(MAX_CLAIMS_INPUT, len(SYSTEM_PROMPT))"
 ```
 
-Expected: `600 <some-number>`.
+Expected: `1200 <some-number>`.
 
 - [ ] **Step 3: Commit**
 

@@ -24,7 +24,7 @@ from app.models.process_detection import (
 
 DETECTION_MODEL = os.getenv("PROCESS_DETECTION_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS = 6000
-MAX_CLAIMS_INPUT = 600
+MAX_CLAIMS_INPUT = 1200
 
 SEGMENT_TOOL = {
     "name": "record_process_segments",
@@ -353,9 +353,22 @@ def run_detection(
     # Build claim index → Claim object map for membership writes.
     by_index: dict[int, Claim] = dict(enumerate(claims))
 
+    # The (claim_id, detection_run_id) unique constraint requires each claim
+    # to land in exactly one segment per run. The system prompt tells the
+    # model the same thing, but it occasionally double-assigns — first
+    # segment to reference a claim wins; later references are dropped.
     segments: list[ProcessSegment] = []
+    assigned: set = set()
     for idx, det in enumerate(result.segments):
-        seg_claim_ids = [by_index[i].id for i in det.claim_refs if i in by_index]
+        seg_claim_ids: list = []
+        for i in det.claim_refs:
+            if i not in by_index:
+                continue
+            cid = by_index[i].id
+            if cid in assigned:
+                continue
+            seg_claim_ids.append(cid)
+            assigned.add(cid)
         inherited = inherited_name_for_segment(seg_claim_ids, old_accepted)
         seg = ProcessSegment(
             detection_run_id=run.id,
@@ -380,12 +393,7 @@ def run_detection(
                 )
             )
 
-    # Unassigned memberships
-    assigned = set()
-    for det in result.segments:
-        for i in det.claim_refs:
-            if i in by_index:
-                assigned.add(by_index[i].id)
+    # Unassigned memberships — any claim not claimed above.
     for c in claims:
         if c.id not in assigned:
             db.add(

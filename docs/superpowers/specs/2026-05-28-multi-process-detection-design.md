@@ -200,9 +200,9 @@ Additional rule on naming when the model cannot ground a cluster: emit `name: "U
 
 ### Bounds
 
-- `MAX_CLAIMS_INPUT = 600` (vs. 400 in generation). Detection's output is bounded — a few segment definitions plus a reasoning summary — whereas generation emits a full BPMN structure, so detection can afford more input claims at the same context cost.
+- `MAX_CLAIMS_INPUT = 1200` (vs. 400 in generation). Detection's output is bounded — a few segment definitions plus a reasoning summary — whereas generation emits a full BPMN structure, so detection can afford more input claims at the same context cost. Raised from 600 on 2026-05-28 after a real project hit the cap at 875 claims.
 - `MAX_TOKENS = 6000`. Budget breakdown: per-segment description ≈ 70 tokens × up to 15 segments + reasoning summary 200 tokens + tool-use overhead + claim_refs lists. 6000 is comfortable with headroom.
-- If the project has more than 600 claims, the endpoint rejects with a structured error directing the user to scope by input id (`scope_input_ids` parameter mirrors `generate_process_map`).
+- If the project has more than 1200 claims, the endpoint rejects with a structured error directing the user to scope by input id (`scope_input_ids` parameter mirrors `generate_process_map`).
 - Model errors → 503; no row is created (the run is created in the same transaction as the segment writes).
 - If the model returns zero segments (everything went to `unassigned_claim_refs`), the endpoint returns `422` with a structured error: "The model could not identify any distinct processes in the supplied claims. This usually means the claims are too sparse or describe a single homogeneous activity. Try adding more documents, or skip detection and use the existing Generate dialog directly." No run is persisted in this case.
 
@@ -229,7 +229,7 @@ body: { scope_input_ids?: UUID[] }
 Blocking. Returns the freshly created run with all segments and memberships expanded so the review screen renders from one payload, no second fetch. Errors:
 
 - `422` if the project has zero claims (existing extract-claims-first message).
-- `422` if claim count > 600 (suggests `scope_input_ids`).
+- `422` if claim count > 1200 (suggests `scope_input_ids`).
 - `503` if Anthropic returns an error (transaction rolls back; no row created).
 - `409` if there is already a `draft` run for the project — the response includes the existing run's id so the UI can route the user back to "Resume draft" instead of starting fresh.
 
