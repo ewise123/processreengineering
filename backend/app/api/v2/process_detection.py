@@ -174,3 +174,46 @@ def list_detection_runs(
         )
         for r in rows
     ]
+
+
+def _get_draft_segment(
+    db: Session, project_id: UUID, segment_id: UUID
+) -> ProcessSegment:
+    """Load a segment, enforce project scoping, draft-only mutation, and
+    reject mutations on the Unassigned segment."""
+    seg = db.get(ProcessSegment, segment_id)
+    if seg is None or seg.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    run = db.get(DetectionRun, seg.detection_run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    if run.status != DetectionRunStatus.DRAFT.value:
+        raise HTTPException(
+            status_code=409, detail="Segment's run is not a draft."
+        )
+    if seg.is_unassigned:
+        raise HTTPException(
+            status_code=409,
+            detail="The Unassigned segment cannot be renamed, deleted, or merged.",
+        )
+    return seg
+
+
+@router.patch(
+    "/segments/{segment_id}",
+    response_model=ProcessSegmentRead,
+)
+def update_segment(
+    segment_id: UUID,
+    payload: SegmentUpdate,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessSegmentRead:
+    seg = _get_draft_segment(db, project.id, segment_id)
+    if payload.name is not None:
+        seg.name = payload.name.strip()
+    if payload.description is not None:
+        seg.description = payload.description
+    db.commit()
+    db.refresh(seg)
+    return _segment_to_read(db, seg)

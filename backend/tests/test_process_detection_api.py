@@ -178,3 +178,64 @@ def test_list_detection_runs(client, db):
     assert len(rows) == 1
     assert rows[0]["segment_count"] == 2
     assert rows[0]["status"] == "draft"
+
+
+def test_patch_segment_renames(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    seg_id = created["segments"][0]["id"]
+
+    resp = client.patch(
+        f"/api/v2/projects/{proj.id}/segments/{seg_id}",
+        json={"name": "Accounts Payable", "description": "AP flow."},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "Accounts Payable"
+    assert body["description"] == "AP flow."
+
+
+def test_patch_segment_409_on_non_draft_run(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    # Manually flip run to accepted via the model layer to simulate immutability.
+    from app.models.process_detection import DetectionRun as _DR
+    run = db.get(_DR, created["id"])
+    run.status = "accepted"
+    db.commit()
+
+    seg_id = created["segments"][0]["id"]
+    resp = client.patch(
+        f"/api/v2/projects/{proj.id}/segments/{seg_id}",
+        json={"name": "New name"},
+    )
+    assert resp.status_code == 409
+
+
+def test_patch_unassigned_segment_409(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    un_id = created["unassigned_segment"]["id"]
+    resp = client.patch(
+        f"/api/v2/projects/{proj.id}/segments/{un_id}",
+        json={"name": "Renamed unassigned"},
+    )
+    assert resp.status_code == 409
