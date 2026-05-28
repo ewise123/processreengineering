@@ -119,6 +119,12 @@ function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
   return lanes.find((l) => y >= l.y && y < l.y + l.h);
 }
 
+export type CanvasSelection =
+  | { kind: "none" }
+  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; laneId?: UUID | null }
+  | { kind: "edge"; id: UUID }
+  | { kind: "multi"; nodeIds: UUID[]; edgeIds: UUID[] };
+
 export interface BpmnCanvasHandle {
   /** Calls the API + removes the node (and any edges touching it) from
    * local state without re-fetching the whole graph. */
@@ -143,17 +149,7 @@ interface BpmnCanvasProps {
   initialLanes: CanvasLane[];
   issuesByNode?: Record<string, IssueSeverity>;
   onSaveStatusChange?: (status: SaveStatus, error: string | null) => void;
-  onSelectionChange?: (
-    selected:
-      | {
-          id: string;
-          kind: "node" | "edge";
-          name?: string;
-          nodeKind?: string;
-          laneId?: string | null;
-        }
-      | null
-  ) => void;
+  onSelectionChange?: (selected: CanvasSelection) => void;
   /** Fires after a node is removed (via panel Delete or keyboard). The page
    * uses this to invalidate dependent queries like issue badges. */
   onNodeDeleted?: (id: UUID) => void;
@@ -183,7 +179,7 @@ function BpmnCanvas({
     ty: 60,
     scale: 1,
   });
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [drag, setDrag] = useState<Drag | null>(null);
   const [tool, setTool] = useState<CanvasTool>("select");
   const [showIssues, setShowIssues] = useState(true);
@@ -195,15 +191,41 @@ function BpmnCanvas({
 
   const { record, undo, redo, canUndo, canRedo } = useUndoStack();
 
+  const selectOnly = useCallback((id: string) => setSelectedIds(new Set([id])), []);
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+  const toggleSelection = useCallback((id: string) => {
+    setSelectedIds((curr) => {
+      const next = new Set(curr);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const setSelection = useCallback((ids: string[], additive: boolean) => {
+    setSelectedIds((curr) => {
+      const next = additive ? new Set(curr) : new Set<string>();
+      for (const id of ids) next.add(id);
+      return next;
+    });
+  }, []);
+  const deselect = useCallback((id: string) => {
+    setSelectedIds((curr) => {
+      if (!curr.has(id)) return curr;
+      const next = new Set(curr);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
   const deleteNodeImpl = useCallback(
     async (id: UUID) => {
       await api.deleteNode(projectId, id);
       setNodes((curr) => curr.filter((n) => n.id !== id));
       setEdges((curr) => curr.filter((e) => e.from !== id && e.to !== id));
-      setSelectedId((curr) => (curr === id ? null : curr));
+      deselect(id);
       onNodeDeleted?.(id);
     },
-    [projectId, onNodeDeleted]
+    [projectId, onNodeDeleted, deselect]
   );
 
   const applyNodeEditLocal = useCallback(
@@ -279,7 +301,7 @@ function BpmnCanvas({
       let currentId = id;
       const remove = (rid: UUID) => {
         setEdges((curr) => curr.filter((e2) => e2.id !== rid));
-        setSelectedId((curr) => (curr === rid ? null : curr));
+        deselect(rid);
       };
       const recreate = async () => {
         const created = await api.createEdge(projectId, modelId, versionId, {
@@ -309,8 +331,25 @@ function BpmnCanvas({
         undo: recreate,
       });
     },
-    [projectId, modelId, versionId, record]
+    [projectId, modelId, versionId, record, deselect]
   );
+
+  const deleteSelectionImpl = useCallback(async () => {
+    const ids = [...selectedIdsRef.current];
+    if (ids.length === 0) return;
+    const nodeIds = ids.filter((id) => nodesRef.current.some((n) => n.id === id));
+    const edgeIds = ids.filter((id) => edgesRef.current.some((e) => e.id === id));
+    // Nodes first: deleteNodeImpl also strips their touching edges locally.
+    for (const id of nodeIds) {
+      await deleteNodeImpl(id);
+    }
+    // Then any still-present standalone edges (skip ones a node delete removed).
+    for (const id of edgeIds) {
+      if (edgesRef.current.some((e) => e.id === id)) {
+        await deleteEdgeImpl(id);
+      }
+    }
+  }, [deleteNodeImpl, deleteEdgeImpl]);
 
   const updateEdgeLabelLocal = useCallback(
     async (id: UUID, label: string | null) => {
@@ -368,11 +407,11 @@ function BpmnCanvas({
         undo: async () => {
           await api.deleteEdge(projectId, currentId);
           setEdges((curr) => curr.filter((e) => e.id !== currentId));
-          setSelectedId((curr) => (curr === currentId ? null : curr));
+          deselect(currentId);
         },
       });
     },
-    [projectId, modelId, versionId, record]
+    [projectId, modelId, versionId, record, deselect]
   );
 
   // Recenter the viewport on a node so it's actually visible after a remote
@@ -402,7 +441,7 @@ function BpmnCanvas({
       deleteNode: deleteNodeImpl,
       updateNode: updateNodeImpl,
       selectNode: (id) => {
-        setSelectedId(id);
+        setSelectedIds(new Set([id]));
         focusNodeInViewport(id);
       },
     }),
@@ -439,19 +478,14 @@ function BpmnCanvas({
       }
 
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (!selectedId) return;
-        if (nodesRef.current.some((n) => n.id === selectedId)) {
-          e.preventDefault();
-          void deleteNodeImpl(selectedId);
-        } else if (edgesRef.current.some((edge) => edge.id === selectedId)) {
-          e.preventDefault();
-          void deleteEdgeImpl(selectedId);
-        }
+        if (selectedIdsRef.current.size === 0) return;
+        e.preventDefault();
+        void deleteSelectionImpl();
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [selectedId, deleteNodeImpl, deleteEdgeImpl, undo, redo]);
+  }, [deleteSelectionImpl, undo, redo]);
 
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
@@ -461,6 +495,8 @@ function BpmnCanvas({
   lanesRef.current = lanes;
   const edgesRef = useRef(edges);
   edgesRef.current = edges;
+  const selectedIdsRef = useRef(selectedIds);
+  selectedIdsRef.current = selectedIds;
 
   const { status, error, markNode, markLane, flush } = useGraphPersistence({
     projectId,
@@ -474,23 +510,31 @@ function BpmnCanvas({
   // Notify parent of selection so it can drive side panels.
   useEffect(() => {
     if (!onSelectionChange) return;
-    if (selectedId == null) {
-      onSelectionChange(null);
+    const ids = [...selectedIds];
+    if (ids.length === 0) {
+      onSelectionChange({ kind: "none" });
       return;
     }
-    const node = nodesRef.current.find((n) => n.id === selectedId);
-    if (node) {
-      onSelectionChange({
-        id: selectedId,
-        kind: "node",
-        name: node.label,
-        nodeKind: node.kind,
-        laneId: node.laneId,
-      });
+    if (ids.length === 1) {
+      const id = ids[0];
+      const node = nodesRef.current.find((n) => n.id === id);
+      if (node) {
+        onSelectionChange({
+          kind: "node",
+          id,
+          name: node.label,
+          nodeKind: node.kind,
+          laneId: node.laneId,
+        });
+      } else {
+        onSelectionChange({ kind: "edge", id });
+      }
       return;
     }
-    onSelectionChange({ id: selectedId, kind: "edge" });
-  }, [selectedId, onSelectionChange]);
+    const nodeIds = ids.filter((id) => nodesRef.current.some((n) => n.id === id));
+    const edgeIds = ids.filter((id) => edgesRef.current.some((e) => e.id === id));
+    onSelectionChange({ kind: "multi", nodeIds, edgeIds });
+  }, [selectedIds, onSelectionChange]);
 
   useEffect(() => {
     onCountsChange?.({
@@ -563,7 +607,7 @@ function BpmnCanvas({
 
   const onNodeMouseDown = (e: MouseEvent, id: string) => {
     e.stopPropagation();
-    setSelectedId(id);
+    selectOnly(id);
     const resolved = renderNodes.find((n) => n.id === id);
     const stored = nodesRef.current.find((n) => n.id === id);
     if (!resolved || !stored) return;
@@ -643,11 +687,11 @@ function BpmnCanvas({
   const onStartConnect = useCallback(
     (e: MouseEvent, sourceId: UUID, side: ConnectSide) => {
       e.stopPropagation();
-      setSelectedId(sourceId);
+      selectOnly(sourceId);
       const { x, y } = toWorld(e.clientX, e.clientY);
       setDrag({ type: "connect", sourceId, sourceSide: side, currX: x, currY: y });
     },
-    [toWorld]
+    [toWorld, selectOnly]
   );
 
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
@@ -852,7 +896,7 @@ function BpmnCanvas({
         const dx = e.clientX - drag.startX;
         const dy = e.clientY - drag.startY;
         if (dx * dx + dy * dy < 16) {
-          setSelectedId(null);
+          clearSelection();
         }
       }
       setDrag(null);
@@ -864,7 +908,7 @@ function BpmnCanvas({
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
-  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal]);
+  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal, clearSelection]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
   const onCanvasDragOver = (e: ReactDragEvent<SVGSVGElement>) => {
@@ -911,7 +955,7 @@ function BpmnCanvas({
         h: shape.h,
       };
       setNodes((curr) => [...curr, newNode]);
-      setSelectedId(newNode.id);
+      selectOnly(newNode.id);
     } catch (err) {
       console.error("Failed to create node from palette", err);
       toast.error("Couldn't add that shape — please try again.");
@@ -1248,10 +1292,10 @@ function BpmnCanvas({
               key={edge.id}
               edge={edge}
               nodes={renderNodes}
-              selected={selectedId === edge.id}
-              onClick={(id) => setSelectedId(id)}
+              selected={selectedIds.has(edge.id)}
+              onClick={(id) => selectOnly(id)}
               onDoubleClick={(id) => {
-                setSelectedId(id);
+                selectOnly(id);
                 setEditingEdgeId(id);
               }}
               onStartBendDrag={onStartBendDrag}
@@ -1261,7 +1305,7 @@ function BpmnCanvas({
             <NodeShape
               key={node.id}
               node={node}
-              selected={selectedId === node.id}
+              selected={selectedIds.has(node.id)}
               issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
               showHandles={tool === "connect"}
               onMouseDown={onNodeMouseDown}
