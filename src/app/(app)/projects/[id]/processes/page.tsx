@@ -44,7 +44,7 @@ export default function ProcessesPage() {
   });
 
   const accept = useMutation({
-    mutationFn: () => api.acceptDetectionRun(projectId, current!.id),
+    mutationFn: (runId: string) => api.acceptDetectionRun(projectId, runId),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["detection-runs", projectId] });
       qc.invalidateQueries({ queryKey: ["maps", projectId] });
@@ -137,7 +137,7 @@ export default function ProcessesPage() {
               <Button
                 variant="default"
                 disabled={accept.isPending}
-                onClick={() => accept.mutate()}
+                onClick={() => accept.mutate(current!.id)}
               >
                 {accept.isPending ? "Accepting…" : "Accept & continue"}
               </Button>
