@@ -362,3 +362,93 @@ def test_move_claim_to_unassigned_is_allowed(client, db):
         json={"claim_id": moving},
     )
     assert resp.status_code == 200
+
+
+def test_accept_run_supersedes_prior_accepted_run(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        first = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    # Name both regular segments so accept passes validation.
+    for i, seg in enumerate(first["segments"]):
+        client.patch(
+            f"/api/v2/projects/{proj.id}/segments/{seg['id']}",
+            json={"name": f"Process-{i}"},
+        )
+
+    resp = client.post(
+        f"/api/v2/projects/{proj.id}/detection-runs/{first['id']}/accept"
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["accepted_segment_count"] == 2
+
+    # Re-detect.
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        second = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    for i, seg in enumerate(second["segments"]):
+        client.patch(
+            f"/api/v2/projects/{proj.id}/segments/{seg['id']}",
+            json={"name": f"Round2-{i}"},
+        )
+    resp2 = client.post(
+        f"/api/v2/projects/{proj.id}/detection-runs/{second['id']}/accept"
+    )
+    assert resp2.status_code == 200
+
+    # Original run should now be superseded.
+    detail = client.get(
+        f"/api/v2/projects/{proj.id}/detection-runs/{first['id']}"
+    ).json()
+    assert detail["status"] == "superseded"
+
+
+def test_accept_run_422_when_a_regular_segment_is_unnamed(client, db):
+    proj = _seed_project_with_two_claims(db)
+    fake = DetectionResult(
+        segments=[DetectedSegment("", "", [0, 1], 0.5)],  # blank name
+        unassigned_claim_refs=[],
+        reasoning_summary="",
+        model_used="claude-sonnet-4-6",
+        prompt_tokens=10,
+        output_tokens=10,
+    )
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=fake,
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    resp = client.post(
+        f"/api/v2/projects/{proj.id}/detection-runs/{created['id']}/accept"
+    )
+    assert resp.status_code == 422
+
+
+def test_accept_run_422_on_duplicate_names(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    for seg in created["segments"]:
+        client.patch(
+            f"/api/v2/projects/{proj.id}/segments/{seg['id']}",
+            json={"name": "Same name"},
+        )
+    resp = client.post(
+        f"/api/v2/projects/{proj.id}/detection-runs/{created['id']}/accept"
+    )
+    assert resp.status_code == 422

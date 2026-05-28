@@ -363,3 +363,68 @@ def move_claim_to_segment(
     db.commit()
     db.refresh(target)
     return _segment_to_read(db, target)
+
+
+@router.post(
+    "/detection-runs/{run_id}/accept",
+    response_model=AcceptDetectionRunResult,
+)
+def accept_detection_run(
+    run_id: UUID,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AcceptDetectionRunResult:
+    run = _get_run_in_project(db, project.id, run_id)
+    if run.status != DetectionRunStatus.DRAFT.value:
+        raise HTTPException(
+            status_code=409, detail="Only draft runs can be accepted."
+        )
+
+    segs = list(
+        db.scalars(
+            select(ProcessSegment).where(
+                ProcessSegment.detection_run_id == run.id,
+                ProcessSegment.is_unassigned.is_(False),
+            )
+        ).all()
+    )
+    bad_ids = [str(s.id) for s in segs if not (s.name and s.name.strip())]
+    if bad_ids:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Every regular segment must have a non-blank name.",
+                "segment_ids": bad_ids,
+            },
+        )
+    seen: dict[str, list[str]] = {}
+    for s in segs:
+        seen.setdefault(s.name.strip().casefold(), []).append(str(s.id))
+    dup = {k: v for k, v in seen.items() if len(v) > 1}
+    if dup:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Segment names must be unique (case-insensitive).",
+                "duplicates": dup,
+            },
+        )
+
+    # Supersede any prior accepted run for the same project.
+    prior = list(
+        db.scalars(
+            select(DetectionRun).where(
+                DetectionRun.project_id == project.id,
+                DetectionRun.status == DetectionRunStatus.ACCEPTED.value,
+                DetectionRun.id != run.id,
+            )
+        ).all()
+    )
+    for p in prior:
+        p.status = DetectionRunStatus.SUPERSEDED.value
+
+    run.status = DetectionRunStatus.ACCEPTED.value
+    db.commit()
+    return AcceptDetectionRunResult(
+        run_id=run.id, accepted_segment_count=len(segs)
+    )
