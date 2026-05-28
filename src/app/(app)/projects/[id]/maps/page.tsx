@@ -56,7 +56,7 @@ export default function MapsPage() {
           <CardHeader>
             <CardTitle>No maps yet</CardTitle>
             <CardDescription>
-              Find the processes in your documents — open the Documents tab and
+              Find the processes in your documents — open the Processes tab and
               click Detect processes. You can also generate a single map
               directly with the button above.
             </CardDescription>
