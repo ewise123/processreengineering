@@ -17,6 +17,16 @@ export function DetectProcessesButton({ projectId }: { projectId: UUID }) {
     queryFn: () => api.listDetectionRuns(projectId),
   });
 
+  // Sum claim counts across all inputs to know whether detection is meaningful.
+  const inputsQuery = useQuery({
+    queryKey: ["inputs", projectId, "page", 0],
+    queryFn: () => api.listInputs(projectId, { limit: 100, offset: 0 }),
+  });
+  const totalClaims =
+    inputsQuery.data?.items.reduce((sum, i) => sum + (i.claim_count || 0), 0) ??
+    0;
+  const hasClaims = totalClaims > 0;
+
   const draft = runsQuery.data?.find((r) => r.status === "draft");
   const accepted = runsQuery.data?.find((r) => r.status === "accepted");
 
@@ -42,12 +52,21 @@ export function DetectProcessesButton({ projectId }: { projectId: UUID }) {
   else if (draft) label = `Resume draft (${draft.segment_count} segments)`;
   else if (accepted) label = "Re-detect processes";
 
+  // Always allow routing back to an existing draft, even on an "empty"
+  // project. Only block fresh detection runs when there are no claims.
+  const disabled = detect.isPending || (!hasClaims && !draft);
+  const tooltip =
+    !hasClaims && !draft
+      ? "Extract claims from at least one document before detecting processes."
+      : undefined;
+
   return (
     <div className="flex items-center gap-2">
       <Button
         variant="secondary"
         onClick={onClick}
-        disabled={detect.isPending}
+        disabled={disabled}
+        title={tooltip}
       >
         {label}
       </Button>
