@@ -66,6 +66,11 @@ export default function CanvasPage() {
   // Properties panel collapse state lifted so the page can resize the
   // wrapper to a small button when collapsed.
   const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
+  const [counts, setCounts] = useState<{ lanes: number; nodes: number; edges: number } | null>(null);
+  const handleCountsChange = useCallback(
+    (c: { lanes: number; nodes: number; edges: number }) => setCounts(c),
+    []
+  );
   const canvasRef = useRef<BpmnCanvasHandle>(null);
   const queryClient = useQueryClient();
 
@@ -194,11 +199,11 @@ export default function CanvasPage() {
                 fontSize: 12,
               }}
             >
-              <span style={{ fontWeight: 600 }}>{data.lanes.length} lanes</span>
+              <span style={{ fontWeight: 600 }}>{counts?.lanes ?? data.lanes.length} lanes</span>
               <span style={{ color: "#94a3b8" }}>·</span>
-              <span style={{ fontWeight: 600 }}>{data.nodes.length} nodes</span>
+              <span style={{ fontWeight: 600 }}>{counts?.nodes ?? data.nodes.length} nodes</span>
               <span style={{ color: "#94a3b8" }}>·</span>
-              <span style={{ fontWeight: 600 }}>{data.edges.length} edges</span>
+              <span style={{ fontWeight: 600 }}>{counts?.edges ?? data.edges.length} edges</span>
               <span style={{ color: "#94a3b8" }}>·</span>
               <Badge variant="outline">v{data.version.version_number}</Badge>
               <Badge variant="secondary">{data.version.status}</Badge>
@@ -266,6 +271,7 @@ export default function CanvasPage() {
           onSaveStatusChange={handleSaveStatusChange}
           onSelectionChange={handleSelectionChange}
           onNodeDeleted={handleNodeDeleted}
+          onCountsChange={handleCountsChange}
         />
       )}
 

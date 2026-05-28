@@ -155,6 +155,7 @@ interface BpmnCanvasProps {
   /** Fires after a node is removed (via panel Delete or keyboard). The page
    * uses this to invalidate dependent queries like issue badges. */
   onNodeDeleted?: (id: UUID) => void;
+  onCountsChange?: (counts: { lanes: number; nodes: number; edges: number }) => void;
 }
 
 export const BpmnCanvas = forwardRef<BpmnCanvasHandle, BpmnCanvasProps>(
@@ -169,6 +170,7 @@ function BpmnCanvas({
   onSaveStatusChange,
   onSelectionChange,
   onNodeDeleted,
+  onCountsChange,
 }, ref) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState(initialNodes);
@@ -487,6 +489,14 @@ function BpmnCanvas({
     }
     onSelectionChange({ id: selectedId, kind: "edge" });
   }, [selectedId, onSelectionChange]);
+
+  useEffect(() => {
+    onCountsChange?.({
+      lanes: lanes.length,
+      nodes: nodes.length,
+      edges: edges.length,
+    });
+  }, [lanes.length, nodes.length, edges.length, onCountsChange]);
 
   const worldWidth = useMemo(() => {
     const maxX = nodes.reduce((m, n) => Math.max(m, n.x + n.w), 0);
