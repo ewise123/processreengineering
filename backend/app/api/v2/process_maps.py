@@ -99,9 +99,19 @@ def generate_process_map(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ProcessMapGenerateResult:
-    # 1. Load claims (optionally scoped to specific input ids via citations)
+    # 1. Load claims (optionally scoped to a detection segment or input ids)
     claim_query = select(Claim).where(Claim.project_id == project.id)
-    if payload.scope_input_ids:
+    if payload.segment_id is not None:
+        from app.models.process_detection import ClaimSegmentMembership
+
+        claim_query = (
+            claim_query.join(
+                ClaimSegmentMembership,
+                ClaimSegmentMembership.claim_id == Claim.id,
+            )
+            .where(ClaimSegmentMembership.segment_id == payload.segment_id)
+        )
+    elif payload.scope_input_ids:
         from app.models.claim import ClaimCitation
 
         claim_query = (
@@ -185,6 +195,7 @@ def generate_process_map(
         bpmn_xml=bpmn_xml,
         notes=f"Generated from {len(claims)} claim(s).",
         created_by=user.id,
+        source_segment_id=payload.segment_id,
     )
     db.add(version)
     db.flush()
