@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { UploadForm } from "@/components/upload-form";
+import { DetectProcessesButton } from "@/components/detect-processes-button";
 import { ExtractionProgressCell } from "@/components/extraction-progress-cell";
 import type { InputRow } from "@/lib/types";
 
@@ -80,7 +81,10 @@ export default function DocumentsPage() {
           Upload documents (interviews, SOPs, policies, …) to feed the claim
           extractor and process generator.
         </p>
-        <UploadForm projectId={id} />
+        <div className="flex items-center gap-2">
+          <DetectProcessesButton projectId={id} />
+          <UploadForm projectId={id} />
+        </div>
       </div>
 
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
