@@ -180,3 +180,10 @@ class JobStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+class DetectionRunStatus(StrEnum):
+    DRAFT = "draft"
+    ACCEPTED = "accepted"
+    ARCHIVED = "archived"
+    SUPERSEDED = "superseded"
