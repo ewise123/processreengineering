@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { MoveClaimPopover } from "@/components/detect/move-claim-popover";
+import { MergePopover } from "@/components/detect/merge-popover";
 import type { ProcessSegment, UUID } from "@/lib/types";
 
 const RENAME_DEBOUNCE_MS = 400;
@@ -79,6 +80,14 @@ export function SegmentCard({
           </Badge>
         )}
         <Badge variant="secondary">{segment.claim_count}</Badge>
+        {!disabled && (
+          <MergePopover
+            projectId={projectId}
+            runId={runId}
+            source={segment}
+            candidates={candidates}
+          />
+        )}
         <Button
           size="sm"
           variant="ghost"
