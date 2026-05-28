@@ -1123,6 +1123,7 @@ function BpmnCanvas({
         // create transaction, so no follow-up PATCH calls are needed.
       } catch (e) {
         console.error("Failed to add lane", e);
+        toast.error("Couldn't add the lane — please try again.");
       }
     },
     [projectId, modelId, versionId, flush]
@@ -1153,6 +1154,7 @@ function BpmnCanvas({
         // transaction, so no follow-up PATCH calls are needed.
       } catch (e) {
         console.error("Failed to delete lane", e);
+        toast.error("Couldn't delete the lane — please try again.");
       }
     },
     [projectId, flush]
