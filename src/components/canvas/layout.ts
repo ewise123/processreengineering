@@ -118,6 +118,7 @@ export function buildCanvasState(graph: ProcessGraph): {
         : fallbackLaneHeight / 2 - size.h / 2;
     return {
       id: n.id,
+      type: n.type,
       kind,
       label: n.name,
       laneId: n.lane_id,

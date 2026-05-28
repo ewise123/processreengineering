@@ -881,6 +881,7 @@ function BpmnCanvas({
       });
       const newNode: CanvasNode = {
         id: created.id,
+        type: shape.backendType,
         kind: shape.kind,
         label: created.name,
         laneId: targetLane.id,
