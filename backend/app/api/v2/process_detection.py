@@ -320,3 +320,46 @@ def delete_segment(
     unassigned.claim_count = unassigned.claim_count + moved
     db.delete(seg)
     db.commit()
+
+
+@router.post(
+    "/segments/{segment_id}/claims",
+    response_model=ProcessSegmentRead,
+)
+def move_claim_to_segment(
+    segment_id: UUID,
+    payload: SegmentMoveClaimRequest,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessSegmentRead:
+    target = db.get(ProcessSegment, segment_id)
+    if target is None or target.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    run = db.get(DetectionRun, target.detection_run_id)
+    if run is None or run.status != DetectionRunStatus.DRAFT.value:
+        raise HTTPException(
+            status_code=409, detail="Segment's run is not a draft."
+        )
+
+    membership = db.scalars(
+        select(ClaimSegmentMembership).where(
+            ClaimSegmentMembership.claim_id == payload.claim_id,
+            ClaimSegmentMembership.detection_run_id == run.id,
+        ).limit(1)
+    ).first()
+    if membership is None:
+        raise HTTPException(
+            status_code=422,
+            detail="That claim is not part of this detection run.",
+        )
+    if membership.segment_id == target.id:
+        return _segment_to_read(db, target)
+
+    old_segment = db.get(ProcessSegment, membership.segment_id)
+    if old_segment is not None:
+        old_segment.claim_count = max(0, old_segment.claim_count - 1)
+    membership.segment_id = target.id
+    target.claim_count = target.claim_count + 1
+    db.commit()
+    db.refresh(target)
+    return _segment_to_read(db, target)

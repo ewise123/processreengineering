@@ -315,3 +315,50 @@ def test_delete_segment_moves_claims_to_unassigned(client, db):
     ).json()
     assert len(detail["segments"]) == 1
     assert detail["unassigned_segment"]["claim_count"] == seg["claim_count"]
+
+
+def test_move_claim_between_segments(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    a = created["segments"][0]
+    b = created["segments"][1]
+    moving_claim_id = a["claims"][0]["id"]
+
+    resp = client.post(
+        f"/api/v2/projects/{proj.id}/segments/{b['id']}/claims",
+        json={"claim_id": moving_claim_id},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["claim_count"] == 2
+    detail = client.get(
+        f"/api/v2/projects/{proj.id}/detection-runs/{created['id']}"
+    ).json()
+    a_after = next(s for s in detail["segments"] if s["id"] == a["id"])
+    assert a_after["claim_count"] == 0
+
+
+def test_move_claim_to_unassigned_is_allowed(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    a = created["segments"][0]
+    un = created["unassigned_segment"]
+    moving = a["claims"][0]["id"]
+
+    resp = client.post(
+        f"/api/v2/projects/{proj.id}/segments/{un['id']}/claims",
+        json={"claim_id": moving},
+    )
+    assert resp.status_code == 200
