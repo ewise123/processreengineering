@@ -12,6 +12,8 @@ import {
   type MouseEvent,
 } from "react";
 
+import { toast } from "sonner";
+
 import { api } from "@/lib/api";
 import type { IssueSeverity, UUID } from "@/lib/types";
 
@@ -761,7 +763,10 @@ function BpmnCanvas({
                   ? { bend_x: finalValue }
                   : { bend_y: finalValue }
               )
-              .catch((err) => console.error("Failed to save edge bend", err));
+              .catch((err) => {
+                console.error("Failed to save edge bend", err);
+                toast.error("Couldn't save the connection shape.");
+              });
             const edgeId = drag.edgeId;
             const orientation = drag.orientation;
             const origBend = drag.origBend;
@@ -798,9 +803,10 @@ function BpmnCanvas({
             (e2) => e2.from === sourceId && e2.to === targetId
           );
           if (!exists) {
-            void createEdgeImpl(sourceId, targetId).catch((err) =>
-              console.error("Failed to create edge", err)
-            );
+            void createEdgeImpl(sourceId, targetId).catch((err) => {
+              console.error("Failed to create edge", err);
+              toast.error("Couldn't connect those steps — please try again.");
+            });
           }
         }
         setDrag(null);
@@ -908,6 +914,7 @@ function BpmnCanvas({
       setSelectedId(newNode.id);
     } catch (err) {
       console.error("Failed to create node from palette", err);
+      toast.error("Couldn't add that shape — please try again.");
     }
   };
 
