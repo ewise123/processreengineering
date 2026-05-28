@@ -42,8 +42,9 @@ def _prepare_test_database() -> Iterator[None]:
 
     env = os.environ.copy()
     env["DATABASE_URL"] = TEST_URL
+    alembic_bin = BACKEND_DIR / ".venv" / "bin" / "alembic"
     subprocess.run(
-        ["alembic", "upgrade", "head"],
+        [str(alembic_bin), "upgrade", "head"],
         cwd=BACKEND_DIR,
         env=env,
         check=True,

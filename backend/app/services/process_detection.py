@@ -101,3 +101,86 @@ def _get_client() -> anthropic.Anthropic:
             raise RuntimeError("ANTHROPIC_API_KEY is not set.")
         _client = anthropic.Anthropic(api_key=api_key)
     return _client
+
+
+def render_claim_lines(claims: list[dict]) -> str:
+    """Render the numbered three-column claim list the model sees."""
+    return "\n".join(
+        f"[{i}] {c.get('kind', '?')} | from chunk {c.get('chunk_ref', '?')} | {c.get('subject', '')}"
+        for i, c in enumerate(claims)
+    )
+
+
+def detect_segments_from_claims(claims: list[dict]) -> DetectionResult:
+    """Single Claude call. Each claim dict must carry kind, subject, chunk_ref.
+
+    The caller is responsible for building chunk_ref (typically `c{n}` where
+    n is the chunk's position within its document).
+    """
+    if not claims:
+        return DetectionResult(
+            segments=[],
+            unassigned_claim_refs=[],
+            reasoning_summary="",
+            model_used=DETECTION_MODEL,
+            prompt_tokens=None,
+            output_tokens=None,
+        )
+
+    if len(claims) > MAX_CLAIMS_INPUT:
+        claims = claims[:MAX_CLAIMS_INPUT]
+
+    user_message = f"Cluster these {len(claims)} claims into business processes.\n\nClaims:\n{render_claim_lines(claims)}"
+
+    client = _get_client()
+    response = client.messages.create(
+        model=DETECTION_MODEL,
+        max_tokens=MAX_TOKENS,
+        system=SYSTEM_PROMPT,
+        tools=[SEGMENT_TOOL],
+        tool_choice={"type": "tool", "name": "record_process_segments"},
+        messages=[{"role": "user", "content": user_message}],
+    )
+
+    payload = None
+    for block in response.content:
+        if (
+            getattr(block, "type", None) == "tool_use"
+            and getattr(block, "name", None) == "record_process_segments"
+        ):
+            payload = block.input
+            break
+    if payload is None:
+        raise RuntimeError(
+            "Claude returned no record_process_segments tool_use block."
+        )
+
+    segments = [
+        DetectedSegment(
+            name=str(s.get("name", "")).strip(),
+            description=str(s.get("description", "")).strip(),
+            claim_refs=[
+                int(r)
+                for r in (s.get("claim_refs") or [])
+                if isinstance(r, (int, float))
+            ],
+            confidence=float(s.get("confidence", 0.0)),
+        )
+        for s in (payload.get("segments") or [])
+    ]
+    unassigned = [
+        int(r)
+        for r in (payload.get("unassigned_claim_refs") or [])
+        if isinstance(r, (int, float))
+    ]
+    reasoning = str(payload.get("reasoning_summary") or "").strip()
+
+    usage = getattr(response, "usage", None)
+    return DetectionResult(
+        segments=segments,
+        unassigned_claim_refs=unassigned,
+        reasoning_summary=reasoning,
+        model_used=DETECTION_MODEL,
+        prompt_tokens=getattr(usage, "input_tokens", None) if usage else None,
+        output_tokens=getattr(usage, "output_tokens", None) if usage else None,
+    )
