@@ -46,6 +46,10 @@ const WORLD_WIDTH_MIN = 1700;
 const WORLD_RIGHT_PADDING = 240;
 const MIN_LANE_HEIGHT = 90;
 
+const MIN_SCALE = 0.2;
+const MAX_SCALE = 2.5;
+const ZOOM_STEP = 1.2;
+
 const LANE_PALETTE = [
   "#dbeafe",
   "#dcfce7",
@@ -529,7 +533,7 @@ function BpmnCanvas({
       const v = viewportRef.current;
       if (e.ctrlKey || e.metaKey) {
         const delta = -e.deltaY * 0.002;
-        const newScale = Math.max(0.1, Math.min(2.5, v.scale * (1 + delta)));
+        const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale * (1 + delta)));
         const wx = (mx - v.tx) / v.scale;
         const wy = (my - v.ty) / v.scale;
         setViewport({
@@ -906,8 +910,8 @@ function BpmnCanvas({
     const usableW = Math.max(1, rect.width - padding * 2);
     const usableH = Math.max(1, rect.height - padding * 2);
     const scale = Math.max(
-      0.3,
-      Math.min(2.5, Math.min(usableW / worldWidth, usableH / worldHeight))
+      MIN_SCALE,
+      Math.min(MAX_SCALE, Math.min(usableW / worldWidth, usableH / worldHeight))
     );
     setViewport({
       scale,
@@ -915,6 +919,22 @@ function BpmnCanvas({
       ty: (rect.height - worldHeight * scale) / 2,
     });
   }, [worldWidth, worldHeight]);
+
+  // Zoom toward the viewport center, mirroring the wheel handler's anchor math
+  // so the +/- buttons keep content centered instead of drifting to the origin.
+  const zoomByStep = useCallback((factor: number) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const v = viewportRef.current;
+    const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale * factor));
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const wx = (cx - v.tx) / v.scale;
+    const wy = (cy - v.ty) / v.scale;
+    setViewport({ scale: newScale, tx: cx - wx * newScale, ty: cy - wy * newScale });
+  }, []);
 
   // Low-level mutator used by undo/redo callbacks for node moves. Bypasses
   // record() so undo replay does not pollute the history stack.
@@ -1300,7 +1320,8 @@ function BpmnCanvas({
         tool={tool}
         onToolChange={setTool}
         viewport={viewport}
-        onViewportChange={setViewport}
+        onZoomIn={() => zoomByStep(ZOOM_STEP)}
+        onZoomOut={() => zoomByStep(1 / ZOOM_STEP)}
         onFit={fitToWorld}
         showIssues={showIssues}
         onShowIssuesChange={setShowIssues}

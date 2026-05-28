@@ -10,7 +10,8 @@ export function FloatingToolbar({
   tool,
   onToolChange,
   viewport,
-  onViewportChange,
+  onZoomIn,
+  onZoomOut,
   onFit,
   showIssues,
   onShowIssuesChange,
@@ -25,7 +26,8 @@ export function FloatingToolbar({
   tool: CanvasTool;
   onToolChange: (tool: CanvasTool) => void;
   viewport: Viewport;
-  onViewportChange: (viewport: Viewport) => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
   onFit: () => void;
   showIssues: boolean;
   onShowIssuesChange: (next: boolean) => void;
@@ -104,15 +106,7 @@ export function FloatingToolbar({
       </Group>
 
       <Group rightDivider>
-        <PlainButton
-          onClick={() =>
-            onViewportChange({
-              ...viewport,
-              scale: Math.max(0.1, viewport.scale - 0.15),
-            })
-          }
-          title="Zoom out"
-        >
+        <PlainButton onClick={onZoomOut} title="Zoom out">
           −
         </PlainButton>
         <div
@@ -127,15 +121,7 @@ export function FloatingToolbar({
         >
           {zoomPct}%
         </div>
-        <PlainButton
-          onClick={() =>
-            onViewportChange({
-              ...viewport,
-              scale: Math.min(2.5, viewport.scale + 0.15),
-            })
-          }
-          title="Zoom in"
-        >
+        <PlainButton onClick={onZoomIn} title="Zoom in">
           +
         </PlainButton>
         <PlainButton
