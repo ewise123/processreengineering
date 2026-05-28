@@ -387,12 +387,18 @@ def list_process_maps(
 
     # One row per model: the highest version_number row, via DISTINCT ON.
     model_ids = [m.id for m in models]
+    from app.models.process_detection import DetectionRun, ProcessSegment
+
     rows = db.execute(
         select(
             ProcessVersion.model_id,
             ProcessVersion.id,
             ProcessVersion.version_number,
+            ProcessVersion.source_segment_id,
+            DetectionRun.status,
         )
+        .outerjoin(ProcessSegment, ProcessSegment.id == ProcessVersion.source_segment_id)
+        .outerjoin(DetectionRun, DetectionRun.id == ProcessSegment.detection_run_id)
         .where(ProcessVersion.model_id.in_(model_ids))
         .order_by(
             ProcessVersion.model_id,
@@ -401,14 +407,16 @@ def list_process_maps(
         .distinct(ProcessVersion.model_id)
     ).all()
     latest_by_model: dict = {
-        row[0]: (row[1], row[2]) for row in rows
+        row[0]: (row[1], row[2], row[3], row[4]) for row in rows
     }
 
     return [
         ProcessModelRead.model_validate(m).model_copy(
             update={
-                "latest_version_id": latest_by_model.get(m.id, (None, None))[0],
-                "latest_version_number": latest_by_model.get(m.id, (None, None))[1],
+                "latest_version_id": latest_by_model.get(m.id, (None, None, None, None))[0],
+                "latest_version_number": latest_by_model.get(m.id, (None, None, None, None))[1],
+                "latest_source_segment_id": latest_by_model.get(m.id, (None, None, None, None))[2],
+                "latest_source_run_status": latest_by_model.get(m.id, (None, None, None, None))[3],
             }
         )
         for m in models

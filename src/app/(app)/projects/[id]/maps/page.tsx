@@ -76,7 +76,17 @@ export default function MapsPage() {
                   <CardHeader>
                     <div className="flex items-start justify-between gap-2">
                       <CardTitle className="line-clamp-1">{m.name}</CardTitle>
-                      <Badge variant="outline">{m.level}</Badge>
+                      <div className="flex items-center gap-1">
+                        <Badge variant="outline">{m.level}</Badge>
+                        {m.latest_source_run_status === "superseded" && (
+                          <Badge
+                            variant="secondary"
+                            title="Generated from a detection run that has since been superseded."
+                          >
+                            stale
+                          </Badge>
+                        )}
+                      </div>
                     </div>
                     <CardDescription>
                       {m.latest_version_number

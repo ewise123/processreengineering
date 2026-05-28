@@ -108,6 +108,13 @@ export interface ProcessModel {
   updated_at: string;
   latest_version_id: UUID | null;
   latest_version_number: number | null;
+  latest_source_segment_id?: UUID | null;
+  latest_source_run_status?:
+    | "draft"
+    | "accepted"
+    | "archived"
+    | "superseded"
+    | null;
 }
 
 export interface ProcessVersion {

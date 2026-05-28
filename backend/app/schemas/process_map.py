@@ -223,3 +223,5 @@ class ProcessModelRead(BaseModel):
     updated_at: datetime
     latest_version_id: UUID | None = None
     latest_version_number: int | None = None
+    latest_source_segment_id: UUID | None = None
+    latest_source_run_status: str | None = None
