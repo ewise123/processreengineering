@@ -114,3 +114,122 @@ def test_detect_segments_raises_on_non_tool_use_response():
             detect_segments_from_claims(
                 [{"kind": "task", "subject": "x", "chunk_ref": "c1"}]
             )
+
+
+# ---------------------------------------------------------------------------
+# DB-backed orchestrator tests (require `db` fixture from conftest)
+# ---------------------------------------------------------------------------
+from unittest.mock import patch as _patch
+
+from app.models.claim import Claim, ClaimCitation
+from app.models.identity import Organization, User
+from app.models.input import Chunk, DocumentSection, Input
+from app.models.process_detection import (
+    ClaimSegmentMembership,
+    DetectionRun,
+    ProcessSegment,
+)
+from app.models.project import Project
+from app.services.process_detection import (
+    DetectedSegment,
+    DetectionResult,
+    run_detection,
+)
+
+
+def _seed_two_claims(db):
+    org = Organization(name="t")
+    db.add(org)
+    db.flush()
+    user = User(email="dev@local", name="dev", org_id=org.id)
+    db.add(user)
+    db.flush()
+    proj = Project(name="p", org_id=org.id, status="active")
+    db.add(proj)
+    db.flush()
+    inp = Input(
+        project_id=proj.id,
+        type="interview_transcript",
+        name="i.txt",
+        file_path="i.txt",
+        file_size=10,
+        mime_type="text/plain",
+        status="parsed",
+        uploaded_by=user.id,
+    )
+    db.add(inp)
+    db.flush()
+    sec = DocumentSection(input_id=inp.id, kind="page", order_index=0, ref={}, text="x")
+    db.add(sec)
+    db.flush()
+    ch1 = Chunk(section_id=sec.id, char_start=0, char_end=5, text="a", tokens=1)
+    ch2 = Chunk(section_id=sec.id, char_start=6, char_end=11, text="b", tokens=1)
+    db.add_all([ch1, ch2])
+    db.flush()
+    cl1 = Claim(project_id=proj.id, kind="task", subject="AP work", normalized={}, confidence=0.9)
+    cl2 = Claim(project_id=proj.id, kind="task", subject="Onboard", normalized={}, confidence=0.9)
+    db.add_all([cl1, cl2])
+    db.flush()
+    db.add_all(
+        [
+            ClaimCitation(claim_id=cl1.id, chunk_id=ch1.id, quote="a", confidence=0.9),
+            ClaimCitation(claim_id=cl2.id, chunk_id=ch2.id, quote="b", confidence=0.9),
+        ]
+    )
+    db.commit()
+    return proj, [cl1, cl2]
+
+
+def test_run_detection_persists_run_and_segments(db):
+    proj, claims = _seed_two_claims(db)
+    fake = DetectionResult(
+        segments=[
+            DetectedSegment("AP", "ap desc", [0], 0.9),
+            DetectedSegment("Onboarding", "ob desc", [1], 0.7),
+        ],
+        unassigned_claim_refs=[],
+        reasoning_summary="Grouped by actor.",
+        model_used="claude-sonnet-4-6",
+        prompt_tokens=10,
+        output_tokens=10,
+    )
+    with _patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=fake,
+    ):
+        run = run_detection(db=db, project_id=proj.id, scope_input_ids=None)
+
+    assert run.status == "draft"
+    assert run.claim_count_at_run == 2
+    segs = db.query(ProcessSegment).filter(ProcessSegment.detection_run_id == run.id).all()
+    # 2 segments + 1 Unassigned
+    assert len(segs) == 3
+    assert any(s.is_unassigned for s in segs)
+    members = db.query(ClaimSegmentMembership).filter(
+        ClaimSegmentMembership.detection_run_id == run.id
+    ).all()
+    assert len(members) == 2
+
+
+def test_run_detection_rejects_zero_segments(db):
+    proj, _ = _seed_two_claims(db)
+    fake = DetectionResult(
+        segments=[],
+        unassigned_claim_refs=[0, 1],
+        reasoning_summary="couldn't identify",
+        model_used="claude-sonnet-4-6",
+        prompt_tokens=10,
+        output_tokens=10,
+    )
+    with _patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=fake,
+    ):
+        try:
+            run_detection(db=db, project_id=proj.id, scope_input_ids=None)
+        except RuntimeError as e:
+            assert "no distinct processes" in str(e).lower()
+        else:
+            raise AssertionError("Expected RuntimeError")
+    # No run row created.
+    assert db.query(DetectionRun).count() == 0

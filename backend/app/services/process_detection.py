@@ -189,6 +189,225 @@ def detect_segments_from_claims(claims: list[dict]) -> DetectionResult:
 INHERITANCE_OVERLAP_THRESHOLD = 0.70
 
 
+# ---------------------------------------------------------------------------
+# Orchestrator: run_detection
+# ---------------------------------------------------------------------------
+from uuid import UUID as _UUID  # for type hints below; avoid colliding with PgUUID
+
+from sqlalchemy.orm import Session
+
+from app.enums import DetectionRunStatus
+from app.models.claim import Claim, ClaimCitation
+from app.models.input import Chunk, DocumentSection
+from app.models.process_detection import (
+    ClaimSegmentMembership,
+    DetectionRun,
+    ProcessSegment,
+)
+
+
+def _load_claims_for_detection(
+    db: Session,
+    project_id: _UUID,
+    scope_input_ids: list[_UUID] | None,
+) -> list[Claim]:
+    from sqlalchemy import select
+
+    q = select(Claim).where(Claim.project_id == project_id)
+    if scope_input_ids:
+        q = (
+            q.join(ClaimCitation, ClaimCitation.claim_id == Claim.id)
+            .join(Chunk, Chunk.id == ClaimCitation.chunk_id)
+            .join(DocumentSection, DocumentSection.id == Chunk.section_id)
+            .where(DocumentSection.input_id.in_(scope_input_ids))
+            .distinct()
+        )
+    q = q.order_by(Claim.kind, Claim.created_at)
+    return list(db.scalars(q).all())
+
+
+def _chunk_ref_for_claim(
+    db: Session, claim_id: _UUID, chunk_ref_cache: dict
+) -> str:
+    """Pick the first citation's chunk and produce a ref like 'c{n}', where n
+    is the chunk's order within its document. Cached per-claim."""
+    from sqlalchemy import select
+
+    if claim_id in chunk_ref_cache:
+        return chunk_ref_cache[claim_id]
+    cit = db.scalars(
+        select(ClaimCitation)
+        .where(ClaimCitation.claim_id == claim_id)
+        .order_by(ClaimCitation.created_at)
+        .limit(1)
+    ).first()
+    if cit is None:
+        ref = "c?"
+    else:
+        chunk = db.get(Chunk, cit.chunk_id)
+        section = db.get(DocumentSection, chunk.section_id) if chunk else None
+        ref = f"c{(section.order_index if section else 0) + (chunk.char_start // 1000 if chunk else 0)}"
+    chunk_ref_cache[claim_id] = ref
+    return ref
+
+
+def run_detection(
+    *,
+    db: Session,
+    project_id: _UUID,
+    scope_input_ids: list[_UUID] | None,
+    created_by: _UUID | None = None,
+) -> DetectionRun:
+    """Run a detection pass and persist the run, segments, and memberships.
+
+    Raises:
+        RuntimeError("No claims") if project has no claims in scope.
+        RuntimeError("Too many claims") if claim count exceeds MAX_CLAIMS_INPUT.
+        RuntimeError("Draft already exists") if a draft run is already open.
+        RuntimeError("Model returned no distinct processes") if every claim
+            landed in unassigned (no segments to persist).
+    """
+    from sqlalchemy import select
+
+    existing_draft = db.scalars(
+        select(DetectionRun).where(
+            DetectionRun.project_id == project_id,
+            DetectionRun.status == DetectionRunStatus.DRAFT.value,
+        ).limit(1)
+    ).first()
+    if existing_draft is not None:
+        raise RuntimeError(f"Draft already exists: {existing_draft.id}")
+
+    claims = _load_claims_for_detection(db, project_id, scope_input_ids)
+    if not claims:
+        raise RuntimeError("No claims found for this project (scope).")
+    if len(claims) > MAX_CLAIMS_INPUT:
+        raise RuntimeError(
+            f"Project has {len(claims)} claims; detection caps at {MAX_CLAIMS_INPUT}. Pass scope_input_ids to narrow."
+        )
+
+    chunk_ref_cache: dict = {}
+    claim_dicts = [
+        {
+            "kind": c.kind,
+            "subject": c.subject,
+            "chunk_ref": _chunk_ref_for_claim(db, c.id, chunk_ref_cache),
+        }
+        for c in claims
+    ]
+    result = detect_segments_from_claims(claim_dicts)
+
+    if not result.segments:
+        raise RuntimeError(
+            "The model returned no distinct processes from the supplied claims. "
+            "This usually means the claims are too sparse or describe a single homogeneous activity. "
+            "Try adding more documents, or skip detection and use the existing Generate dialog directly."
+        )
+
+    # Load old accepted segments for inheritance.
+    old_accepted = []
+    accepted_runs = db.scalars(
+        select(DetectionRun).where(
+            DetectionRun.project_id == project_id,
+            DetectionRun.status == DetectionRunStatus.ACCEPTED.value,
+        )
+    ).all()
+    if accepted_runs:
+        for old_run in accepted_runs:
+            for old_seg in db.scalars(
+                select(ProcessSegment).where(
+                    ProcessSegment.detection_run_id == old_run.id,
+                    ProcessSegment.is_unassigned.is_(False),
+                )
+            ).all():
+                old_claim_ids = list(
+                    db.scalars(
+                        select(ClaimSegmentMembership.claim_id).where(
+                            ClaimSegmentMembership.segment_id == old_seg.id
+                        )
+                    ).all()
+                )
+                old_accepted.append({"name": old_seg.name, "claim_ids": old_claim_ids})
+
+    run = DetectionRun(
+        project_id=project_id,
+        status=DetectionRunStatus.DRAFT.value,
+        claim_count_at_run=len(claims),
+        claim_id_set=[str(c.id) for c in claims],
+        model_used=result.model_used,
+        prompt_tokens=result.prompt_tokens,
+        output_tokens=result.output_tokens,
+        reasoning_summary=result.reasoning_summary,
+        created_by=created_by,
+    )
+    db.add(run)
+    db.flush()
+
+    # Unassigned segment is always present.
+    unassigned_seg = ProcessSegment(
+        detection_run_id=run.id,
+        project_id=project_id,
+        name="Unassigned",
+        description="Ambient claims not assigned to any process.",
+        order_index=10_000,
+        claim_count=0,
+        is_unassigned=True,
+    )
+    db.add(unassigned_seg)
+    db.flush()
+
+    # Build claim index → Claim object map for membership writes.
+    by_index: dict[int, Claim] = dict(enumerate(claims))
+
+    segments: list[ProcessSegment] = []
+    for idx, det in enumerate(result.segments):
+        seg_claim_ids = [by_index[i].id for i in det.claim_refs if i in by_index]
+        inherited = inherited_name_for_segment(seg_claim_ids, old_accepted)
+        seg = ProcessSegment(
+            detection_run_id=run.id,
+            project_id=project_id,
+            name=inherited or det.name,
+            description=det.description,
+            order_index=idx,
+            claim_count=len(seg_claim_ids),
+            confidence=det.confidence,
+            is_unassigned=False,
+        )
+        db.add(seg)
+        db.flush()
+        segments.append(seg)
+
+        for claim_id in seg_claim_ids:
+            db.add(
+                ClaimSegmentMembership(
+                    claim_id=claim_id,
+                    segment_id=seg.id,
+                    detection_run_id=run.id,
+                )
+            )
+
+    # Unassigned memberships
+    assigned = set()
+    for det in result.segments:
+        for i in det.claim_refs:
+            if i in by_index:
+                assigned.add(by_index[i].id)
+    for c in claims:
+        if c.id not in assigned:
+            db.add(
+                ClaimSegmentMembership(
+                    claim_id=c.id,
+                    segment_id=unassigned_seg.id,
+                    detection_run_id=run.id,
+                )
+            )
+            unassigned_seg.claim_count += 1
+
+    db.commit()
+    db.refresh(run)
+    return run
+
+
 def inherited_name_for_segment(
     new_claim_ids: list,
     old_accepted_segments: list[dict],
