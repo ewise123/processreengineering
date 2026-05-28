@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,6 +47,21 @@ export function GenerateMapForm({ projectId }: { projectId: UUID }) {
   const [level, setLevel] = useState("2");
   const [focus, setFocus] = useState("");
   const [mapType, setMapType] = useState("any");
+  const [segmentId, setSegmentId] = useState<string>("none");
+
+  const runsQuery = useQuery({
+    queryKey: ["detection-runs", projectId],
+    queryFn: () => api.listDetectionRuns(projectId),
+  });
+  const accepted = runsQuery.data?.find((r) => r.status === "accepted");
+  const acceptedRunDetail = useQuery({
+    queryKey: ["detection-run", projectId, accepted?.id],
+    queryFn: () =>
+      accepted ? api.getDetectionRun(projectId, accepted.id) : Promise.resolve(null),
+    enabled: !!accepted,
+  });
+  const acceptedSegments =
+    acceptedRunDetail.data?.segments.filter((s) => !s.is_unassigned) ?? [];
 
   const generate = useMutation({
     mutationFn: () =>
@@ -55,6 +70,7 @@ export function GenerateMapForm({ projectId }: { projectId: UUID }) {
         level,
         focus: focus.trim() || null,
         map_type: mapType === "any" ? null : mapType,
+        segment_id: segmentId === "none" ? null : segmentId,
       }),
     onSuccess: (res) => {
       toast.success(
@@ -64,6 +80,7 @@ export function GenerateMapForm({ projectId }: { projectId: UUID }) {
       setOpen(false);
       setName("");
       setFocus("");
+      setSegmentId("none");
       router.push(
         `/projects/${projectId}/maps/${res.model_id}/versions/${res.version_id}`
       );
@@ -86,6 +103,28 @@ export function GenerateMapForm({ projectId }: { projectId: UUID }) {
         </DialogHeader>
 
         <div className="space-y-4">
+          {acceptedSegments.length > 0 && (
+            <div className="space-y-2">
+              <Label htmlFor="map-segment">From detected process</Label>
+              <Select value={segmentId} onValueChange={setSegmentId}>
+                <SelectTrigger id="map-segment">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None (use all claims)</SelectItem>
+                  {acceptedSegments.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      {s.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Scopes generation to claims in the chosen detected process.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-2">
             <Label htmlFor="map-name">Process name *</Label>
             <Input
