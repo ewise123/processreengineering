@@ -24,7 +24,6 @@ import {
 } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { UploadForm } from "@/components/upload-form";
-import { DetectProcessesButton } from "@/components/detect-processes-button";
 import { ExtractionProgressCell } from "@/components/extraction-progress-cell";
 import type { InputRow } from "@/lib/types";
 
@@ -82,7 +81,6 @@ export default function DocumentsPage() {
           extractor and process generator.
         </p>
         <div className="flex items-center gap-2">
-          <DetectProcessesButton projectId={id} />
           <UploadForm projectId={id} />
         </div>
       </div>
