@@ -69,7 +69,12 @@ def _run_detail(db: Session, run: DetectionRun) -> DetectionRunDetail:
         ).all()
     )
     regular = [_segment_to_read(db, s) for s in segs if not s.is_unassigned]
-    unassigned = next(s for s in segs if s.is_unassigned)
+    unassigned = next((s for s in segs if s.is_unassigned), None)
+    if unassigned is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Detection run is missing its unassigned segment.",
+        )
     return DetectionRunDetail(
         id=run.id,
         project_id=run.project_id,

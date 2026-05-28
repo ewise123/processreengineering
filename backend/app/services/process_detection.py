@@ -7,8 +7,20 @@ list the model was given).
 """
 import os
 from dataclasses import dataclass
+from uuid import UUID
 
 import anthropic
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.enums import DetectionRunStatus
+from app.models.claim import Claim, ClaimCitation
+from app.models.input import Chunk, DocumentSection
+from app.models.process_detection import (
+    ClaimSegmentMembership,
+    DetectionRun,
+    ProcessSegment,
+)
 
 DETECTION_MODEL = os.getenv("PROCESS_DETECTION_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS = 6000
@@ -192,27 +204,13 @@ INHERITANCE_OVERLAP_THRESHOLD = 0.70
 # ---------------------------------------------------------------------------
 # Orchestrator: run_detection
 # ---------------------------------------------------------------------------
-from uuid import UUID as _UUID  # for type hints below; avoid colliding with PgUUID
-
-from sqlalchemy.orm import Session
-
-from app.enums import DetectionRunStatus
-from app.models.claim import Claim, ClaimCitation
-from app.models.input import Chunk, DocumentSection
-from app.models.process_detection import (
-    ClaimSegmentMembership,
-    DetectionRun,
-    ProcessSegment,
-)
 
 
 def _load_claims_for_detection(
     db: Session,
-    project_id: _UUID,
-    scope_input_ids: list[_UUID] | None,
+    project_id: UUID,
+    scope_input_ids: list[UUID] | None,
 ) -> list[Claim]:
-    from sqlalchemy import select
-
     q = select(Claim).where(Claim.project_id == project_id)
     if scope_input_ids:
         q = (
@@ -227,12 +225,10 @@ def _load_claims_for_detection(
 
 
 def _chunk_ref_for_claim(
-    db: Session, claim_id: _UUID, chunk_ref_cache: dict
+    db: Session, claim_id: UUID, chunk_ref_cache: dict
 ) -> str:
     """Pick the first citation's chunk and produce a ref like 'c{n}', where n
     is the chunk's order within its document. Cached per-claim."""
-    from sqlalchemy import select
-
     if claim_id in chunk_ref_cache:
         return chunk_ref_cache[claim_id]
     cit = db.scalars(
@@ -254,9 +250,9 @@ def _chunk_ref_for_claim(
 def run_detection(
     *,
     db: Session,
-    project_id: _UUID,
-    scope_input_ids: list[_UUID] | None,
-    created_by: _UUID | None = None,
+    project_id: UUID,
+    scope_input_ids: list[UUID] | None,
+    created_by: UUID | None = None,
 ) -> DetectionRun:
     """Run a detection pass and persist the run, segments, and memberships.
 
@@ -267,8 +263,6 @@ def run_detection(
         RuntimeError("Model returned no distinct processes") if every claim
             landed in unassigned (no segments to persist).
     """
-    from sqlalchemy import select
-
     existing_draft = db.scalars(
         select(DetectionRun).where(
             DetectionRun.project_id == project_id,
