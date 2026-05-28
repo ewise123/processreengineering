@@ -184,3 +184,32 @@ def detect_segments_from_claims(claims: list[dict]) -> DetectionResult:
         prompt_tokens=getattr(usage, "input_tokens", None) if usage else None,
         output_tokens=getattr(usage, "output_tokens", None) if usage else None,
     )
+
+
+INHERITANCE_OVERLAP_THRESHOLD = 0.70
+
+
+def inherited_name_for_segment(
+    new_claim_ids: list,
+    old_accepted_segments: list[dict],
+) -> str | None:
+    """If ≥ 70% of new_claim_ids previously belonged to a single accepted
+    segment, return that segment's name. Otherwise return None.
+
+    Each element of old_accepted_segments must be a dict with keys
+    `name` (str) and `claim_ids` (iterable). Pure function, no DB access.
+    """
+    n = len(new_claim_ids)
+    if n == 0 or not old_accepted_segments:
+        return None
+    new_set = set(new_claim_ids)
+    best_name: str | None = None
+    best_overlap = 0
+    for seg in old_accepted_segments:
+        overlap = len(new_set.intersection(seg.get("claim_ids", [])))
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_name = seg.get("name")
+    if best_overlap / n >= INHERITANCE_OVERLAP_THRESHOLD:
+        return best_name
+    return None
