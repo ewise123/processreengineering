@@ -290,3 +290,28 @@ def test_merge_segment_moves_memberships(client, db):
         json={"name": "x"},
     )
     assert resp2.status_code == 404
+
+
+def test_delete_segment_moves_claims_to_unassigned(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    seg = created["segments"][0]
+    un_id = created["unassigned_segment"]["id"]
+
+    resp = client.delete(
+        f"/api/v2/projects/{proj.id}/segments/{seg['id']}"
+    )
+    assert resp.status_code == 204
+
+    # Reload the run; expect 1 regular segment, unassigned with +1 claim.
+    detail = client.get(
+        f"/api/v2/projects/{proj.id}/detection-runs/{created['id']}"
+    ).json()
+    assert len(detail["segments"]) == 1
+    assert detail["unassigned_segment"]["claim_count"] == seg["claim_count"]

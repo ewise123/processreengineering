@@ -289,3 +289,34 @@ def merge_segment(
     db.commit()
     db.refresh(target)
     return _segment_to_read(db, target)
+
+
+@router.delete(
+    "/segments/{segment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_segment(
+    segment_id: UUID,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    seg = _get_draft_segment(db, project.id, segment_id)
+    unassigned = db.scalars(
+        select(ProcessSegment).where(
+            ProcessSegment.detection_run_id == seg.detection_run_id,
+            ProcessSegment.is_unassigned.is_(True),
+        ).limit(1)
+    ).first()
+    if unassigned is None:
+        raise HTTPException(
+            status_code=500, detail="Run has no Unassigned segment"
+        )
+    moved = seg.claim_count
+    db.execute(
+        sql_update(ClaimSegmentMembership)
+        .where(ClaimSegmentMembership.segment_id == seg.id)
+        .values(segment_id=unassigned.id)
+    )
+    unassigned.claim_count = unassigned.claim_count + moved
+    db.delete(seg)
+    db.commit()
