@@ -239,3 +239,25 @@ def test_patch_unassigned_segment_409(client, db):
         json={"name": "Renamed unassigned"},
     )
     assert resp.status_code == 409
+
+
+def test_create_empty_segment(client, db):
+    proj = _seed_project_with_two_claims(db)
+    with patch(
+        "app.services.process_detection.detect_segments_from_claims",
+        return_value=_fake_detection_result_two_segments(),
+    ):
+        created = client.post(
+            f"/api/v2/projects/{proj.id}/detect-processes", json={}
+        ).json()
+    run_id = created["id"]
+
+    resp = client.post(
+        f"/api/v2/projects/{proj.id}/detection-runs/{run_id}/segments",
+        json={"name": "Manual cluster"},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["name"] == "Manual cluster"
+    assert body["claim_count"] == 0
+    assert body["is_unassigned"] is False

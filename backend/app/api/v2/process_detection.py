@@ -199,6 +199,44 @@ def _get_draft_segment(
     return seg
 
 
+@router.post(
+    "/detection-runs/{run_id}/segments",
+    response_model=ProcessSegmentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_segment(
+    run_id: UUID,
+    payload: SegmentCreate,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessSegmentRead:
+    run = _get_run_in_project(db, project.id, run_id)
+    if run.status != DetectionRunStatus.DRAFT.value:
+        raise HTTPException(
+            status_code=409, detail="Run is not a draft."
+        )
+    max_index = db.scalar(
+        select(func.coalesce(func.max(ProcessSegment.order_index), 0)).where(
+            ProcessSegment.detection_run_id == run.id,
+            ProcessSegment.is_unassigned.is_(False),
+        )
+    ) or 0
+    seg = ProcessSegment(
+        detection_run_id=run.id,
+        project_id=project.id,
+        name=payload.name.strip(),
+        description="",
+        order_index=max_index + 1,
+        claim_count=0,
+        confidence=None,
+        is_unassigned=False,
+    )
+    db.add(seg)
+    db.commit()
+    db.refresh(seg)
+    return _segment_to_read(db, seg)
+
+
 @router.patch(
     "/segments/{segment_id}",
     response_model=ProcessSegmentRead,
