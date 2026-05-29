@@ -2,7 +2,7 @@
 
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -64,6 +64,16 @@ export default function CanvasPage() {
   );
   const canvasRef = useRef<BpmnCanvasHandle>(null);
   const queryClient = useQueryClient();
+  const router = useRouter();
+
+  const handleNavigateVersion = useCallback(
+    (newVersionId: UUID) => {
+      router.push(
+        `/projects/${params.id}/maps/${params.modelId}/versions/${newVersionId}`
+      );
+    },
+    [router, params.id, params.modelId]
+  );
 
   const handleNodeDelete = useCallback(
     async (id: UUID) => {
@@ -401,6 +411,7 @@ export default function CanvasPage() {
             onFocusNode={(id) => canvasRef.current?.selectNode(id)}
             reviewState={reviewState}
             onSendRequest={() => requestReviewMutation.mutate()}
+            onNavigateVersion={handleNavigateVersion}
             collapsed={rightCollapsed}
             onCollapsedChange={setRightCollapsed}
           />
