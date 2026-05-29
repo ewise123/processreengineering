@@ -67,13 +67,16 @@ const LANE_PALETTE = [
 type Drag =
   | {
       type: "node";
-      id: string;
+      id: string; // the grabbed node
       offX: number;
       offY: number;
-      // Captured at drag-start so we can record the inverse for undo.
-      origX: number;
-      origRelativeY: number;
-      origLaneId: UUID | null;
+      members: Array<{
+        id: string;
+        origX: number;
+        origAbsY: number;
+        origRelativeY: number;
+        origLaneId: UUID | null;
+      }>;
     }
   | { type: "pan"; startX: number; startY: number; tx0: number; ty0: number }
   | {
@@ -670,15 +673,29 @@ function BpmnCanvas({
       setDrag({ type: "connect", sourceId: id, sourceSide: side, currX: x, currY: y });
       return;
     }
-    setDrag({
-      type: "node",
-      id,
-      offX: x - resolved.x,
-      offY: y - resolved.y,
-      origX: stored.x,
-      origRelativeY: stored.relativeY,
-      origLaneId: stored.laneId,
-    });
+    const groupIds =
+      selectedIdsRef.current.has(id) && selectedIdsRef.current.size > 1
+        ? [...selectedIdsRef.current].filter((sid) =>
+            nodesRef.current.some((n) => n.id === sid)
+          )
+        : [id];
+    const laneById = new Map(lanesRef.current.map((l) => [l.id, l]));
+    const members = groupIds
+      .map((sid) => {
+        const sn = nodesRef.current.find((n) => n.id === sid);
+        if (!sn) return null;
+        const lane = sn.laneId ? laneById.get(sn.laneId) : undefined;
+        const origAbsY = (lane ? lane.y : 0) + sn.relativeY;
+        return {
+          id: sid,
+          origX: sn.x,
+          origAbsY,
+          origRelativeY: sn.relativeY,
+          origLaneId: sn.laneId,
+        };
+      })
+      .filter((m): m is NonNullable<typeof m> => m !== null);
+    setDrag({ type: "node", id, offX: x - resolved.x, offY: y - resolved.y, members });
   };
 
   const onStartBendDrag = useCallback(
@@ -800,34 +817,31 @@ function BpmnCanvas({
       }
       if (drag.type === "node") {
         const { x, y } = screenToWorld(e.clientX, e.clientY);
-        const newX = x - drag.offX;
-        const newAbsY = y - drag.offY;
+        const grabbed = drag.members.find((m) => m.id === drag.id);
+        if (!grabbed) return;
+        const deltaX = x - drag.offX - grabbed.origX;
+        const deltaY = y - drag.offY - grabbed.origAbsY;
         const currLanes = lanesRef.current;
         setNodes((curr) =>
           curr.map((n) => {
-            if (n.id !== drag.id) return n;
+            const m = drag.members.find((mm) => mm.id === n.id);
+            if (!m) return n;
+            const newX = m.origX + deltaX;
+            const targetAbsY = m.origAbsY + deltaY;
             const targetLane =
-              laneAtY(newAbsY + n.h / 2, currLanes) ??
+              laneAtY(targetAbsY + n.h / 2, currLanes) ??
               (n.laneId
                 ? currLanes.find((l) => l.id === n.laneId)
                 : currLanes[0]);
-            if (!targetLane) {
-              return { ...n, x: newX };
-            }
+            if (!targetLane) return { ...n, x: newX };
             const maxRel = Math.max(0, targetLane.h - n.h);
-            const rel = Math.max(
-              0,
-              Math.min(maxRel, newAbsY - targetLane.y)
-            );
-            return {
-              ...n,
-              x: newX,
-              laneId: targetLane.id,
-              relativeY: rel,
-            };
+            const rel = Math.max(0, Math.min(maxRel, targetAbsY - targetLane.y));
+            return { ...n, x: newX, laneId: targetLane.id, relativeY: rel };
           })
         );
-      } else {
+        return;
+      }
+      if (drag.type === "pan") {
         const v = viewportRef.current;
         setViewport({
           ...v,
@@ -905,36 +919,43 @@ function BpmnCanvas({
         return;
       }
       if (drag.type === "node") {
-        const final = nodesRef.current.find((n) => n.id === drag.id);
-        if (final) {
-          markNode(final.id, {
-            x: final.x,
-            relative_y: final.relativeY,
-            lane_id: final.laneId ?? undefined,
+        const finals = drag.members
+          .map((m) => nodesRef.current.find((n) => n.id === m.id))
+          .filter((n): n is NonNullable<typeof n> => !!n);
+        for (const f of finals) {
+          markNode(f.id, {
+            x: f.x,
+            relative_y: f.relativeY,
+            lane_id: f.laneId ?? undefined,
           });
-          // Only register an undo entry if the node actually moved —
-          // a click without drag should not pollute the history.
-          const moved =
-            final.x !== drag.origX ||
-            final.relativeY !== drag.origRelativeY ||
-            final.laneId !== drag.origLaneId;
-          if (moved) {
-            const newPos = {
-              x: final.x,
-              relativeY: final.relativeY,
-              laneId: final.laneId,
-            };
-            const oldPos = {
-              x: drag.origX,
-              relativeY: drag.origRelativeY,
-              laneId: drag.origLaneId,
-            };
-            record({
-              description: "Move node",
-              do: () => applyNodePositionLocal(drag.id, newPos),
-              undo: () => applyNodePositionLocal(drag.id, oldPos),
-            });
-          }
+        }
+        const moved = drag.members.some((m) => {
+          const f = finals.find((n) => n.id === m.id);
+          return (
+            f &&
+            (f.x !== m.origX ||
+              f.relativeY !== m.origRelativeY ||
+              f.laneId !== m.origLaneId)
+          );
+        });
+        if (moved) {
+          const newPositions = finals.map((f) => ({
+            id: f.id,
+            x: f.x,
+            relativeY: f.relativeY,
+            laneId: f.laneId,
+          }));
+          const oldPositions = drag.members.map((m) => ({
+            id: m.id,
+            x: m.origX,
+            relativeY: m.origRelativeY,
+            laneId: m.origLaneId,
+          }));
+          record({
+            description: finals.length > 1 ? `Move ${finals.length} nodes` : "Move node",
+            do: () => applyGroupPositionsLocal(newPositions),
+            undo: () => applyGroupPositionsLocal(oldPositions),
+          });
         }
       }
       if (drag.type === "pan") {
@@ -1066,23 +1087,18 @@ function BpmnCanvas({
 
   // Low-level mutator used by undo/redo callbacks for node moves. Bypasses
   // record() so undo replay does not pollute the history stack.
-  const applyNodePositionLocal = useCallback(
-    (
-      id: UUID,
-      pos: { x: number; relativeY: number; laneId: UUID | null }
-    ) => {
+  const applyGroupPositionsLocal = useCallback(
+    (positions: Array<{ id: UUID; x: number; relativeY: number; laneId: UUID | null }>) => {
+      const byId = new Map(positions.map((p) => [p.id, p]));
       setNodes((curr) =>
-        curr.map((n) =>
-          n.id === id
-            ? { ...n, x: pos.x, relativeY: pos.relativeY, laneId: pos.laneId }
-            : n
-        )
+        curr.map((n) => {
+          const p = byId.get(n.id);
+          return p ? { ...n, x: p.x, relativeY: p.relativeY, laneId: p.laneId } : n;
+        })
       );
-      markNode(id, {
-        x: pos.x,
-        relative_y: pos.relativeY,
-        lane_id: pos.laneId ?? undefined,
-      });
+      for (const p of positions) {
+        markNode(p.id, { x: p.x, relative_y: p.relativeY, lane_id: p.laneId ?? undefined });
+      }
     },
     [markNode]
   );
