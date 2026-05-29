@@ -285,6 +285,7 @@ export default function CanvasPage() {
           initialEdges={initial.edges}
           initialLanes={initial.lanes}
           issuesByNode={issuesByNode}
+          reviewByNode={reviewByNode}
           onSaveStatusChange={handleSaveStatusChange}
           onSelectionChange={handleSelectionChange}
           onNodeDeleted={handleNodeDeleted}

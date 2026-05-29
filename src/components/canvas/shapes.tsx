@@ -154,6 +154,7 @@ export function NodeShape({
   node,
   selected,
   issueLevel,
+  reviewBadge,
   showHandles,
   onMouseDown,
   onContextMenu,
@@ -162,6 +163,7 @@ export function NodeShape({
   node: ResolvedNode;
   selected: boolean;
   issueLevel?: IssueSeverity | null;
+  reviewBadge?: "approved" | "changes_requested" | null;
   /** When true, hover handles are always rendered (e.g. while the connect
    * tool is active). Otherwise they appear on hover or when selected. */
   showHandles?: boolean;
@@ -306,6 +308,19 @@ export function NodeShape({
             fill="#fff"
           >
             !
+          </text>
+        </g>
+      )}
+      {reviewBadge && (
+        <g transform={`translate(8, -8)`} style={{ pointerEvents: "none" }}>
+          <circle
+            r={9}
+            fill={reviewBadge === "approved" ? "#10b981" : "#f59e0b"}
+            stroke="#fff"
+            strokeWidth={2}
+          />
+          <text textAnchor="middle" y={4} fontSize="11" fontWeight="700" fill="#fff">
+            {reviewBadge === "approved" ? "✓" : "!"}
           </text>
         </g>
       )}
