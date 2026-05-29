@@ -50,6 +50,10 @@ class NodeUpdate(BaseModel):
     lane_id: UUID | None = None
     x: float | None = None
     relative_y: float | None = None
+    type: str | None = Field(
+        default=None,
+        pattern=r"^(task|event_start|event_end|event_intermediate|gateway_exclusive|gateway_parallel|gateway_inclusive|subprocess)$",
+    )
 
 
 class NodeCreate(BaseModel):
