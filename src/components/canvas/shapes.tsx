@@ -156,6 +156,7 @@ export function NodeShape({
   issueLevel,
   showHandles,
   onMouseDown,
+  onContextMenu,
   onStartConnect,
 }: {
   node: ResolvedNode;
@@ -165,6 +166,7 @@ export function NodeShape({
    * tool is active). Otherwise they appear on hover or when selected. */
   showHandles?: boolean;
   onMouseDown: (e: MouseEvent, id: string) => void;
+  onContextMenu?: (e: MouseEvent, id: string) => void;
   onStartConnect?: (e: MouseEvent, sourceId: UUID, side: ConnectSide) => void;
 }) {
   const { kind, x, y, w, h, label, id } = node;
@@ -186,6 +188,7 @@ export function NodeShape({
       transform={`translate(${x},${y})`}
       style={{ cursor: showHandles ? "crosshair" : "move" }}
       onMouseDown={(e) => onMouseDown(e, id)}
+      onContextMenu={(e) => onContextMenu?.(e, id)}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       data-node-id={id}
@@ -350,6 +353,7 @@ export function EdgeArrow({
   selected,
   onClick,
   onDoubleClick,
+  onContextMenu,
   onStartBendDrag,
 }: {
   edge: CanvasEdge;
@@ -357,6 +361,7 @@ export function EdgeArrow({
   selected: boolean;
   onClick: (id: string) => void;
   onDoubleClick?: (id: string) => void;
+  onContextMenu?: (e: MouseEvent, id: string) => void;
   /** Fires when the user grabs the middle segment of a selected edge. */
   onStartBendDrag?: (
     e: MouseEvent,
@@ -384,6 +389,7 @@ export function EdgeArrow({
         e.stopPropagation();
         onDoubleClick(edge.id);
       }}
+      onContextMenu={(e) => onContextMenu?.(e, edge.id)}
       style={{ cursor: "pointer" }}
     >
       <path

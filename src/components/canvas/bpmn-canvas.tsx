@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type { IssueSeverity, UUID } from "@/lib/types";
 
+import { CanvasContextMenu, type ContextMenuItem } from "./canvas-context-menu";
 import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT } from "./layout";
@@ -206,6 +207,11 @@ function BpmnCanvas({
   const [showIssues, setShowIssues] = useState(true);
   const [reviewMode, setReviewMode] = useState(false);
   const [editingEdgeId, setEditingEdgeId] = useState<UUID | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    items: ContextMenuItem[];
+  } | null>(null);
 
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
@@ -655,6 +661,7 @@ function BpmnCanvas({
   }, []);
 
   const onNodeMouseDown = (e: MouseEvent, id: string) => {
+    setContextMenu(null);
     e.stopPropagation();
     if (tool === "pan") {
       // Hand mode: dragging a node pans the canvas instead of moving it.
@@ -778,6 +785,7 @@ function BpmnCanvas({
   );
 
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
+    setContextMenu(null);
     const target = e.target as SVGElement;
     const isBg =
       target === svgRef.current ||
@@ -1255,6 +1263,73 @@ function BpmnCanvas({
     }
   }, [clipboard, projectId, modelId, versionId, record]);
 
+  const openNodeMenu = useCallback(
+    (e: MouseEvent, nodeId: UUID) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!selectedIdsRef.current.has(nodeId)) selectOnly(nodeId);
+      const count = selectedIdsRef.current.size;
+      const suffix = count > 1 ? ` ${count}` : "";
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          { label: `Copy${suffix}`, onSelect: copySelectionImpl },
+          {
+            label: "Duplicate",
+            onSelect: () => {
+              copySelectionImpl();
+              void pasteClipboardImpl();
+            },
+          },
+          { label: `Delete${suffix}`, onSelect: () => void deleteSelectionImpl() },
+        ],
+      });
+    },
+    [selectOnly, copySelectionImpl, pasteClipboardImpl, deleteSelectionImpl]
+  );
+
+  const openEdgeMenu = useCallback(
+    (e: MouseEvent, edgeId: UUID) => {
+      e.preventDefault();
+      e.stopPropagation();
+      selectOnly(edgeId);
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          { label: "Edit label", onSelect: () => setEditingEdgeId(edgeId) },
+          { label: "Delete", onSelect: () => void deleteEdgeImpl(edgeId) },
+        ],
+      });
+    },
+    [selectOnly, deleteEdgeImpl]
+  );
+
+  const openCanvasMenu = useCallback(
+    (e: MouseEvent<SVGSVGElement>) => {
+      e.preventDefault();
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          {
+            label: "Paste",
+            disabled: !clipboard.hasContent(),
+            onSelect: () => void pasteClipboardImpl(),
+          },
+          {
+            label: "Select all",
+            onSelect: () =>
+              setSelectedIds(new Set(nodesRef.current.map((n) => n.id))),
+          },
+          { label: "Fit to screen", onSelect: fitToWorld },
+        ],
+      });
+    },
+    [clipboard, pasteClipboardImpl, fitToWorld]
+  );
+
   const recomputeY = (ls: CanvasLane[]): CanvasLane[] => {
     let y = 0;
     return ls.map((l) => {
@@ -1444,6 +1519,7 @@ function BpmnCanvas({
       <svg
         ref={svgRef}
         onMouseDown={onSvgMouseDown}
+        onContextMenu={openCanvasMenu}
         onDragOver={onCanvasDragOver}
         onDrop={onCanvasDrop}
         style={{
@@ -1535,6 +1611,7 @@ function BpmnCanvas({
                 selectOnly(id);
                 setEditingEdgeId(id);
               }}
+              onContextMenu={openEdgeMenu}
               onStartBendDrag={onStartBendDrag}
             />
           ))}
@@ -1546,6 +1623,7 @@ function BpmnCanvas({
               issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
               showHandles={tool === "connect"}
               onMouseDown={onNodeMouseDown}
+              onContextMenu={openNodeMenu}
               onStartConnect={onStartConnect}
             />
           ))}
@@ -1650,6 +1728,15 @@ function BpmnCanvas({
         onUndo={() => void undo()}
         onRedo={() => void redo()}
       />
+
+      {contextMenu && (
+        <CanvasContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenu.items}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 });
