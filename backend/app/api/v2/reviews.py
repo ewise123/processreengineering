@@ -115,7 +115,7 @@ def _recompute_version_status(db: Session, version: ProcessVersion) -> None:
             )
         ) or 0
     vr = _version_review(db, version.id)
-    if total > 0 and approved == total:
+    if total > 0 and approved == total and vr is not None:
         version.status = ProcessVersionStatus.APPROVED.value
         if vr is not None:
             vr.status = ReviewStatus.APPROVED.value
@@ -135,4 +135,64 @@ def get_review_state(
     db: Annotated[Session, Depends(get_db)],
 ) -> ReviewStateRead:
     version = _version_or_404(db, model_id, version_id, project.id)
+    return _build_review_state(db, version)
+
+
+@router.patch("/nodes/{node_id}/review", response_model=NodeReviewRead)
+def set_node_review(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    node_id: UUID,
+    payload: NodeReviewUpdate,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> NodeReviewRead:
+    node = _node_or_404(db, node_id, project.id)
+    review = _node_review(db, node_id)
+    if review is None:
+        review = Review(
+            project_id=project.id,
+            target_type=ReviewTargetType.PROCESS_NODE.value,
+            target_id=node_id,
+            requested_by=user.id,
+            status=payload.status,
+            notes=payload.note,
+        )
+        db.add(review)
+    else:
+        review.status = payload.status
+        review.notes = payload.note
+    db.flush()
+    version = db.get(ProcessVersion, node.version_id)
+    _recompute_version_status(db, version)
+    db.commit()
+    return NodeReviewRead(node_id=node_id, status=review.status, note=review.notes)
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/review/request",
+    response_model=ReviewStateRead,
+)
+def request_review(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> ReviewStateRead:
+    version = _version_or_404(db, model_id, version_id, project.id)
+    vr = _version_review(db, version.id)
+    if vr is None:
+        vr = Review(
+            project_id=project.id,
+            target_type=ReviewTargetType.PROCESS_VERSION.value,
+            target_id=version.id,
+            requested_by=user.id,
+            status=ReviewStatus.REQUESTED.value,
+        )
+        db.add(vr)
+    else:
+        vr.status = ReviewStatus.REQUESTED.value
+    version.status = ProcessVersionStatus.REVIEW.value
+    db.commit()
+    db.refresh(version)
     return _build_review_state(db, version)

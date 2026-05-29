@@ -25,5 +25,5 @@ class ReviewStateRead(BaseModel):
     version_id: UUID
     version_status: str
     request_status: str | None = None
-    nodes: list[NodeReviewRead]
+    nodes: list[NodeReviewRead]  # only nodes with a decision; absence = pending
     counts: ReviewCounts
