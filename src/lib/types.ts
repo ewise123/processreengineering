@@ -128,6 +128,46 @@ export interface ProcessVersion {
   created_at: string;
 }
 
+export interface VersionSummary {
+  id: UUID;
+  version_number: number;
+  parent_version_id: UUID | null;
+  status: string;
+  notes: string | null;
+  created_at: string;
+  node_count: number;
+  lane_count: number;
+  edge_count: number;
+}
+
+export interface NodeChange {
+  name: string;
+  from_name?: string | null;
+  from_lane?: string | null;
+  to_lane?: string | null;
+}
+
+export interface EdgeChange {
+  source: string;
+  target: string;
+}
+
+export interface LaneChange {
+  name: string;
+}
+
+export interface VersionDiff {
+  nodes: {
+    added: NodeChange[];
+    removed: NodeChange[];
+    renamed: NodeChange[];
+    moved: NodeChange[];
+    unchanged_count: number;
+  };
+  edges: { added: EdgeChange[]; removed: EdgeChange[] };
+  lanes: { added: LaneChange[]; removed: LaneChange[] };
+}
+
 export type ReviewDecision = "approved" | "changes_requested";
 
 export interface NodeReview {

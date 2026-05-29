@@ -32,11 +32,14 @@ import type {
   ProcessModel,
   ProcessNode,
   ProcessSegment,
+  ProcessVersion,
   Project,
   ProjectCreate,
   ProjectUpdate,
   ReviewState,
   UUID,
+  VersionDiff,
+  VersionSummary,
 } from "@/lib/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -177,6 +180,29 @@ export const api = {
   getProcessGraph: (projectId: UUID, modelId: UUID, versionId: UUID) =>
     request<ProcessGraph>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}`
+    ),
+  listVersions: (projectId: UUID, modelId: UUID) =>
+    request<VersionSummary[]>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions`
+    ),
+  copyVersion: (
+    projectId: UUID,
+    modelId: UUID,
+    sourceVersionId: UUID,
+    note: string | null
+  ) =>
+    request<ProcessVersion>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${sourceVersionId}/copy`,
+      { method: "POST", json: { note } }
+    ),
+  getVersionDiff: (
+    projectId: UUID,
+    modelId: UUID,
+    fromId: UUID,
+    toId: UUID
+  ) =>
+    request<VersionDiff>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/version-diff?from=${fromId}&to=${toId}`
     ),
   getProcessMapIssues: (projectId: UUID, modelId: UUID, versionId: UUID) =>
     request<NodeIssue[]>(
