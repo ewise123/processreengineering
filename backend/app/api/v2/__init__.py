@@ -8,6 +8,7 @@ from app.api.v2 import (
     process_maps,
     projects,
     reviews,
+    versions,
 )
 
 router = APIRouter()
@@ -18,3 +19,4 @@ router.include_router(claims.router)
 router.include_router(process_maps.router)
 router.include_router(process_detection.router)
 router.include_router(reviews.router)
+router.include_router(versions.router)
