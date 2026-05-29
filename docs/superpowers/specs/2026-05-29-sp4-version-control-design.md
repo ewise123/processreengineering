@@ -72,9 +72,9 @@ One transaction:
 
 Branching from any version (including `approved`) is allowed — no status restriction. The source is never modified.
 
-### `GET /process-maps/{model_id}/versions/diff?from={vA}&to={vB}`
+### `GET /process-maps/{model_id}/version-diff?from={vA}&to={vB}`
 
-Returns `VersionDiffRead`. Both versions must belong to the model (404 otherwise). Algorithm:
+Returns `VersionDiffRead`. Both versions must belong to the model (404 otherwise). (Path is `version-diff`, not `versions/diff`, so it isn't shadowed by the existing `GET …/versions/{version_id}` graph route, which would otherwise match `diff` as a version id.) Algorithm:
 
 - Build an **identity key** per node: `_lineage_id` if present, else `f"name:{name}"`. Build identity→node maps for each side.
 - Resolve each node's lane id to its lane **name** within its own version (for move detection).
