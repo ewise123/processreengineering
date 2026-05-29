@@ -650,7 +650,11 @@ function BpmnCanvas({
       toggleSelection(id);
       return;
     }
-    selectOnly(id);
+    const isGroupDrag =
+      selectedIdsRef.current.has(id) && selectedIdsRef.current.size > 1;
+    // Defer selection change for a node that's already part of a multi-selection:
+    // a drag moves the whole group (kept selected), a click collapses it on mouseup.
+    if (!isGroupDrag) selectOnly(id);
     const resolved = renderNodes.find((n) => n.id === id);
     const stored = nodesRef.current.find((n) => n.id === id);
     if (!resolved || !stored) return;
@@ -673,12 +677,11 @@ function BpmnCanvas({
       setDrag({ type: "connect", sourceId: id, sourceSide: side, currX: x, currY: y });
       return;
     }
-    const groupIds =
-      selectedIdsRef.current.has(id) && selectedIdsRef.current.size > 1
-        ? [...selectedIdsRef.current].filter((sid) =>
-            nodesRef.current.some((n) => n.id === sid)
-          )
-        : [id];
+    const groupIds = isGroupDrag
+      ? [...selectedIdsRef.current].filter((sid) =>
+          nodesRef.current.some((n) => n.id === sid)
+        )
+      : [id];
     const laneById = new Map(lanesRef.current.map((l) => [l.id, l]));
     const members = groupIds
       .map((sid) => {
@@ -957,6 +960,11 @@ function BpmnCanvas({
             undo: () => applyGroupPositionsLocal(oldPositions),
           });
         }
+        // A plain click (no drag) on a member of a multi-selection collapses the
+        // selection to just that node; a real group drag leaves the group selected.
+        if (!moved && drag.members.length > 1) {
+          selectOnly(drag.id);
+        }
       }
       if (drag.type === "pan") {
         // Distinguish a true background click (deselect) from a pan-drag
@@ -996,7 +1004,7 @@ function BpmnCanvas({
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
-  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal, clearSelection, setSelection]);
+  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal, clearSelection, setSelection, selectOnly]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
   const onCanvasDragOver = (e: ReactDragEvent<SVGSVGElement>) => {
