@@ -393,6 +393,8 @@ export default function CanvasPage() {
                   : null
             }
             onFocusNode={(id) => canvasRef.current?.selectNode(id)}
+            reviewState={reviewState}
+            onSendRequest={() => requestReviewMutation.mutate()}
             collapsed={rightCollapsed}
             onCollapsedChange={setRightCollapsed}
           />
