@@ -981,3 +981,19 @@ If anything surfaced that's out of SP-2 scope, append a short "Deferred follow-u
 - **Spec coverage:** Type editing (Tasks 1,3,4) ✓; lane color (Tasks 2,3,5) ✓; collapse persistence (Tasks 2,3,6) ✓; provenance preserved (Task 1 route leaves links + Task 1 test asserts) ✓; undo for type+color, none for collapse (Tasks 4,5,6) ✓; Vitest for the pure helper (Task 3) ✓.
 - **Type consistency:** `NODE_TYPE_OPTIONS`/`sizeForNodeType` defined in Task 3, consumed in Tasks 4–5; `onSetColor` defined (LaneRail, Task 5 Step 1) and wired (Task 5 Step 4); `setLaneColor`/`setLaneColorLocal` names consistent; `collapsedLaneIdsRef` introduced in Task 6 and used only there.
 - **Verify-against-source reminders:** the graph endpoint URL/JSON key (Task 2 Step 1 note), `lanesRef` name (Task 5 Step 3), and the exact existing `./layout` import line (Task 4 Step 3) are all flagged for the implementer to confirm by grep before editing.
+
+---
+
+## Execution outcome (2026-05-29)
+
+All 7 tasks executed via subagent-driven development (fresh implementer + spec review + code-quality review per task). Every task's two reviews ended APPROVED. Commits `484ccfe` → `9747c51` (plus two small review-driven cleanup commits `ce42b61`, `848dd57`).
+
+**Verification:** `npx tsc --noEmit` clean · `npm test` 16/16 · `npm run build` succeeds · backend `pytest` 51/51 · live API end-to-end smoke against the running server PASS (PATCH node `type`, PATCH lane `color`+`collapsed`, re-read graph confirms persistence; originals restored).
+
+**Operational note:** migration `0007_lane_color_collapsed` was applied to the dev `poet` database during verification (the dev backend runs uvicorn `--reload`, so it had hot-reloaded the new model before the column existed → 500s until migrated). Any other environment must run `alembic upgrade head` on deploy.
+
+### Deferred follow-ups (surfaced by code review, intentionally out of SP-2 scope)
+
+1. **Keyboard-undo doesn't refresh the Properties panel.** Ctrl+Z reverts the canvas node (type/label/lane) but the Properties dropdown/inputs keep showing the undone value until the node is reselected. Root cause is pre-existing (since SP-1, commit 562d796): the selection-sync `useEffect` is keyed on `[selectedIds, onSelectionChange]`, not on `nodes`, so it doesn't re-emit when the selected node mutates under a stable selection. This affects the label and lane controls too, not just the new Type dropdown. Fix candidate: re-emit the current node's selection payload when the underlying node changes (add a nodes dependency / version counter to the selection effect) — fixes all three controls at once. Deferred because it touches a hot effect (`onSelectionChange` would then fire on every drag frame) and needs its own scoping/testing.
+
+2. **Drag-style mutations flood the undo stack.** The custom lane-color `<input type="color">` fires `onChange` continuously while dragging the OS picker, recording one undo entry per intermediate shade (and the same is already true of lane resize drags). Network is unaffected (markLane debounces 500ms + coalesces per-lane). Fix candidate: a shared "coalesce a drag into a single undo entry" helper applied to both color and resize (preview via the non-recording `*Local` mutator during the drag; record once on commit/blur). Deferred as a cross-cutting undo-stack improvement, not specific to SP-2.
