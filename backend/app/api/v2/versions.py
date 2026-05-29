@@ -20,6 +20,8 @@ from app.models.process import (
 from app.models.project import Project
 from app.schemas.version import VersionSummaryRead
 
+LINEAGE_KEY = "_lineage_id"
+
 router = APIRouter(prefix="/projects/{project_id}", tags=["versions"])
 
 
