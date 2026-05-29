@@ -1,7 +1,8 @@
 import { NODE_SIZES, nodeKindFromType } from "./layout";
 
 /** The 8 backend NodeType values, with friendly labels for the Type dropdown.
- * Kept in sync with the backend NodeUpdate/NodeCreate allow-list regex. */
+ * Canonical source: `NodeType` in backend/app/enums.py (the NodeUpdate/NodeCreate
+ * allow-list regex is derived from it). Keep this list in sync with that enum. */
 export const NODE_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: "task", label: "Task" },
   { value: "subprocess", label: "Subprocess" },

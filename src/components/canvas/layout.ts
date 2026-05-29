@@ -74,7 +74,7 @@ export function buildCanvasState(graph: ProcessGraph): {
       id: l.id,
       label: l.name,
       color: l.color ?? LANE_PALETTE[i % LANE_PALETTE.length],
-      collapsed: l.collapsed ?? false,
+      collapsed: l.collapsed,
       y: runningY,
       h,
     });
