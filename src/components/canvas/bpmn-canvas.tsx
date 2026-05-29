@@ -1536,6 +1536,7 @@ function BpmnCanvas({
           id: created.id,
           label: created.name,
           color: LANE_PALETTE[atIndex % LANE_PALETTE.length],
+          collapsed: false,
           y: 0,
           h: created.height_px,
         };
