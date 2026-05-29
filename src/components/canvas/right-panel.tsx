@@ -473,6 +473,7 @@ function VersionsTab({
     mutationFn: (vars: { sourceId: UUID; note: string }) =>
       api.copyVersion(projectId, modelId, vars.sourceId, vars.note),
     onSuccess: (newVersion) => {
+      setDiffFrom(null);
       queryClient.invalidateQueries({ queryKey: ["versions", projectId, modelId] });
       onNavigateVersion?.(newVersion.id);
     },
@@ -490,6 +491,14 @@ function VersionsTab({
     return <div className="px-3 py-3 text-[11px] text-slate-400">Loading versions…</div>;
   }
 
+  if (versionsQuery.isError) {
+    return (
+      <div className="px-3 py-3 text-[11px] text-rose-600">
+        Couldn't load versions.
+      </div>
+    );
+  }
+
   return (
     <div className="h-full overflow-y-auto px-3 py-3">
       <div className="mb-3 flex items-center justify-between">
@@ -497,6 +506,7 @@ function VersionsTab({
           Version History
         </div>
         <button
+          type="button"
           onClick={branchFromCurrent}
           disabled={copyMutation.isPending}
           title="Branch from the current version"
@@ -506,6 +516,12 @@ function VersionsTab({
           Branch
         </button>
       </div>
+
+      {copyMutation.isError && (
+        <div className="mb-2 rounded bg-rose-50 px-2 py-1 text-[10px] text-rose-700">
+          Couldn't create the version. Try again.
+        </div>
+      )}
 
       <div className="space-y-1.5">
         {rows
@@ -526,6 +542,11 @@ function VersionsTab({
               onDiff={() => setDiffFrom(row.version.id)}
             />
           ))}
+        {rows.length === 0 && (
+          <div className="py-8 text-center text-[11px] text-slate-400">
+            No versions yet.
+          </div>
+        )}
       </div>
 
       {diffFrom && (
@@ -619,14 +640,7 @@ function VersionRow({
           {!isCurrent && (
             <RowButton icon={<Eye size={10} />} label="Open" onClick={onOpen} disabled={busy} />
           )}
-          {isCurrent ? (
-            <RowButton
-              icon={<GitBranch size={10} />}
-              label="Branch"
-              onClick={() => onCopy(`Branched from v${v.version_number}`)}
-              disabled={busy}
-            />
-          ) : (
+          {!isCurrent && (
             <RowButton
               icon={<RotateCcw size={10} />}
               label="Restore"
@@ -661,6 +675,7 @@ function RowButton({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       className="flex items-center gap-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
@@ -701,6 +716,7 @@ function DiffPanel({
           v{fromLabel} → v{toLabel}
         </div>
         <button
+          type="button"
           onClick={onClose}
           className="text-[10px] font-semibold text-slate-500 hover:text-slate-800"
         >
