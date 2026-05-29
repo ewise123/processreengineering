@@ -494,7 +494,7 @@ export function LaneRail({
               </div>
             )}
 
-            {!isDragging && (
+            {!isDragging && !collapsedLaneIds.has(lane.id) && (
               <div
                 onMouseDown={(e) => {
                   e.preventDefault();

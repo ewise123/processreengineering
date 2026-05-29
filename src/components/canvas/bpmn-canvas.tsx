@@ -895,7 +895,14 @@ function BpmnCanvas({
               (n.laneId
                 ? currLanes.find((l) => l.id === n.laneId)
                 : currLanes[0]);
-            if (!targetLane) return { ...n, x: newX };
+            // Never re-lane into a collapsed (hidden) lane: maxRel would be 0,
+            // stranding the node in the 28px strip and clobbering its real
+            // relativeY. (Real lanes are >= MIN_LANE_HEIGHT (90); only a
+            // collapsed display-lane has h === COLLAPSED_LANE_HEIGHT.) Keep the
+            // node's current lane/relativeY; only x changes.
+            if (!targetLane || targetLane.h === COLLAPSED_LANE_HEIGHT) {
+              return { ...n, x: newX };
+            }
             const maxRel = Math.max(0, targetLane.h - n.h);
             const rel = Math.max(0, Math.min(maxRel, targetAbsY - targetLane.y));
             return { ...n, x: newX, laneId: targetLane.id, relativeY: rel };
