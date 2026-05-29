@@ -1550,6 +1550,31 @@ function BpmnCanvas({
     [renameLaneLocal, record]
   );
 
+  const setLaneColorLocal = useCallback(
+    (laneId: string, color: string) => {
+      setLanes((curr) =>
+        curr.map((l) => (l.id === laneId ? { ...l, color } : l))
+      );
+      markLane(laneId, { color });
+    },
+    [markLane]
+  );
+
+  const setLaneColor = useCallback(
+    (laneId: string, color: string) => {
+      const old = lanesRef.current.find((l) => l.id === laneId);
+      if (!old || old.color === color) return;
+      const oldColor = old.color;
+      setLaneColorLocal(laneId, color);
+      record({
+        description: "Set lane color",
+        do: () => setLaneColorLocal(laneId, color),
+        undo: () => setLaneColorLocal(laneId, oldColor),
+      });
+    },
+    [setLaneColorLocal, record]
+  );
+
   const addLaneAt = useCallback(
     async (atIndex: number) => {
       // Flush pending lane patches before mutating the lane set so we don't
@@ -1819,6 +1844,7 @@ function BpmnCanvas({
         onRenameLane={renameLane}
         onAddLaneAt={addLaneAt}
         onDeleteLane={deleteLane}
+        onSetColor={setLaneColor}
         collapsedLaneIds={collapsedLaneIds}
         onToggleCollapse={toggleLaneCollapse}
       />
