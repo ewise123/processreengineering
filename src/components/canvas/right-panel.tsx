@@ -8,8 +8,8 @@
  * `flex-1` plus its label. The whole panel can also collapse to a vertical
  * icon rail.
  *
- * Versions and Review are intentionally minimal until backend tracking
- * lands — UI is in place so users can see where those features will live.
+ * Versions is intentionally minimal until backend tracking lands — UI is in
+ * place so users can see where that feature will live.
  */
 
 import {

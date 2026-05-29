@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.v2.deps import get_current_user, get_project_or_404
+from app.api.v2.reviews import _recompute_version_status
 from app.db.session import get_db
 from app.enums import (
     ClaimLinkKind,
@@ -669,6 +670,7 @@ def delete_node(
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     _check_node_in_project(node, project.id, db)
+    version_id = node.version_id
     db.execute(
         delete(Review).where(
             Review.target_type == ReviewTargetType.PROCESS_NODE.value,
@@ -676,6 +678,13 @@ def delete_node(
         )
     )
     db.delete(node)
+    db.flush()
+    # Removing a node changes the approved/total ratio, so re-evaluate whether
+    # the version's review lifecycle should advance (e.g. deleting the last
+    # pending node of a requested version completes the sign-off).
+    version = db.get(ProcessVersion, version_id)
+    if version is not None:
+        _recompute_version_status(db, version)
     db.commit()
 
 

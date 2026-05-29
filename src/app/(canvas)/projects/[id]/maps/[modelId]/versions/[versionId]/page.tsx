@@ -96,9 +96,14 @@ export default function CanvasPage() {
   const handleNodeDeleted = useCallback(
     (_id: UUID) => {
       setSelected({ kind: "none" });
-      queryClient.invalidateQueries({
-        queryKey: ["issues", params.id, params.modelId, params.versionId],
-      });
+      // A delete changes issue badges, the graph node set, and the review
+      // rollup (counts/buckets/meter) — refresh all three so no surface
+      // counts a node that no longer exists.
+      for (const key of ["issues", "graph", "review"]) {
+        queryClient.invalidateQueries({
+          queryKey: [key, params.id, params.modelId, params.versionId],
+        });
+      }
     },
     [queryClient, params.id, params.modelId, params.versionId]
   );
