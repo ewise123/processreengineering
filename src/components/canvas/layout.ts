@@ -3,7 +3,7 @@ import dagre from "@dagrejs/dagre";
 import type { ProcessGraph } from "@/lib/types";
 import type { CanvasEdge, CanvasLane, CanvasNode, CanvasNodeKind } from "./types";
 
-const NODE_SIZES: Record<CanvasNodeKind, { w: number; h: number }> = {
+export const NODE_SIZES: Record<CanvasNodeKind, { w: number; h: number }> = {
   start: { w: 50, h: 50 },
   end: { w: 50, h: 50 },
   intermediate: { w: 50, h: 50 },
@@ -17,7 +17,7 @@ const NODE_SIZES: Record<CanvasNodeKind, { w: number; h: number }> = {
   receive: { w: 170, h: 64 },
 };
 
-const LANE_PALETTE = [
+export const LANE_PALETTE = [
   "#dbeafe", // blue
   "#dcfce7", // green
   "#fef9c3", // yellow
@@ -31,7 +31,7 @@ const LANE_PALETTE = [
 export const LANE_HEIGHT = 150;
 const LANE_PADDING_LEFT = 110; // gap between lane header strip and first node
 
-function nodeKindFromType(type: string): CanvasNodeKind {
+export function nodeKindFromType(type: string): CanvasNodeKind {
   switch (type) {
     case "event_start":
       return "start";
@@ -73,7 +73,8 @@ export function buildCanvasState(graph: ProcessGraph): {
     lanes.push({
       id: l.id,
       label: l.name,
-      color: LANE_PALETTE[i % LANE_PALETTE.length],
+      color: l.color ?? LANE_PALETTE[i % LANE_PALETTE.length],
+      collapsed: l.collapsed ?? false,
       y: runningY,
       h,
     });
