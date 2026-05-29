@@ -641,8 +641,9 @@ function BpmnCanvas({
       });
       return;
     }
-    if (e.shiftKey) {
-      // Shift-click toggles this node in the selection without starting a drag.
+    if (tool === "select" && e.shiftKey) {
+      // Shift-click (Select tool) toggles this node in the selection without
+      // starting a drag. In Connect mode, fall through so body-drag still connects.
       toggleSelection(id);
       return;
     }
@@ -948,7 +949,7 @@ function BpmnCanvas({
       }
       if (drag.type === "marquee") {
         const rect = normalizeMarquee(drag.startX, drag.startY, drag.currX, drag.currY);
-        const moved = rect.w * rect.w + rect.h * rect.h > 16; // >4px in world space
+        const moved = rect.w * rect.w + rect.h * rect.h > 16; // >4 world units (≈4px at 1.0 zoom)
         if (!moved) {
           if (!drag.additive) clearSelection();
         } else {
