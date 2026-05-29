@@ -4,7 +4,7 @@ export interface TreeRow {
   version: VersionSummary;
   /** 0-based column for this version's dot in the commit-graph rail. */
   column: number;
-  /** Column of this version's parent (for drawing the connector); null if root. */
+  /** Column of this version's parent (for drawing the connector); null if root or parent not in this set. */
   parentColumn: number | null;
 }
 

@@ -66,4 +66,11 @@ describe("buildVersionRows", () => {
     const rows = buildVersionRows([v("c", 3, "b"), v("a", 1, null), v("b", 2, "a")]);
     expect(rows.map((r) => r.version.version_number)).toEqual([1, 2, 3]);
   });
+
+  it("treats a version whose parent is not in the input set as a root", () => {
+    const rows = buildVersionRows([v("b", 2, "a"), v("c", 3, "b")]);
+    // "a" is absent, so b is a root (column 0, null parent); c inherits b's column.
+    expect(rows.map((r) => r.column)).toEqual([0, 0]);
+    expect(rows[0].parentColumn).toBeNull();
+  });
 });
