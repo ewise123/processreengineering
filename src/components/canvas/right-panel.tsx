@@ -39,7 +39,6 @@ import type {
   ChatTurn,
   InputRow,
   NodeIssue,
-  ProcessVersion,
   ReviewState,
   UUID,
 } from "@/lib/types";
@@ -75,7 +74,6 @@ export function RightPanel({
   projectId,
   modelId,
   versionId,
-  version,
   nodes,
   selected,
   onFocusNode,
@@ -89,7 +87,6 @@ export function RightPanel({
   projectId: UUID;
   modelId: UUID;
   versionId: UUID;
-  version: ProcessVersion | null;
   nodes: { id: UUID; name: string; type: string; lane_id: UUID | null }[];
   selected: SelectedRef | null;
   /** Sets the canvas selection. Used by Issues "→ Node" links. */

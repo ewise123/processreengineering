@@ -384,6 +384,10 @@ def diff_versions(
         ],
     )
 
+    # Lanes are matched by name only (no lane lineage id). A renamed lane
+    # therefore shows as add+remove, and its nodes fall into "moved" (old
+    # name -> new name). Acceptable for a heuristic diff; the fix would mirror
+    # the node `canon` pairing used for edges.
     a_lane_names = {l.name for l in a_lanes}
     b_lane_names = {l.name for l in b_lanes}
     lane_diff = LaneDiff(

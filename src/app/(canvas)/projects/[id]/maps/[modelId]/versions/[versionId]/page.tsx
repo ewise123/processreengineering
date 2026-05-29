@@ -394,7 +394,6 @@ export default function CanvasPage() {
             projectId={params.id}
             modelId={params.modelId}
             versionId={params.versionId}
-            version={data.version}
             nodes={data.nodes.map((n) => ({
               id: n.id,
               name: n.name,
