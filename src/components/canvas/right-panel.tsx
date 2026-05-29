@@ -15,10 +15,13 @@
 import {
   ChevronLeft,
   ChevronRight,
+  Eye,
   FileText,
   GitBranch,
+  GitCompare,
   Link2,
   MessageSquare,
+  RotateCcw,
   ShieldCheck,
   TriangleAlert,
 } from "lucide-react";
@@ -29,7 +32,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
 import type {
@@ -39,7 +42,11 @@ import type {
   ProcessVersion,
   ReviewState,
   UUID,
+  VersionDiff,
+  VersionSummary,
 } from "@/lib/types";
+import { buildVersionRows, type TreeRow } from "./version-tree";
+import { diffChangeCount, isEmptyDiff } from "./version-diff";
 import { bucketNodes, reviewByNodeMap } from "./review-summary";
 
 type TabId = "chat" | "versions" | "issues" | "review" | "sources";
@@ -76,6 +83,7 @@ export function RightPanel({
   onFocusNode,
   reviewState,
   onSendRequest,
+  onNavigateVersion,
   collapsed,
   onCollapsedChange,
   initialTab = "chat",
@@ -90,6 +98,7 @@ export function RightPanel({
   onFocusNode: (id: UUID) => void;
   reviewState?: ReviewState;
   onSendRequest: () => void;
+  onNavigateVersion?: (versionId: UUID) => void;
   /** Controlled collapse state — the page lifts this so the Properties
    * panel can shift when the right panel collapses. */
   collapsed: boolean;
@@ -223,7 +232,14 @@ export function RightPanel({
             selected={selected}
           />
         )}
-        {tab === "versions" && <VersionsTab version={version} />}
+        {tab === "versions" && (
+          <VersionsTab
+            projectId={projectId}
+            modelId={modelId}
+            versionId={versionId}
+            onNavigateVersion={onNavigateVersion}
+          />
+        )}
         {tab === "issues" && (
           <IssuesTab
             issues={issues}
@@ -426,7 +442,56 @@ function ChatMsg({ turn }: { turn: ChatTurn }) {
 }
 
 // ─── Versions tab ───────────────────────────────────────────
-function VersionsTab({ version }: { version: ProcessVersion | null }) {
+const COL_WIDTH = 16; // px per commit-graph column
+const ROW_DOT_R = 4;
+
+function VersionsTab({
+  projectId,
+  modelId,
+  versionId,
+  onNavigateVersion,
+}: {
+  projectId: UUID;
+  modelId: UUID;
+  versionId: UUID;
+  onNavigateVersion?: (versionId: UUID) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [diffFrom, setDiffFrom] = useState<UUID | null>(null);
+
+  const versionsQuery = useQuery({
+    queryKey: ["versions", projectId, modelId],
+    queryFn: () => api.listVersions(projectId, modelId),
+  });
+  const versions = versionsQuery.data ?? [];
+  const rows = buildVersionRows(versions);
+  const latestNumber = versions.reduce(
+    (max, v) => Math.max(max, v.version_number),
+    0
+  );
+  const columnCount = rows.reduce((m, r) => Math.max(m, r.column + 1), 1);
+
+  const copyMutation = useMutation({
+    mutationFn: (vars: { sourceId: UUID; note: string }) =>
+      api.copyVersion(projectId, modelId, vars.sourceId, vars.note),
+    onSuccess: (newVersion) => {
+      queryClient.invalidateQueries({ queryKey: ["versions", projectId, modelId] });
+      onNavigateVersion?.(newVersion.id);
+    },
+  });
+
+  const branchFromCurrent = () => {
+    const current = versions.find((v) => v.id === versionId);
+    copyMutation.mutate({
+      sourceId: versionId,
+      note: current ? `Branched from v${current.version_number}` : "Branch",
+    });
+  };
+
+  if (versionsQuery.isLoading) {
+    return <div className="px-3 py-3 text-[11px] text-slate-400">Loading versions…</div>;
+  }
+
   return (
     <div className="h-full overflow-y-auto px-3 py-3">
       <div className="mb-3 flex items-center justify-between">
@@ -434,53 +499,269 @@ function VersionsTab({ version }: { version: ProcessVersion | null }) {
           Version History
         </div>
         <button
-          disabled
-          title="Branching coming soon"
-          className="rounded bg-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-500"
+          onClick={branchFromCurrent}
+          disabled={copyMutation.isPending}
+          title="Branch from the current version"
+          className="flex items-center gap-1 rounded bg-slate-800 px-2 py-1 text-[10px] font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
         >
-          + Branch
+          <GitBranch size={11} />
+          Branch
         </button>
       </div>
 
-      <div className="mb-4">
-        <div className="mb-1.5 flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" />
-          <span className="text-[11px] font-bold text-slate-800">main</span>
+      <div className="space-y-1.5">
+        {rows
+          .slice()
+          .reverse()
+          .map((row) => (
+            <VersionRow
+              key={row.version.id}
+              row={row}
+              columnCount={columnCount}
+              isCurrent={row.version.id === versionId}
+              isLatest={row.version.version_number === latestNumber}
+              busy={copyMutation.isPending}
+              onOpen={() => onNavigateVersion?.(row.version.id)}
+              onCopy={(note) =>
+                copyMutation.mutate({ sourceId: row.version.id, note })
+              }
+              onDiff={() => setDiffFrom(row.version.id)}
+            />
+          ))}
+      </div>
+
+      {diffFrom && (
+        <DiffPanel
+          projectId={projectId}
+          modelId={modelId}
+          fromId={diffFrom}
+          toId={versionId}
+          fromLabel={
+            versions.find((v) => v.id === diffFrom)?.version_number ?? "?"
+          }
+          toLabel={
+            versions.find((v) => v.id === versionId)?.version_number ?? "?"
+          }
+          onClose={() => setDiffFrom(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function VersionRow({
+  row,
+  columnCount,
+  isCurrent,
+  isLatest,
+  busy,
+  onOpen,
+  onCopy,
+  onDiff,
+}: {
+  row: TreeRow;
+  columnCount: number;
+  isCurrent: boolean;
+  isLatest: boolean;
+  busy: boolean;
+  onOpen: () => void;
+  onCopy: (note: string) => void;
+  onDiff: () => void;
+}) {
+  const v = row.version;
+  const railWidth = columnCount * COL_WIDTH;
+  return (
+    <div
+      className={`flex gap-2 rounded-md border px-2 py-1.5 ${
+        isCurrent ? "border-slate-800 bg-slate-50" : "border-slate-200 bg-white"
+      }`}
+    >
+      <svg width={railWidth} height={44} className="flex-shrink-0">
+        {row.parentColumn !== null && (
+          <line
+            x1={row.column * COL_WIDTH + COL_WIDTH / 2}
+            y1={ROW_DOT_R + 2}
+            x2={row.parentColumn * COL_WIDTH + COL_WIDTH / 2}
+            y2={44}
+            stroke="#cbd5e1"
+            strokeWidth={1.5}
+          />
+        )}
+        <circle
+          cx={row.column * COL_WIDTH + COL_WIDTH / 2}
+          cy={ROW_DOT_R + 6}
+          r={ROW_DOT_R}
+          fill={isCurrent ? "#1e293b" : "#94a3b8"}
+        />
+      </svg>
+
+      <div className="min-w-0 flex-1">
+        <div className="mb-0.5 flex items-center gap-1.5">
+          <span className="font-mono text-[10px] text-slate-400">
+            v{v.version_number}
+          </span>
+          {isLatest && (
+            <span className="rounded bg-emerald-100 px-1 py-px text-[9px] font-bold text-emerald-700">
+              latest
+            </span>
+          )}
+          <span className="rounded bg-slate-200 px-1 py-px text-[9px] font-bold text-slate-700">
+            {v.status}
+          </span>
+          <span className="text-[9px] text-slate-400">{v.node_count} nodes</span>
         </div>
-        <div className="ml-1 space-y-1.5 border-l-2 border-slate-200 pl-3">
-          {version ? (
-            <div className="relative rounded-md border border-slate-300 bg-slate-100 px-2 py-1.5">
-              <div className="absolute -left-[17px] top-2.5 h-2 w-2 rounded-full border-2 border-slate-400 bg-white" />
-              <div className="mb-0.5 flex items-center gap-1.5">
-                <span className="font-mono text-[10px] text-slate-400">
-                  v{version.version_number}
-                </span>
-                <span className="rounded bg-emerald-100 px-1 py-px text-[9px] font-bold text-emerald-700">
-                  HEAD
-                </span>
-                <span className="rounded bg-slate-200 px-1 py-px text-[9px] font-bold text-slate-700">
-                  {version.status}
-                </span>
-              </div>
-              <div className="text-[11px] leading-snug text-slate-800">
-                Initial map generation
-              </div>
-              <div className="mt-0.5 text-[10px] text-slate-400">
-                {new Date(version.created_at).toLocaleString()}
-              </div>
-            </div>
+        <div className="truncate text-[11px] leading-snug text-slate-800">
+          {v.notes ?? "—"}
+        </div>
+        <div className="mt-0.5 text-[10px] text-slate-400">
+          {new Date(v.created_at).toLocaleString()}
+        </div>
+
+        <div className="mt-1 flex flex-wrap gap-1">
+          {!isCurrent && (
+            <RowButton icon={<Eye size={10} />} label="Open" onClick={onOpen} disabled={busy} />
+          )}
+          {isCurrent ? (
+            <RowButton
+              icon={<GitBranch size={10} />}
+              label="Branch"
+              onClick={() => onCopy(`Branched from v${v.version_number}`)}
+              disabled={busy}
+            />
           ) : (
-            <div className="text-[11px] italic text-slate-400">
-              No versions yet
-            </div>
+            <RowButton
+              icon={<RotateCcw size={10} />}
+              label="Restore"
+              onClick={() => onCopy(`Restored from v${v.version_number}`)}
+              disabled={busy}
+            />
+          )}
+          {!isCurrent && (
+            <RowButton
+              icon={<GitCompare size={10} />}
+              label="Diff vs current"
+              onClick={onDiff}
+              disabled={busy}
+            />
           )}
         </div>
       </div>
+    </div>
+  );
+}
 
-      <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-600">
-        Branching, commits, and merge tooling are coming. For now you can see
-        the active version above.
+function RowButton({
+  icon,
+  label,
+  onClick,
+  disabled,
+}: {
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="flex items-center gap-1 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function DiffPanel({
+  projectId,
+  modelId,
+  fromId,
+  toId,
+  fromLabel,
+  toLabel,
+  onClose,
+}: {
+  projectId: UUID;
+  modelId: UUID;
+  fromId: UUID;
+  toId: UUID;
+  fromLabel: number | string;
+  toLabel: number | string;
+  onClose: () => void;
+}) {
+  const diffQuery = useQuery({
+    queryKey: ["version-diff", projectId, modelId, fromId, toId],
+    queryFn: () => api.getVersionDiff(projectId, modelId, fromId, toId),
+  });
+  const d = diffQuery.data;
+
+  return (
+    <div className="mt-4 rounded-md border border-slate-300 bg-slate-50 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+          v{fromLabel} → v{toLabel}
+        </div>
+        <button
+          onClick={onClose}
+          className="text-[10px] font-semibold text-slate-500 hover:text-slate-800"
+        >
+          Close
+        </button>
       </div>
+      {diffQuery.isLoading && (
+        <div className="text-[11px] text-slate-400">Computing diff…</div>
+      )}
+      {d && isEmptyDiff(d) && (
+        <div className="text-[11px] italic text-slate-500">No structural changes.</div>
+      )}
+      {d && !isEmptyDiff(d) && (
+        <div className="space-y-1.5 text-[11px]">
+          <DiffGroup color="text-emerald-700" label="Added" items={d.nodes.added.map((n) => n.name)} />
+          <DiffGroup color="text-rose-700" label="Removed" items={d.nodes.removed.map((n) => n.name)} />
+          <DiffGroup
+            color="text-amber-700"
+            label="Renamed"
+            items={d.nodes.renamed.map((n) => `${n.from_name} → ${n.name}`)}
+          />
+          <DiffGroup
+            color="text-sky-700"
+            label="Moved"
+            items={d.nodes.moved.map((n) => `${n.name}: ${n.from_lane} → ${n.to_lane}`)}
+          />
+          <div className="pt-1 text-[10px] text-slate-400">
+            edges +{d.edges.added.length}/−{d.edges.removed.length} ·
+            lanes +{d.lanes.added.length}/−{d.lanes.removed.length} ·
+            {d.nodes.unchanged_count} unchanged · {diffChangeCount(d)} changes
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiffGroup({
+  color,
+  label,
+  items,
+}: {
+  color: string;
+  label: string;
+  items: string[];
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div>
+      <span className={`font-semibold ${color}`}>
+        {label} ({items.length})
+      </span>
+      <ul className="ml-3 list-disc text-slate-700">
+        {items.map((it, i) => (
+          <li key={i} className="truncate">
+            {it}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
