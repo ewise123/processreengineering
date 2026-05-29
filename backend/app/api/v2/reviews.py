@@ -117,8 +117,7 @@ def _recompute_version_status(db: Session, version: ProcessVersion) -> None:
     vr = _version_review(db, version.id)
     if total > 0 and approved == total and vr is not None:
         version.status = ProcessVersionStatus.APPROVED.value
-        if vr is not None:
-            vr.status = ReviewStatus.APPROVED.value
+        vr.status = ReviewStatus.APPROVED.value
     elif vr is not None:
         version.status = ProcessVersionStatus.REVIEW.value
         vr.status = ReviewStatus.REQUESTED.value

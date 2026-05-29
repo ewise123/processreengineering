@@ -116,3 +116,17 @@ def test_change_request_keeps_version_in_review(client, db):
     client.patch(f"/api/v2/projects/{proj.id}/nodes/{nodes[1].id}/review", json={"status": "changes_requested"})
     body = client.get(_state_url(proj, model, version)).json()
     assert body["version_status"] == "review"
+
+
+def test_approved_version_deapproves_on_change_request(client, db):
+    # Once a fully-approved version gets a change request on any node, it must
+    # fall back from `approved` to `review` (the recompute else-branch).
+    proj, model, version, nodes = _seed(db)
+    client.post(f"{_state_url(proj, model, version)}/request")
+    for nd in nodes:
+        client.patch(f"/api/v2/projects/{proj.id}/nodes/{nd.id}/review", json={"status": "approved"})
+    assert client.get(_state_url(proj, model, version)).json()["version_status"] == "approved"
+    client.patch(f"/api/v2/projects/{proj.id}/nodes/{nodes[0].id}/review", json={"status": "changes_requested"})
+    body = client.get(_state_url(proj, model, version)).json()
+    assert body["version_status"] == "review"
+    assert body["request_status"] == "requested"
