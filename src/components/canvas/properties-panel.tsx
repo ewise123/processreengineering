@@ -15,6 +15,7 @@ import type {
   CitationDetail,
   NodeIssueDetail,
   ProcessLane,
+  ReviewDecision,
   UUID,
 } from "@/lib/types";
 
@@ -36,6 +37,7 @@ export function PropertiesPanel({
   onCollapsedChange,
   onDelete,
   onUpdate,
+  review,
 }: {
   projectId: UUID;
   selected: SelectedNode;
@@ -49,6 +51,11 @@ export function PropertiesPanel({
     id: UUID,
     patch: { name?: string; laneId?: UUID; type?: string }
   ) => Promise<void> | void;
+  review?: {
+    status: ReviewDecision | null;
+    onApprove: () => void;
+    onRequestChange: (note?: string) => void;
+  };
 }) {
   const { data, isLoading } = useQuery({
     queryKey: ["node-citations", projectId, selected.id],
@@ -66,6 +73,8 @@ export function PropertiesPanel({
   const [issuesExpanded, setIssuesExpanded] = useState(true);
   const [provenanceExpanded, setProvenanceExpanded] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  const [changeNote, setChangeNote] = useState("");
+  const [showChangeNote, setShowChangeNote] = useState(false);
 
   // Local label state lets the input feel responsive while debouncing the
   // PATCH until blur/Enter. Reset whenever the selection changes.
@@ -322,29 +331,63 @@ export function PropertiesPanel({
         <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
           Stakeholder Review
         </div>
-        <div className="mb-2 text-[11px] italic text-slate-400">
-          Not yet assigned.
+        <div className="mb-2 text-[11px] italic">
+          {review?.status === "approved" ? (
+            <span className="text-emerald-600">Approved</span>
+          ) : review?.status === "changes_requested" ? (
+            <span className="text-amber-600">Changes requested</span>
+          ) : (
+            <span className="text-slate-400">Not yet reviewed</span>
+          )}
         </div>
         <div className="flex gap-1">
           <button
-            disabled
-            className="flex-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10.5px] font-semibold text-emerald-700/60"
+            type="button"
+            disabled={!review}
+            onClick={() => review?.onApprove()}
+            className="flex-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10.5px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
           >
             Approve
           </button>
           <button
-            disabled
-            className="flex-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[10.5px] font-semibold text-rose-700/60"
+            type="button"
+            disabled={!review}
+            onClick={() => setShowChangeNote((v) => !v)}
+            className="flex-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[10.5px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
           >
             Request change
           </button>
           <button
+            type="button"
             disabled
-            className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[10.5px] font-semibold text-slate-500"
+            title="Assigning reviewers needs multi-user accounts (coming later)"
+            className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[10.5px] font-semibold text-slate-400 cursor-not-allowed"
           >
             @ Assign
           </button>
         </div>
+        {showChangeNote && review && (
+          <div className="mt-2">
+            <textarea
+              value={changeNote}
+              onChange={(e) => setChangeNote(e.target.value)}
+              placeholder="Optional note for the change request…"
+              rows={2}
+              className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px] focus:border-slate-500 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                review.onRequestChange(changeNote.trim() || undefined);
+                setChangeNote("");
+                setShowChangeNote(false);
+              }}
+              className="mt-1 w-full rounded-md bg-rose-600 px-2 py-1 text-[10.5px] font-semibold text-white hover:bg-rose-700"
+            >
+              Submit change request
+            </button>
+          </div>
+        )}
       </div>
 
       </div>{/* end scrollable body */}

@@ -4,7 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,9 +19,10 @@ import { BpmnCanvas, type BpmnCanvasHandle, type CanvasSelection } from "@/compo
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { RightPanel } from "@/components/canvas/right-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
+import { reviewByNodeMap } from "@/components/canvas/review-summary";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
-import type { IssueSeverity, UUID } from "@/lib/types";
+import type { IssueSeverity, NodeReviewUpdate, ReviewDecision, UUID } from "@/lib/types";
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
   idle: "Saved",
@@ -134,6 +135,33 @@ export default function CanvasPage() {
     for (const i of issues) out[i.node_id] = i.severity;
     return out;
   }, [issues]);
+
+  const { data: reviewState } = useQuery({
+    queryKey: ["review", params.id, params.modelId, params.versionId],
+    queryFn: () => api.getReviewState(params.id, params.modelId, params.versionId),
+    enabled: !!data,
+  });
+
+  const reviewByNode = useMemo<Record<string, ReviewDecision>>(
+    () => reviewByNodeMap(reviewState?.nodes ?? []),
+    [reviewState]
+  );
+
+  const invalidateReview = () =>
+    queryClient.invalidateQueries({
+      queryKey: ["review", params.id, params.modelId, params.versionId],
+    });
+
+  const setNodeReviewMutation = useMutation({
+    mutationFn: (vars: { nodeId: UUID; body: NodeReviewUpdate }) =>
+      api.setNodeReview(params.id, vars.nodeId, vars.body),
+    onSuccess: invalidateReview,
+  });
+
+  const requestReviewMutation = useMutation({
+    mutationFn: () => api.requestReview(params.id, params.modelId, params.versionId),
+    onSuccess: invalidateReview,
+  });
 
   const initial = useMemo(
     () => (data ? buildCanvasState(data) : null),
@@ -291,6 +319,26 @@ export default function CanvasPage() {
             onCollapsedChange={setPropertiesCollapsed}
             onDelete={handleNodeDelete}
             onUpdate={handleNodeUpdate}
+            review={
+              selectedNode
+                ? {
+                    status:
+                      reviewState?.nodes.find(
+                        (n) => n.node_id === selectedNode.id
+                      )?.status ?? null,
+                    onApprove: () =>
+                      setNodeReviewMutation.mutate({
+                        nodeId: selectedNode.id,
+                        body: { status: "approved" },
+                      }),
+                    onRequestChange: (note?: string) =>
+                      setNodeReviewMutation.mutate({
+                        nodeId: selectedNode.id,
+                        body: { status: "changes_requested", note },
+                      }),
+                  }
+                : undefined
+            }
           />
         </div>
       )}
