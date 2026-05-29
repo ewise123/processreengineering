@@ -1267,8 +1267,11 @@ function BpmnCanvas({
     (e: MouseEvent, nodeId: UUID) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!selectedIdsRef.current.has(nodeId)) selectOnly(nodeId);
-      const count = selectedIdsRef.current.size;
+      const wasSelected = selectedIdsRef.current.has(nodeId);
+      if (!wasSelected) selectOnly(nodeId);
+      // When the node wasn't already selected we just collapsed to it (size 1);
+      // otherwise the ref accurately reflects the current multi-selection.
+      const count = wasSelected ? selectedIdsRef.current.size : 1;
       const suffix = count > 1 ? ` ${count}` : "";
       setContextMenu({
         x: e.clientX,
