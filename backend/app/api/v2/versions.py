@@ -288,15 +288,17 @@ def _match_nodes(a_nodes, b_nodes) -> tuple[list, list, list]:
     return pairs, only_a, only_b
 
 
-def _edge_keys(nodes, edges) -> dict[tuple[str, str], tuple[str, str]]:
+def _edge_keys(nodes, edges, canon: dict) -> dict[tuple[str, str], tuple[str, str]]:
     # NB: parallel edges between the same node pair collapse to one key — a
     # multi-edge add/remove is treated as a single structural change. Fine for
     # a heuristic structural diff.
-    ident = {n.id: _lineage(n) or f"name:{n.name}" for n in nodes}
+    # canon maps node.id → a shared key for matched pairs (same key on both
+    # sides of the diff), so A-side and B-side edges compare correctly even
+    # when one side lacks lineage ids.
     names = {n.id: n.name for n in nodes}
     keys: dict[tuple[str, str], tuple[str, str]] = {}
     for e in edges:
-        keys[(ident[e.source_node_id], ident[e.target_node_id])] = (
+        keys[(canon[e.source_node_id], canon[e.target_node_id])] = (
             names[e.source_node_id],
             names[e.target_node_id],
         )
@@ -334,6 +336,18 @@ def diff_versions(
 
     pairs, only_a, only_b = _match_nodes(a_nodes, b_nodes)
 
+    # Unified node identity so edges compare consistently with node matching:
+    # a matched (a, b) pair shares one key; unmatched nodes get unique keys.
+    canon: dict[UUID, str] = {}
+    for a, b in pairs:
+        key = f"pair:{a.id}"
+        canon[a.id] = key
+        canon[b.id] = key
+    for n in only_a:
+        canon[n.id] = f"a:{n.id}"
+    for n in only_b:
+        canon[n.id] = f"b:{n.id}"
+
     # Renamed wins over moved: a node that changed both name and lane is reported as renamed only.
     renamed, moved = [], []
     unchanged = 0
@@ -355,8 +369,8 @@ def diff_versions(
         unchanged_count=unchanged,
     )
 
-    a_edge_keys = _edge_keys(a_nodes, a_edges)
-    b_edge_keys = _edge_keys(b_nodes, b_edges)
+    a_edge_keys = _edge_keys(a_nodes, a_edges, canon)
+    b_edge_keys = _edge_keys(b_nodes, b_edges, canon)
     edge_diff = EdgeDiff(
         added=[
             EdgeChange(source=s, target=t)

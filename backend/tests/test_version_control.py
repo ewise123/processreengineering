@@ -300,3 +300,21 @@ def test_diff_detects_edge_and_lane_changes(client, db):
     # Lane C is new in v2 → added; nothing removed.
     assert {c["name"] for c in d["lanes"]["added"]} == {"Lane C"}
     assert d["lanes"]["removed"] == []
+
+
+def test_diff_identical_copy_of_unstamped_version_has_no_changes(client, db):
+    # v1 has NO _lineage_id (pre-SP-4 style). Copy → v2 seeds lineage.
+    # The graphs are identical, so the diff must be empty on every axis —
+    # in particular edges must NOT all show as added+removed (regression).
+    proj, model, version, lanes, nodes = _seed(db)  # 2 nodes, 1 edge, no lineage
+    v2_id = client.post(_copy_url(proj, model, version), json={}).json()["id"]
+    d = client.get(_diff_url(proj, model, version.id, v2_id)).json()
+    assert d["nodes"]["added"] == []
+    assert d["nodes"]["removed"] == []
+    assert d["nodes"]["renamed"] == []
+    assert d["nodes"]["moved"] == []
+    assert d["nodes"]["unchanged_count"] == 2
+    assert d["edges"]["added"] == []
+    assert d["edges"]["removed"] == []
+    assert d["lanes"]["added"] == []
+    assert d["lanes"]["removed"] == []
