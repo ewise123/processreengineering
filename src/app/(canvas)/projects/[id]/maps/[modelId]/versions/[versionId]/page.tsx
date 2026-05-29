@@ -74,16 +74,17 @@ export default function CanvasPage() {
   );
 
   const handleNodeUpdate = useCallback(
-    async (id: UUID, patch: { name?: string; laneId?: UUID }) => {
+    async (id: UUID, patch: { name?: string; laneId?: UUID; type?: string }) => {
       if (!canvasRef.current) return;
       await canvasRef.current.updateNode(id, patch);
-      // Reflect the new label/lane in the panel without forcing a re-select.
+      // Reflect the new label/lane/type in the panel without forcing a re-select.
       setSelected((curr) =>
         curr.kind === "node" && curr.id === id
           ? {
               ...curr,
               ...(patch.name !== undefined ? { name: patch.name } : {}),
               ...(patch.laneId !== undefined ? { laneId: patch.laneId } : {}),
+              ...(patch.type !== undefined ? { type: patch.type } : {}),
             }
           : curr
       );
