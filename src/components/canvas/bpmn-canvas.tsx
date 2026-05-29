@@ -42,12 +42,15 @@ import type {
   ResolvedNode,
   Viewport,
 } from "./types";
+import { useClipboard } from "./use-clipboard";
 import { useGraphPersistence, type SaveStatus } from "./use-persistence";
 import { useUndoStack } from "./use-undo-stack";
 
 const WORLD_WIDTH_MIN = 1700;
 const WORLD_RIGHT_PADDING = 240;
 const MIN_LANE_HEIGHT = 90;
+
+const PASTE_OFFSET = 24;
 
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 2.5;
@@ -208,6 +211,7 @@ function BpmnCanvas({
   const issueCount = Object.keys(issuesMap).length;
 
   const { record, undo, redo, canUndo, canRedo } = useUndoStack();
+  const clipboard = useClipboard();
 
   const selectOnly = useCallback((id: string) => setSelectedIds(new Set([id])), []);
   const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
@@ -495,6 +499,16 @@ function BpmnCanvas({
       if (mod && (e.key === "y" || e.key === "Y")) {
         e.preventDefault();
         void redo();
+        return;
+      }
+      if (mod && (e.key === "c" || e.key === "C")) {
+        e.preventDefault();
+        copySelectionImpl();
+        return;
+      }
+      if (mod && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        void pasteClipboardImpl();
         return;
       }
 
@@ -1142,8 +1156,104 @@ function BpmnCanvas({
   );
 
   const copySelectionImpl = useCallback(() => {
-    // Wired to the clipboard in Task 11.
-  }, []);
+    const ids = new Set(
+      [...selectedIdsRef.current].filter((id) =>
+        nodesRef.current.some((n) => n.id === id)
+      )
+    );
+    if (ids.size === 0) return;
+    const nodes = nodesRef.current
+      .filter((n) => ids.has(n.id))
+      .map((n) => ({
+        oldId: n.id,
+        type: n.type,
+        kind: n.kind,
+        label: n.label,
+        laneId: n.laneId,
+        x: n.x,
+        relativeY: n.relativeY,
+        w: n.w,
+        h: n.h,
+      }));
+    const edges = edgesRef.current
+      .filter((e) => ids.has(e.from) && ids.has(e.to))
+      .map((e) => ({ fromOldId: e.from, toOldId: e.to, label: e.label }));
+    clipboard.copy({ nodes, edges });
+  }, [clipboard]);
+
+  const pasteClipboardImpl = useCallback(async () => {
+    const snap = clipboard.get();
+    if (!snap || snap.nodes.length === 0) return;
+    const fallbackLane = lanesRef.current[0];
+    const idMap = new Map<UUID, UUID>();
+    const createdNodes: CanvasNode[] = [];
+    const createdEdgeIds: UUID[] = [];
+    try {
+      for (const cn of snap.nodes) {
+        const laneId =
+          (cn.laneId && lanesRef.current.some((l) => l.id === cn.laneId)
+            ? cn.laneId
+            : fallbackLane?.id) ?? null;
+        if (!laneId) continue;
+        const created = await api.createNode(projectId, modelId, versionId, {
+          type: cn.type,
+          name: cn.label,
+          lane_id: laneId,
+          x: cn.x + PASTE_OFFSET,
+          relative_y: cn.relativeY + PASTE_OFFSET,
+        });
+        idMap.set(cn.oldId, created.id);
+        createdNodes.push({
+          id: created.id,
+          type: cn.type,
+          kind: cn.kind,
+          label: created.name,
+          laneId,
+          x: cn.x + PASTE_OFFSET,
+          relativeY: cn.relativeY + PASTE_OFFSET,
+          w: cn.w,
+          h: cn.h,
+        });
+      }
+      setNodes((curr) => [...curr, ...createdNodes]);
+      for (const ce of snap.edges) {
+        const from = idMap.get(ce.fromOldId);
+        const to = idMap.get(ce.toOldId);
+        if (!from || !to) continue;
+        const created = await api.createEdge(projectId, modelId, versionId, {
+          source_node_id: from,
+          target_node_id: to,
+          label: ce.label ?? undefined,
+        });
+        createdEdgeIds.push(created.id);
+        setEdges((curr) => [
+          ...curr,
+          { id: created.id, from, to, label: created.label ?? null },
+        ]);
+      }
+      setSelectedIds(new Set(createdNodes.map((n) => n.id)));
+      const newNodeIds = createdNodes.map((n) => n.id);
+      const newEdgeIds = [...createdEdgeIds];
+      record({
+        description: `Paste ${createdNodes.length} item${createdNodes.length > 1 ? "s" : ""}`,
+        do: () => {},
+        undo: async () => {
+          for (const id of newEdgeIds) {
+            await api.deleteEdge(projectId, id).catch(() => {});
+          }
+          for (const id of newNodeIds) {
+            await api.deleteNode(projectId, id).catch(() => {});
+          }
+          setEdges((curr) => curr.filter((e) => !newEdgeIds.includes(e.id)));
+          setNodes((curr) => curr.filter((n) => !newNodeIds.includes(n.id)));
+          setSelectedIds(new Set());
+        },
+      });
+    } catch (err) {
+      console.error("Failed to paste", err);
+      toast.error("Couldn't paste — please try again.");
+    }
+  }, [clipboard, projectId, modelId, versionId, record]);
 
   const recomputeY = (ls: CanvasLane[]): CanvasLane[] => {
     let y = 0;
