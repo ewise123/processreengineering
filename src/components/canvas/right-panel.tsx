@@ -586,7 +586,6 @@ function ReviewTab({
 }) {
   const total = reviewState?.counts.total ?? nodes.length;
   const approved = reviewState?.counts.approved ?? 0;
-  const changes = reviewState?.counts.changes_requested ?? 0;
   const pct = total === 0 ? 0 : Math.round((approved / total) * 100);
   const byNode = reviewByNodeMap(reviewState?.nodes ?? []);
   const buckets = bucketNodes(nodes, byNode);
@@ -618,9 +617,9 @@ function ReviewTab({
         </button>
       </div>
 
-      <Bucket title="Changes requested" count={changes} colorDot="bg-rose-500" items={buckets.changesRequested} onFocusNode={onFocusNode} />
+      <Bucket title="Changes requested" count={buckets.changesRequested.length} colorDot="bg-rose-500" items={buckets.changesRequested} onFocusNode={onFocusNode} />
       <Bucket title="Pending" count={buckets.pending.length} colorDot="bg-slate-400" items={buckets.pending} onFocusNode={onFocusNode} />
-      <Bucket title="Approved" count={approved} colorDot="bg-emerald-500" items={buckets.approved} onFocusNode={onFocusNode} />
+      <Bucket title="Approved" count={buckets.approved.length} colorDot="bg-emerald-500" items={buckets.approved} onFocusNode={onFocusNode} />
     </div>
   );
 }
