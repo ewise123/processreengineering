@@ -527,6 +527,8 @@ def update_node(
         node.lane_id = payload.lane_id
     if payload.name is not None:
         node.name = payload.name
+    if payload.type is not None:
+        node.type = payload.type
     if payload.x is not None or payload.relative_y is not None:
         new_position = dict(node.position or {})
         if payload.x is not None:
