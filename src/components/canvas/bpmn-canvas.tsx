@@ -214,15 +214,6 @@ function BpmnCanvas({
     y: number;
     items: ContextMenuItem[];
   } | null>(null);
-  const [collapsedLaneIds, setCollapsedLaneIds] = useState<Set<string>>(() => new Set());
-  const toggleLaneCollapse = useCallback((laneId: string) => {
-    setCollapsedLaneIds((curr) => {
-      const next = new Set(curr);
-      if (next.has(laneId)) next.delete(laneId);
-      else next.add(laneId);
-      return next;
-    });
-  }, []);
 
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
@@ -597,6 +588,28 @@ function BpmnCanvas({
   const { status, error, markNode, markLane, flush } = useGraphPersistence({
     projectId,
   });
+
+  // Lane collapse is view state, seeded from each lane's persisted `collapsed`
+  // flag and persisted back via markLane on toggle. Kept out of the undo stack.
+  const [collapsedLaneIds, setCollapsedLaneIds] = useState<Set<string>>(
+    () => new Set(initialLanes.filter((l) => l.collapsed).map((l) => l.id))
+  );
+  const collapsedLaneIdsRef = useRef(collapsedLaneIds);
+  collapsedLaneIdsRef.current = collapsedLaneIds;
+
+  const toggleLaneCollapse = useCallback(
+    (laneId: string) => {
+      const willCollapse = !collapsedLaneIdsRef.current.has(laneId);
+      setCollapsedLaneIds((curr) => {
+        const next = new Set(curr);
+        if (willCollapse) next.add(laneId);
+        else next.delete(laneId);
+        return next;
+      });
+      markLane(laneId, { collapsed: willCollapse });
+    },
+    [markLane]
+  );
 
   // Notify parent of save state transitions for UI indicator.
   useEffect(() => {
