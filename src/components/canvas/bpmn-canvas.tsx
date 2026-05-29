@@ -20,7 +20,8 @@ import type { IssueSeverity, UUID } from "@/lib/types";
 import { CanvasContextMenu, type ContextMenuItem } from "./canvas-context-menu";
 import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
-import { LANE_HEIGHT } from "./layout";
+import { LANE_HEIGHT, nodeKindFromType } from "./layout";
+import { sizeForNodeType } from "./node-type";
 import { normalizeMarquee, nodesInMarquee } from "./selection";
 import {
   PALETTE_DRAG_MIME,
@@ -138,7 +139,7 @@ function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
 
 export type CanvasSelection =
   | { kind: "none" }
-  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; laneId?: UUID | null }
+  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; type?: string; laneId?: UUID | null }
   | { kind: "edge"; id: UUID }
   | { kind: "multi"; nodeIds: UUID[]; edgeIds: UUID[] };
 
@@ -150,7 +151,7 @@ export interface BpmnCanvasHandle {
    * canvas (e.g. the Properties panel). Records an undo entry. */
   updateNode: (
     id: UUID,
-    patch: { name?: string; laneId?: UUID }
+    patch: { name?: string; laneId?: UUID; type?: string }
   ) => Promise<void>;
   /** Select a node (drives Properties panel + chat context) from outside
    * the canvas, e.g. clicking a node link in the Issues tab. */
@@ -292,13 +293,40 @@ function BpmnCanvas({
     [projectId]
   );
 
+  const applyNodeTypeLocal = useCallback(
+    async (id: UUID, newType: string) => {
+      const kind = nodeKindFromType(newType);
+      const size = sizeForNodeType(newType);
+      setNodes((curr) =>
+        curr.map((n) =>
+          n.id === id
+            ? { ...n, type: newType, kind, w: size.w, h: size.h }
+            : n
+        )
+      );
+      await api.updateNode(projectId, id, { type: newType });
+    },
+    [projectId]
+  );
+
   const updateNodeImpl = useCallback(
     async (
       id: UUID,
-      patch: { name?: string; laneId?: UUID }
+      patch: { name?: string; laneId?: UUID; type?: string }
     ) => {
       const old = nodesRef.current.find((n) => n.id === id);
       if (!old) return;
+      if (patch.type !== undefined && patch.type !== old.type) {
+        const newType = patch.type;
+        const oldType = old.type;
+        await applyNodeTypeLocal(id, newType);
+        record({
+          description: "Change node type",
+          do: () => applyNodeTypeLocal(id, newType),
+          undo: () => applyNodeTypeLocal(id, oldType),
+        });
+        return;
+      }
       const oldName = old.label;
       const oldLaneId = old.laneId;
       const oldRelativeY = old.relativeY;
@@ -327,7 +355,7 @@ function BpmnCanvas({
         undo: () => applyNodeEditLocal(id, prev),
       });
     },
-    [applyNodeEditLocal, record]
+    [applyNodeEditLocal, applyNodeTypeLocal, record]
   );
 
   const deleteEdgeImpl = useCallback(
@@ -592,6 +620,7 @@ function BpmnCanvas({
           id,
           name: node.label,
           nodeKind: node.kind,
+          type: node.type,
           laneId: node.laneId,
         });
       } else {
