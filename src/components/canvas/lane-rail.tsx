@@ -457,11 +457,13 @@ export function LaneRail({
                   >
                     {LANE_PALETTE.map((c) => {
                       const active =
-                        (lane.color ?? "").toLowerCase() === c.toLowerCase();
+                        lane.color.toLowerCase() === c.toLowerCase();
                       return (
                         <button
                           key={c}
+                          type="button"
                           title={c}
+                          aria-label={`Lane color ${c}`}
                           onClick={() => {
                             onSetColor(lane.id, c);
                             setMenuFor(null);
@@ -500,7 +502,8 @@ export function LaneRail({
                       +
                       <input
                         type="color"
-                        value={lane.color ?? "#dbeafe"}
+                        aria-label="Custom lane color"
+                        value={lane.color}
                         onChange={(e) => onSetColor(lane.id, e.target.value)}
                         style={{
                           position: "absolute",
