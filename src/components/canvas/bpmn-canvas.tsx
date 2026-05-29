@@ -533,6 +533,10 @@ function BpmnCanvas({
         if (e.key === "h" || e.key === "H") { setTool("pan"); return; }
         if (e.key === "c" || e.key === "C") { setTool("connect"); return; }
         if (e.key === "Escape") {
+          if (contextMenuRef.current) {
+            setContextMenu(null);
+            return;
+          }
           setTool("select");
           clearSelection();
           return;
@@ -559,6 +563,8 @@ function BpmnCanvas({
   edgesRef.current = edges;
   const selectedIdsRef = useRef(selectedIds);
   selectedIdsRef.current = selectedIds;
+  const contextMenuRef = useRef(contextMenu);
+  contextMenuRef.current = contextMenu;
 
   const { status, error, markNode, markLane, flush } = useGraphPersistence({
     projectId,
@@ -689,6 +695,7 @@ function BpmnCanvas({
   }, []);
 
   const onNodeMouseDown = (e: MouseEvent, id: string) => {
+    if (e.button !== 0) return;
     setContextMenu(null);
     e.stopPropagation();
     if (tool === "pan") {
@@ -736,9 +743,10 @@ function BpmnCanvas({
       return;
     }
     const groupIds = isGroupDrag
-      ? [...selectedIdsRef.current].filter((sid) =>
-          nodesRef.current.some((n) => n.id === sid)
-        )
+      ? [...selectedIdsRef.current].filter((sid) => {
+          const n = nodesRef.current.find((nn) => nn.id === sid);
+          return !!n && !(n.laneId && collapsedLaneIds.has(n.laneId));
+        })
       : [id];
     const laneById = new Map(displayLanesRef.current.map((l) => [l.id, l]));
     const members = groupIds
@@ -813,6 +821,7 @@ function BpmnCanvas({
   );
 
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
+    if (e.button !== 0) return;
     setContextMenu(null);
     const target = e.target as SVGElement;
     const isBg =
@@ -1228,45 +1237,69 @@ function BpmnCanvas({
     const snap = clipboard.get();
     if (!snap || snap.nodes.length === 0) return;
     const fallbackLane = lanesRef.current[0];
-    const idMap = new Map<UUID, UUID>();
-    const createdNodes: CanvasNode[] = [];
-    const createdEdgeIds: UUID[] = [];
-    try {
-      for (const cn of snap.nodes) {
+    // Resolve target specs ONCE (offset positions, resolved/persistable lanes).
+    const nodeSpecs = snap.nodes
+      .map((cn) => {
         const laneId =
           (cn.laneId && lanesRef.current.some((l) => l.id === cn.laneId)
             ? cn.laneId
             : fallbackLane?.id) ?? null;
-        if (!laneId) continue;
-        const created = await api.createNode(projectId, modelId, versionId, {
-          type: cn.type,
-          name: cn.label,
-          lane_id: laneId,
-          x: cn.x + PASTE_OFFSET,
-          relative_y: cn.relativeY + PASTE_OFFSET,
-        });
-        idMap.set(cn.oldId, created.id);
-        createdNodes.push({
-          id: created.id,
+        if (!laneId) return null;
+        return {
+          oldId: cn.oldId,
           type: cn.type,
           kind: cn.kind,
-          label: created.name,
+          label: cn.label,
           laneId,
           x: cn.x + PASTE_OFFSET,
           relativeY: cn.relativeY + PASTE_OFFSET,
           w: cn.w,
           h: cn.h,
+        };
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null);
+    if (nodeSpecs.length === 0) return;
+    const edgeSpecs = snap.edges;
+
+    // Ids of the currently-materialized paste; updated on each (re)create so
+    // undo always deletes the live set and redo recreates fresh ones.
+    let currentNodeIds: UUID[] = [];
+    let currentEdgeIds: UUID[] = [];
+
+    const materialize = async () => {
+      const idMap = new Map<UUID, UUID>();
+      const createdNodes: CanvasNode[] = [];
+      const createdEdgeIds: UUID[] = [];
+      for (const ns of nodeSpecs) {
+        const created = await api.createNode(projectId, modelId, versionId, {
+          type: ns.type,
+          name: ns.label,
+          lane_id: ns.laneId,
+          x: ns.x,
+          relative_y: ns.relativeY,
+        });
+        idMap.set(ns.oldId, created.id);
+        createdNodes.push({
+          id: created.id,
+          type: ns.type,
+          kind: ns.kind,
+          label: created.name,
+          laneId: ns.laneId,
+          x: ns.x,
+          relativeY: ns.relativeY,
+          w: ns.w,
+          h: ns.h,
         });
       }
       setNodes((curr) => [...curr, ...createdNodes]);
-      for (const ce of snap.edges) {
-        const from = idMap.get(ce.fromOldId);
-        const to = idMap.get(ce.toOldId);
+      for (const es of edgeSpecs) {
+        const from = idMap.get(es.fromOldId);
+        const to = idMap.get(es.toOldId);
         if (!from || !to) continue;
         const created = await api.createEdge(projectId, modelId, versionId, {
           source_node_id: from,
           target_node_id: to,
-          label: ce.label ?? undefined,
+          label: es.label ?? undefined,
         });
         createdEdgeIds.push(created.id);
         setEdges((curr) => [
@@ -1274,23 +1307,27 @@ function BpmnCanvas({
           { id: created.id, from, to, label: created.label ?? null },
         ]);
       }
-      setSelectedIds(new Set(createdNodes.map((n) => n.id)));
-      const newNodeIds = createdNodes.map((n) => n.id);
-      const newEdgeIds = [...createdEdgeIds];
+      currentNodeIds = createdNodes.map((n) => n.id);
+      currentEdgeIds = createdEdgeIds;
+      setSelectedIds(new Set(currentNodeIds));
+    };
+
+    const remove = async () => {
+      const nodeIds = currentNodeIds;
+      const edgeIds = currentEdgeIds;
+      for (const id of edgeIds) await api.deleteEdge(projectId, id).catch(() => {});
+      for (const id of nodeIds) await api.deleteNode(projectId, id).catch(() => {});
+      setEdges((curr) => curr.filter((e) => !edgeIds.includes(e.id)));
+      setNodes((curr) => curr.filter((n) => !nodeIds.includes(n.id)));
+      setSelectedIds(new Set());
+    };
+
+    try {
+      await materialize();
       record({
-        description: `Paste ${createdNodes.length} item${createdNodes.length > 1 ? "s" : ""}`,
-        do: () => {},
-        undo: async () => {
-          for (const id of newEdgeIds) {
-            await api.deleteEdge(projectId, id).catch(() => {});
-          }
-          for (const id of newNodeIds) {
-            await api.deleteNode(projectId, id).catch(() => {});
-          }
-          setEdges((curr) => curr.filter((e) => !newEdgeIds.includes(e.id)));
-          setNodes((curr) => curr.filter((n) => !newNodeIds.includes(n.id)));
-          setSelectedIds(new Set());
-        },
+        description: `Paste ${currentNodeIds.length} item${currentNodeIds.length > 1 ? "s" : ""}`,
+        do: materialize,
+        undo: remove,
       });
     } catch (err) {
       console.error("Failed to paste", err);
@@ -1359,7 +1396,7 @@ function BpmnCanvas({
           {
             label: "Select all",
             onSelect: () =>
-              setSelectedIds(new Set(nodesRef.current.map((n) => n.id))),
+              setSelectedIds(new Set(renderNodesRef.current.map((n) => n.id))),
           },
           { label: "Fit to screen", onSelect: fitToWorld },
         ],
