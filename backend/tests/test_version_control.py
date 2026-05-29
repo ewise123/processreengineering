@@ -26,11 +26,15 @@ def client(db):
     return TestClient(app)
 
 
-def _seed(db, n_nodes=2):
-    """One model, one version (v1), two lanes, n_nodes nodes, 1 edge."""
-    org = Organization(name="t"); db.add(org); db.flush()
-    user = User(email="dev@local", name="dev", org_id=org.id); db.add(user); db.flush()
-    proj = Project(name="p", org_id=org.id, status="active"); db.add(proj); db.flush()
+def _seed(db, n_nodes=2, suffix=""):
+    """One model, one version (v1), two lanes, n_nodes nodes, 1 edge.
+
+    Pass a unique ``suffix`` when seeding a second org in the same test to
+    avoid unique-constraint violations on the users.email column.
+    """
+    org = Organization(name=f"t{suffix}"); db.add(org); db.flush()
+    user = User(email=f"dev{suffix}@local", name=f"dev{suffix}", org_id=org.id); db.add(user); db.flush()
+    proj = Project(name=f"p{suffix}", org_id=org.id, status="active"); db.add(proj); db.flush()
     model = ProcessModel(project_id=proj.id, name="m", level="L1"); db.add(model); db.flush()
     version = ProcessVersion(model_id=model.id, version_number=1, status="draft")
     db.add(version); db.flush()
@@ -71,3 +75,11 @@ def test_list_versions_with_counts(client, db):
     assert row["node_count"] == 2
     assert row["lane_count"] == 2
     assert row["edge_count"] == 1
+
+
+def test_list_versions_404_for_foreign_model(client, db):
+    proj, model, version, lanes, nodes = _seed(db)
+    proj2, model2, version2, _, _ = _seed(db, suffix="2")
+    # model2 belongs to proj2, so listing it under proj must 404.
+    r = client.get(_versions_url(proj, model2))
+    assert r.status_code == 404, r.text

@@ -1,3 +1,4 @@
+"""SP-4 version-control schemas: version summaries, copy request, and diff shapes."""
 from datetime import datetime
 from uuid import UUID
 
