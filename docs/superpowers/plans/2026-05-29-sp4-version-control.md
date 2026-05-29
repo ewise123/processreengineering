@@ -1802,3 +1802,38 @@ EOF
 - **Mutations are not on the canvas undo stack.** Branch/restore navigate away; they are react-query mutations that invalidate `["versions", projectId, modelId]`, exactly like SP-3's review mutations invalidate `["review", ...]`.
 - **The route param change does the heavy lifting.** Navigating to the new version's URL re-keys the `["graph"]`/`["issues"]`/`["review"]` queries, so the canvas re-renders the new version with no extra code.
 - **Diff is structural, not visual.** It is a list of changes, not a canvas overlay. A visual side-by-side is explicitly out of scope (see the spec).
+
+---
+
+## Execution outcome
+
+_Executed 2026-05-29 via `superpowers:subagent-driven-development` (fresh implementer + spec review + code-quality review per task), on branch `sp4-version-control` (stacked on `sp3-stakeholder-review`)._
+
+**Result: complete.** All 9 tasks landed. Commit range `c93c46c … a666646` (16 commits).
+
+**Gates (final):**
+- Backend: `pytest -q` → **76 passed** (14 in `test_version_control.py`, no regressions).
+- Frontend: `tsc --noEmit` clean; `npm test` → **30 passed** (incl. version-tree 6, version-diff 4); `npm run build` clean (the `…/versions/[versionId]` route compiles).
+- Lint advisory only (pre-existing react-compiler errors unchanged).
+
+**Live API smoke (against `./run-local.sh`, real Postgres dev DB):** PASS, then dev DB restored to its original state (the two smoke versions deleted; cascade removed their 20 nodes / 18 edges / 2 lanes; model left with only v1).
+- `GET versions` → v1 with correct counts (10 nodes / 1 lane / 9 edges).
+- `POST copy` (branch) → v2 created, `parent_version_id` = v1, status draft, `bpmn_xml` + notes copied, `parent_version_id` present in the response.
+- `POST copy` again (restore-from-v1) → v3 parented on v1 (a real fork: v1 has two children).
+- `GET version-diff` v1→v2 → after the fix below, a fully empty diff (10 unchanged nodes, 0 edge/lane changes).
+
+**Bug caught by the live smoke (and missed by unit tests):** the diff reported **every edge as both added and removed** when diffing a *pre-SP-4 generated* version (nodes lack `_lineage_id`) against a *copy* of it (nodes seeded with lineage). `_match_nodes` reconciled the nodes via its name-fallback, but `_edge_keys` computed each side's endpoint identity independently (`_lineage(n) or name:…`), so the two sides never agreed. The unit tests missed it because they stamped lineage on both sides (or neither). **Fixed in `a666646`:** edge identity now reuses the `_match_nodes` pairing — matched node pairs share one canonical key, so edges compare consistently regardless of whether nodes matched by lineage or by name. Regression test `test_diff_identical_copy_of_unstamped_version_has_no_changes` reproduces the exact scenario (fails-before / passes-after). This is the strongest argument for keeping the live smoke in the loop — the heuristic-matching gap was invisible to the in-suite fixtures.
+
+**Per-task review notes (issues found + fixed before each task closed):**
+- T1: spec review caught the dropped `LINEAGE_KEY` constant (restored); added list-endpoint 404 test + schema docstring.
+- T2: code review → exposed `parent_version_id` on `ProcessVersionRead` (+ frontend type), shared `LINEAGE_KEY` via new `app/constants.py`, added an explicit edge-remap assertion.
+- T3: code review → promoted `_edge_keys` to module level, added `removed`/edge/lane diff tests. (The deeper edge-identity bug above survived this review and was only caught live.)
+- T7: spec review removed two dead type imports; code review → clear diff panel on copy, dropped the duplicate per-row Branch on the current row, added empty/error states + `type="button"`.
+
+**Deferred follow-ups (out of scope, intentionally):**
+- Merge / 3-way conflict resolution.
+- A *visual* canvas diff (this ships a structured list diff).
+- A graphical-tree polish beyond the compact column rail; column recycling for very deep fork histories.
+- Parallel edges between the same node pair collapse to one diff entry (documented in code).
+- A node that is both renamed *and* moved is reported under "renamed" only (the lane change isn't surfaced in that bucket) — documented in code.
+- Surfacing AI/`ai_proposed` provenance distinctly is SP-5, not here.
