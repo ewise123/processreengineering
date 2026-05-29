@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -88,6 +88,10 @@ class ProcessLane(IdMixin, TimestampMixin, Base):
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     height_px: Mapped[int] = mapped_column(
         Integer, nullable=False, default=150, server_default="150"
+    )
+    color: Mapped[str | None] = mapped_column(String(9), nullable=True)
+    collapsed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
 
 
