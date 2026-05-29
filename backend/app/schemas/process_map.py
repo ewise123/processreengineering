@@ -209,6 +209,7 @@ class ProcessVersionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     model_id: UUID
+    parent_version_id: UUID | None
     version_number: int
     status: str
     bpmn_xml: str | None

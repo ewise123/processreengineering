@@ -106,6 +106,17 @@ def test_copy_creates_new_version_snapshot(client, db):
     assert by_num[2]["lane_count"] == 2
     assert by_num[2]["edge_count"] == 1
 
+    new_nodes = db.scalars(
+        select(ProcessNode).where(ProcessNode.version_id == new_id)
+    ).all()
+    new_node_ids = {n.id for n in new_nodes}
+    new_edges = db.scalars(
+        select(ProcessEdge).where(ProcessEdge.version_id == new_id)
+    ).all()
+    assert len(new_edges) == 1
+    assert new_edges[0].source_node_id in new_node_ids
+    assert new_edges[0].target_node_id in new_node_ids
+
 
 def test_copy_preserves_claim_links(client, db):
     from app.models.claim import Claim

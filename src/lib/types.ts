@@ -120,6 +120,7 @@ export interface ProcessModel {
 export interface ProcessVersion {
   id: UUID;
   model_id: UUID;
+  parent_version_id: UUID | null;
   version_number: number;
   status: string;
   bpmn_xml: string | null;

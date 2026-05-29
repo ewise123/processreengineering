@@ -9,6 +9,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.v2.deps import get_current_user, get_project_or_404
 from app.api.v2.reviews import _recompute_version_status
+from app.constants import LINEAGE_KEY
 from app.db.session import get_db
 from app.enums import (
     ClaimLinkKind,
@@ -303,7 +304,7 @@ def generate_process_map(
         node_by_external_id[el["id"]] = node
     db.flush()
     for node in node_by_external_id.values():
-        node.properties = {**(node.properties or {}), "_lineage_id": str(node.id)}
+        node.properties = {**(node.properties or {}), LINEAGE_KEY: str(node.id)}
     db.flush()
 
     # 9. Derive sequence edges (mirror legacy add_flow logic, logical only — no geometry)
@@ -507,7 +508,7 @@ def create_node(
     )
     db.add(node)
     db.flush()
-    node.properties = {**node.properties, "_lineage_id": str(node.id)}
+    node.properties = {**node.properties, LINEAGE_KEY: str(node.id)}
     db.commit()
     db.refresh(node)
     return node

@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.v2.deps import get_current_user, get_project_or_404
+from app.constants import LINEAGE_KEY
 from app.db.session import get_db
 from app.enums import ProcessVersionStatus
 from app.models.identity import User
@@ -24,8 +25,6 @@ from app.models.process import (
 from app.models.project import Project
 from app.schemas.process_map import ProcessVersionRead
 from app.schemas.version import VersionCopyRequest, VersionSummaryRead
-
-LINEAGE_KEY = "_lineage_id"
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["versions"])
 
