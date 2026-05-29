@@ -1948,3 +1948,19 @@ git commit -m "test(canvas): SP-1 full-pass verification fixes"
 **Type consistency** — `CanvasSelection`, `BpmnCanvasHandle` additions (`deleteSelection`/`copySelection`/`moveSelectionToLane`), the `Drag` `node`/`marquee` variants, `ClipboardSnapshot`/`ClipboardNode`/`ClipboardEdge`, `ContextMenuItem`, and `applyGroupPositionsLocal` are defined once and referenced with matching names/signatures throughout. `copySelectionImpl` is introduced as a stub in Task 10 and filled in Task 11 (called out explicitly). `applyNodePositionLocal` is fully replaced by `applyGroupPositionsLocal` (Task 9 Step 5 notes no remaining references).
 
 **Known interim states** (acceptable, each resolved a task later): after Task 7 multi-selection is representable but has no UI (marquee lands in Task 8, bulk bar in Task 10); `copySelection` is a no-op between Tasks 10 and 11.
+
+---
+
+## Deferred follow-ups (surfaced during execution review — accepted as out-of-scope for SP-1)
+
+These were found by the per-task and final holistic reviews, judged minor/benign, and deliberately deferred. Fold into SP-2 (which already touches node/lane editing):
+
+- **Copy/paste drops edge bend routing.** `ClipboardEdge` carries only label, so pasted edges revert to auto-routing (`createEdge` takes no bend params; bends are a separate `updateEdge`). Fidelity nit. (Task 11)
+- **Context menu not clamped at viewport edges.** Right-clicking near the right/bottom edge can render the menu partly off-screen. Add a measure-and-flip or `Math.min` clamp. (Task 12)
+- **Context menu lacks a11y semantics.** Native buttons in a `div`, no `role="menu"`/`menuitem`, no arrow-key nav or focus management (Escape-close works). Acceptable for this app's lightweight affordance. (Task 12)
+- **Paste into a still-collapsed source lane** creates nodes that are immediately hidden (and selected). Consider auto-expanding the target lane on paste, or offsetting into the nearest visible lane. (final review M4)
+- **Properties panel can go stale** when a single selected node's lane/name changes via bulk move-to-lane or undo/redo (the selection effect keys only on `selectedIds` identity; the page patches only its own edits). (final review M6)
+- **Mixed bulk delete is half-undoable by design** — node deletes are non-undoable (provenance), standalone edge deletes are individually undoable; documented asymmetry. (final review M8)
+- **`selectNode`/focus on a node in a collapsed lane** centers the viewport on an empty 28px strip; consider auto-expanding the lane when focusing a hidden node. (final review minor)
+
+All SP-1 gates verified: `npm test` 10/10, `npx tsc --noEmit` clean, `npm run build` succeeds. Manual browser regression (the checklist in Task 14 Step 2) is the only remaining verification and is the user's to run.
