@@ -20,7 +20,7 @@ import type { IssueSeverity, UUID } from "@/lib/types";
 import { CanvasContextMenu, type ContextMenuItem } from "./canvas-context-menu";
 import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
-import { LANE_HEIGHT, nodeKindFromType } from "./layout";
+import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType } from "./layout";
 import { sizeForNodeType } from "./node-type";
 import { normalizeMarquee, nodesInMarquee } from "./selection";
 import {
@@ -58,17 +58,6 @@ const PASTE_OFFSET = 24;
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 2.5;
 const ZOOM_STEP = 1.2;
-
-const LANE_PALETTE = [
-  "#dbeafe",
-  "#dcfce7",
-  "#fef9c3",
-  "#fae8ff",
-  "#fce7f3",
-  "#cffafe",
-  "#ffedd5",
-  "#e0e7ff",
-];
 
 type Drag =
   | {
@@ -1638,6 +1627,14 @@ function BpmnCanvas({
         if (remaining.length === 0) return;
         const fallback = remaining[0];
         setLanes(recomputeY(remaining));
+        // Drop the deleted lane from the collapse set so the (now persisted)
+        // set doesn't accumulate orphaned IDs over a long session.
+        setCollapsedLaneIds((curr) => {
+          if (!curr.has(laneId)) return curr;
+          const next = new Set(curr);
+          next.delete(laneId);
+          return next;
+        });
         // Mirror server-side reassignment so the UI stays consistent without
         // refetching the graph.
         setNodes((nodesNow) =>
