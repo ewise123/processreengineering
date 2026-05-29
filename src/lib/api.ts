@@ -20,6 +20,8 @@ import type {
   NodeCreate,
   NodeIssue,
   NodeIssuesDetail,
+  NodeReview,
+  NodeReviewUpdate,
   NodeUpdate,
   ProcessEdge,
   Page,
@@ -33,6 +35,7 @@ import type {
   Project,
   ProjectCreate,
   ProjectUpdate,
+  ReviewState,
   UUID,
 } from "@/lib/types";
 
@@ -184,6 +187,20 @@ export const api = {
       method: "PATCH",
       json: body,
     }),
+  getReviewState: (projectId: UUID, modelId: UUID, versionId: UUID) =>
+    request<ReviewState>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/review`
+    ),
+  setNodeReview: (projectId: UUID, nodeId: UUID, body: NodeReviewUpdate) =>
+    request<NodeReview>(`/api/v2/projects/${projectId}/nodes/${nodeId}/review`, {
+      method: "PATCH",
+      json: body,
+    }),
+  requestReview: (projectId: UUID, modelId: UUID, versionId: UUID) =>
+    request<ReviewState>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/review/request`,
+      { method: "POST" }
+    ),
   deleteNode: (projectId: UUID, nodeId: UUID) =>
     request<void>(`/api/v2/projects/${projectId}/nodes/${nodeId}`, {
       method: "DELETE",
