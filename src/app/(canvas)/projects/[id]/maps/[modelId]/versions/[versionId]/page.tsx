@@ -322,10 +322,7 @@ export default function CanvasPage() {
             review={
               selectedNode
                 ? {
-                    status:
-                      reviewState?.nodes.find(
-                        (n) => n.node_id === selectedNode.id
-                      )?.status ?? null,
+                    status: reviewByNode[selectedNode.id] ?? null,
                     onApprove: () =>
                       setNodeReviewMutation.mutate({
                         nodeId: selectedNode.id,

@@ -75,6 +75,13 @@ export function PropertiesPanel({
   const [deleting, setDeleting] = useState(false);
   const [changeNote, setChangeNote] = useState("");
   const [showChangeNote, setShowChangeNote] = useState(false);
+  // Reset the change-request note UI when the selection moves to another node,
+  // so an open/typed note can't leak onto — or be submitted against — a
+  // different node (the panel instance persists across selection changes).
+  useEffect(() => {
+    setChangeNote("");
+    setShowChangeNote(false);
+  }, [selected.id]);
 
   // Local label state lets the input feel responsive while debouncing the
   // PATCH until blur/Enter. Reset whenever the selection changes.
@@ -371,6 +378,7 @@ export function PropertiesPanel({
             <textarea
               value={changeNote}
               onChange={(e) => setChangeNote(e.target.value)}
+              aria-label="Change request note"
               placeholder="Optional note for the change request…"
               rows={2}
               className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px] focus:border-slate-500 focus:outline-none"
