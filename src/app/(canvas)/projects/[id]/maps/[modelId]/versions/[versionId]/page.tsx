@@ -294,6 +294,26 @@ export default function CanvasPage() {
         </div>
       )}
 
+      {selected.kind === "multi" && data && (
+        <div
+          style={{
+            position: "absolute",
+            right: rightCollapsed ? 64 : 384,
+            top: 60,
+            zIndex: 25,
+            transition: "right 150ms ease",
+          }}
+        >
+          <BulkActionBar
+            count={selected.nodeIds.length + selected.edgeIds.length}
+            lanes={data.lanes.map((l) => ({ id: l.id, name: l.name }))}
+            onDelete={() => canvasRef.current?.deleteSelection()}
+            onCopy={() => canvasRef.current?.copySelection()}
+            onMoveToLane={(laneId) => canvasRef.current?.moveSelectionToLane(laneId as UUID)}
+          />
+        </div>
+      )}
+
       {/* Tabbed right panel — always visible, anchored to the right edge.
           User collapses it via the chevron inside the panel. */}
       {data && (
@@ -388,6 +408,71 @@ function SaveIndicator({
         }}
       />
       {STATUS_LABEL[status]}
+    </div>
+  );
+}
+
+function BulkActionBar({
+  count,
+  lanes,
+  onDelete,
+  onCopy,
+  onMoveToLane,
+}: {
+  count: number;
+  lanes: { id: string; name: string }[];
+  onDelete: () => void;
+  onCopy: () => void;
+  onMoveToLane: (laneId: string) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 12px",
+        background: "rgba(255,255,255,0.98)",
+        borderRadius: 8,
+        border: "1px solid #e2e8f0",
+        boxShadow: "0 8px 28px -8px rgba(15,23,42,0.18)",
+        fontSize: 13,
+        height: 44,
+      }}
+    >
+      <span style={{ fontWeight: 600 }}>{count} selected</span>
+      <span style={{ color: "#94a3b8" }}>·</span>
+      <Button size="sm" variant="outline" onClick={onCopy}>
+        Copy
+      </Button>
+      <select
+        defaultValue=""
+        onChange={(e) => {
+          if (e.target.value) {
+            onMoveToLane(e.target.value);
+            e.target.value = "";
+          }
+        }}
+        style={{
+          height: 32,
+          borderRadius: 6,
+          border: "1px solid #e2e8f0",
+          fontSize: 12,
+          padding: "0 6px",
+        }}
+      >
+        <option value="" disabled>
+          Move to lane…
+        </option>
+        {lanes.map((l) => (
+          <option key={l.id} value={l.id}>
+            {l.name}
+          </option>
+        ))}
+      </select>
+      <Button size="sm" variant="destructive" onClick={onDelete}>
+        Delete
+      </Button>
     </div>
   );
 }

@@ -150,6 +150,12 @@ export interface BpmnCanvasHandle {
   /** Select a node (drives Properties panel + chat context) from outside
    * the canvas, e.g. clicking a node link in the Issues tab. */
   selectNode: (id: UUID) => void;
+  /** Delete every selected node and edge (node deletes are non-undoable). */
+  deleteSelection: () => Promise<void>;
+  /** Copy the current selection to the in-memory clipboard. */
+  copySelection: () => void;
+  /** Reassign every selected node to a lane (grouped undo). */
+  moveSelectionToLane: (laneId: UUID) => void;
 }
 
 interface BpmnCanvasProps {
@@ -456,8 +462,11 @@ function BpmnCanvas({
         setSelectedIds(new Set([id]));
         focusNodeInViewport(id);
       },
+      deleteSelection: deleteSelectionImpl,
+      copySelection: copySelectionImpl,
+      moveSelectionToLane: moveSelectionToLaneImpl,
     }),
-    [deleteNodeImpl, updateNodeImpl, focusNodeInViewport]
+    [deleteNodeImpl, updateNodeImpl, focusNodeInViewport, deleteSelectionImpl]
   );
 
   // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
@@ -1110,6 +1119,31 @@ function BpmnCanvas({
     },
     [markNode]
   );
+
+  const moveSelectionToLaneImpl = useCallback(
+    (laneId: UUID) => {
+      const ids = [...selectedIdsRef.current].filter((id) =>
+        nodesRef.current.some((n) => n.id === id)
+      );
+      if (ids.length === 0) return;
+      const oldPositions = ids.map((id) => {
+        const n = nodesRef.current.find((nn) => nn.id === id)!;
+        return { id, x: n.x, relativeY: n.relativeY, laneId: n.laneId };
+      });
+      const newPositions = oldPositions.map((p) => ({ ...p, relativeY: 0, laneId }));
+      applyGroupPositionsLocal(newPositions);
+      record({
+        description: `Move ${ids.length} to lane`,
+        do: () => applyGroupPositionsLocal(newPositions),
+        undo: () => applyGroupPositionsLocal(oldPositions),
+      });
+    },
+    [applyGroupPositionsLocal, record]
+  );
+
+  const copySelectionImpl = useCallback(() => {
+    // Wired to the clipboard in Task 11.
+  }, []);
 
   const recomputeY = (ls: CanvasLane[]): CanvasLane[] => {
     let y = 0;
