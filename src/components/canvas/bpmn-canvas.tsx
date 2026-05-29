@@ -20,6 +20,7 @@ import type { IssueSeverity, UUID } from "@/lib/types";
 import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT } from "./layout";
+import { normalizeMarquee, nodesInMarquee } from "./selection";
 import {
   PALETTE_DRAG_MIME,
   PALETTE_SHAPES,
@@ -90,6 +91,14 @@ type Drag =
       // The persisted bend value before the drag started, so we can record
       // an undo entry that snaps back to it.
       origBend: number | null;
+    }
+  | {
+      type: "marquee";
+      startX: number; // world coords
+      startY: number;
+      currX: number;
+      currY: number;
+      additive: boolean; // Shift held at start → add to existing selection
     };
 
 /** Orthogonal preview path from a node-side anchor toward an arbitrary
@@ -477,6 +486,17 @@ function BpmnCanvas({
         return;
       }
 
+      if (!mod) {
+        if (e.key === "v" || e.key === "V") { setTool("select"); return; }
+        if (e.key === "h" || e.key === "H") { setTool("pan"); return; }
+        if (e.key === "c" || e.key === "C") { setTool("connect"); return; }
+        if (e.key === "Escape") {
+          setTool("select");
+          clearSelection();
+          return;
+        }
+      }
+
       if (e.key === "Delete" || e.key === "Backspace") {
         if (selectedIdsRef.current.size === 0) return;
         e.preventDefault();
@@ -485,7 +505,7 @@ function BpmnCanvas({
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [deleteSelectionImpl, undo, redo]);
+  }, [deleteSelectionImpl, undo, redo, clearSelection]);
 
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
@@ -565,6 +585,9 @@ function BpmnCanvas({
     });
   }, [nodes, lanes]);
 
+  const renderNodesRef = useRef(renderNodes);
+  renderNodesRef.current = renderNodes;
+
   const toWorld = useCallback(
     (sx: number, sy: number) => {
       if (!svgRef.current) return { x: 0, y: 0 };
@@ -607,6 +630,22 @@ function BpmnCanvas({
 
   const onNodeMouseDown = (e: MouseEvent, id: string) => {
     e.stopPropagation();
+    if (tool === "pan") {
+      // Hand mode: dragging a node pans the canvas instead of moving it.
+      setDrag({
+        type: "pan",
+        startX: e.clientX,
+        startY: e.clientY,
+        tx0: viewportRef.current.tx,
+        ty0: viewportRef.current.ty,
+      });
+      return;
+    }
+    if (e.shiftKey) {
+      // Shift-click toggles this node in the selection without starting a drag.
+      toggleSelection(id);
+      return;
+    }
     selectOnly(id);
     const resolved = renderNodes.find((n) => n.id === id);
     const stored = nodesRef.current.find((n) => n.id === id);
@@ -700,16 +739,19 @@ function BpmnCanvas({
       target === svgRef.current ||
       (target.tagName === "rect" && target.getAttribute("data-bg") === "1");
     if (!isBg) return;
-    // Don't deselect yet — onUp checks whether the cursor actually moved
-    // (drag → keep selection so the Properties panel stays put while panning,
-    // pure click → deselect).
-    setDrag({
-      type: "pan",
-      startX: e.clientX,
-      startY: e.clientY,
-      tx0: viewport.tx,
-      ty0: viewport.ty,
-    });
+    if (tool === "pan") {
+      setDrag({
+        type: "pan",
+        startX: e.clientX,
+        startY: e.clientY,
+        tx0: viewport.tx,
+        ty0: viewport.ty,
+      });
+      return;
+    }
+    // Select tool: start a marquee. A non-moving marquee clears selection on up.
+    const { x, y } = toWorld(e.clientX, e.clientY);
+    setDrag({ type: "marquee", startX: x, startY: y, currX: x, currY: y, additive: e.shiftKey });
   };
 
   // Drag is tracked at the *document* level so motion across the lane-rail
@@ -728,6 +770,11 @@ function BpmnCanvas({
     };
 
     const onMove = (e: globalThis.MouseEvent) => {
+      if (drag.type === "marquee") {
+        const { x, y } = screenToWorld(e.clientX, e.clientY);
+        setDrag({ ...drag, currX: x, currY: y });
+        return;
+      }
       if (drag.type === "connect") {
         const { x, y } = screenToWorld(e.clientX, e.clientY);
         setDrag({ ...drag, currX: x, currY: y });
@@ -899,6 +946,25 @@ function BpmnCanvas({
           clearSelection();
         }
       }
+      if (drag.type === "marquee") {
+        const rect = normalizeMarquee(drag.startX, drag.startY, drag.currX, drag.currY);
+        const moved = rect.w * rect.w + rect.h * rect.h > 16; // >4px in world space
+        if (!moved) {
+          if (!drag.additive) clearSelection();
+        } else {
+          const positioned = renderNodesRef.current.map((n) => ({
+            id: n.id,
+            x: n.x,
+            y: n.y,
+            w: n.w,
+            h: n.h,
+          }));
+          const hit = nodesInMarquee(positioned, rect);
+          setSelection(hit, drag.additive);
+        }
+        setDrag(null);
+        return;
+      }
       setDrag(null);
     };
 
@@ -908,7 +974,7 @@ function BpmnCanvas({
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
-  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal, clearSelection]);
+  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal, clearSelection, setSelection]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
   const onCanvasDragOver = (e: ReactDragEvent<SVGSVGElement>) => {
@@ -1217,9 +1283,11 @@ function BpmnCanvas({
           cursor:
             drag?.type === "pan"
               ? "grabbing"
-              : tool === "connect"
-                ? "crosshair"
-                : "default",
+              : tool === "pan"
+                ? "grab"
+                : tool === "connect"
+                  ? "crosshair"
+                  : "default",
           userSelect: "none",
         }}
       >
@@ -1359,6 +1427,23 @@ function BpmnCanvas({
                   strokeWidth={1.5}
                   strokeDasharray="4 4"
                   markerEnd="url(#poet-arrow)"
+                  pointerEvents="none"
+                />
+              );
+            })()}
+          {drag?.type === "marquee" &&
+            (() => {
+              const r = normalizeMarquee(drag.startX, drag.startY, drag.currX, drag.currY);
+              return (
+                <rect
+                  x={r.x}
+                  y={r.y}
+                  width={r.w}
+                  height={r.h}
+                  fill="rgba(37,99,235,0.08)"
+                  stroke="#2563eb"
+                  strokeWidth={1}
+                  strokeDasharray="4 3"
                   pointerEvents="none"
                 />
               );
