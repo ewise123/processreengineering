@@ -42,8 +42,6 @@ import type {
   ProcessVersion,
   ReviewState,
   UUID,
-  VersionDiff,
-  VersionSummary,
 } from "@/lib/types";
 import { buildVersionRows, type TreeRow } from "./version-tree";
 import { diffChangeCount, isEmptyDiff } from "./version-diff";
