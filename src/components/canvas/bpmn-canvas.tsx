@@ -50,6 +50,7 @@ import { useUndoStack } from "./use-undo-stack";
 const WORLD_WIDTH_MIN = 1700;
 const WORLD_RIGHT_PADDING = 240;
 const MIN_LANE_HEIGHT = 90;
+const COLLAPSED_LANE_HEIGHT = 28;
 
 const PASTE_OFFSET = 24;
 
@@ -212,6 +213,15 @@ function BpmnCanvas({
     y: number;
     items: ContextMenuItem[];
   } | null>(null);
+  const [collapsedLaneIds, setCollapsedLaneIds] = useState<Set<string>>(() => new Set());
+  const toggleLaneCollapse = useCallback((laneId: string) => {
+    setCollapsedLaneIds((curr) => {
+      const next = new Set(curr);
+      if (next.has(laneId)) next.delete(laneId);
+      else next.add(laneId);
+      return next;
+    });
+  }, []);
 
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
@@ -447,7 +457,7 @@ function BpmnCanvas({
   const focusNodeInViewport = useCallback((id: UUID) => {
     const node = nodesRef.current.find((n) => n.id === id);
     if (!node) return;
-    const lane = lanesRef.current.find((l) => l.id === node.laneId);
+    const lane = displayLanesRef.current.find((l) => l.id === node.laneId);
     const nodeAbsY = lane ? lane.y + node.relativeY : node.relativeY;
     const svg = svgRef.current;
     if (!svg) return;
@@ -601,21 +611,39 @@ function BpmnCanvas({
     return Math.max(WORLD_WIDTH_MIN, maxX + WORLD_RIGHT_PADDING);
   }, [nodes]);
 
+  // Lane geometry as shown on screen: collapsed lanes shrink to a thin strip.
+  // The real `lanes` (true heights) are kept for persistence; only display
+  // geometry changes, so expanding restores the stored height.
+  const displayLanes = useMemo(() => {
+    let y = 0;
+    return lanes.map((l) => {
+      const h = collapsedLaneIds.has(l.id) ? COLLAPSED_LANE_HEIGHT : l.h;
+      const out = { ...l, y, h };
+      y += h;
+      return out;
+    });
+  }, [lanes, collapsedLaneIds]);
+
+  const displayLanesRef = useRef(displayLanes);
+  displayLanesRef.current = displayLanes;
+
   const worldHeight = useMemo(() => {
-    const maxBottom = lanes.reduce((m, l) => Math.max(m, l.y + l.h), 0);
+    const maxBottom = displayLanes.reduce((m, l) => Math.max(m, l.y + l.h), 0);
     return Math.max(620, maxBottom);
-  }, [lanes]);
+  }, [displayLanes]);
 
   const renderNodes: ResolvedNode[] = useMemo(() => {
-    const laneMap = new Map(lanes.map((l) => [l.id, l]));
-    return nodes.map((n) => {
-      const lane = n.laneId ? laneMap.get(n.laneId) : undefined;
-      const y = lane ? lane.y + n.relativeY : n.relativeY;
-      const { relativeY: _ignore, ...rest } = n;
-      void _ignore;
-      return { ...rest, y };
-    });
-  }, [nodes, lanes]);
+    const laneMap = new Map(displayLanes.map((l) => [l.id, l]));
+    return nodes
+      .filter((n) => !(n.laneId && collapsedLaneIds.has(n.laneId)))
+      .map((n) => {
+        const lane = n.laneId ? laneMap.get(n.laneId) : undefined;
+        const y = lane ? lane.y + n.relativeY : n.relativeY;
+        const { relativeY: _ignore, ...rest } = n;
+        void _ignore;
+        return { ...rest, y };
+      });
+  }, [nodes, displayLanes, collapsedLaneIds]);
 
   const renderNodesRef = useRef(renderNodes);
   renderNodesRef.current = renderNodes;
@@ -712,7 +740,7 @@ function BpmnCanvas({
           nodesRef.current.some((n) => n.id === sid)
         )
       : [id];
-    const laneById = new Map(lanesRef.current.map((l) => [l.id, l]));
+    const laneById = new Map(displayLanesRef.current.map((l) => [l.id, l]));
     const members = groupIds
       .map((sid) => {
         const sn = nodesRef.current.find((n) => n.id === sid);
@@ -855,7 +883,7 @@ function BpmnCanvas({
         if (!grabbed) return;
         const deltaX = x - drag.offX - grabbed.origX;
         const deltaY = y - drag.offY - grabbed.origAbsY;
-        const currLanes = lanesRef.current;
+        const currLanes = displayLanesRef.current;
         setNodes((curr) =>
           curr.map((n) => {
             const m = drag.members.find((mm) => mm.id === n.id);
@@ -925,7 +953,7 @@ function BpmnCanvas({
         const target = nodesRef.current.find((n) => {
           // Resolve node Y the same way renderNodes does.
           const lane = n.laneId
-            ? lanesRef.current.find((l) => l.id === n.laneId)
+            ? displayLanesRef.current.find((l) => l.id === n.laneId)
             : undefined;
           const ny = lane ? lane.y + n.relativeY : n.relativeY;
           return (
@@ -1053,10 +1081,10 @@ function BpmnCanvas({
     const { x, y } = toWorld(e.clientX, e.clientY);
     const dropCenterX = x - shape.w / 2;
     const dropCenterY = y - shape.h / 2;
-    const currLanes = lanesRef.current;
+    const currLanes = displayLanesRef.current;
     const targetLane =
       laneAtY(dropCenterY + shape.h / 2, currLanes) ?? currLanes[0];
-    if (!targetLane) return;
+    if (!targetLane || collapsedLaneIds.has(targetLane.id)) return;
     const maxRel = Math.max(0, targetLane.h - shape.h);
     const rel = Math.max(
       0,
@@ -1574,7 +1602,7 @@ function BpmnCanvas({
             height={worldHeight + 2000}
             fill="url(#poet-grid)"
           />
-          {lanes.map((lane) => (
+          {displayLanes.map((lane) => (
             <g key={lane.id}>
               <rect
                 data-bg="1"
@@ -1603,21 +1631,29 @@ function BpmnCanvas({
               />
             </g>
           ))}
-          {edges.map((edge) => (
-            <EdgeArrow
-              key={edge.id}
-              edge={edge}
-              nodes={renderNodes}
-              selected={selectedIds.has(edge.id)}
-              onClick={(id) => selectOnly(id)}
-              onDoubleClick={(id) => {
-                selectOnly(id);
-                setEditingEdgeId(id);
-              }}
-              onContextMenu={openEdgeMenu}
-              onStartBendDrag={onStartBendDrag}
-            />
-          ))}
+          {edges
+            .filter((edge) => {
+              const f = nodes.find((n) => n.id === edge.from);
+              const t = nodes.find((n) => n.id === edge.to);
+              const hidden = (n?: CanvasNode) =>
+                !!n?.laneId && collapsedLaneIds.has(n.laneId);
+              return !hidden(f) && !hidden(t);
+            })
+            .map((edge) => (
+              <EdgeArrow
+                key={edge.id}
+                edge={edge}
+                nodes={renderNodes}
+                selected={selectedIds.has(edge.id)}
+                onClick={(id) => selectOnly(id)}
+                onDoubleClick={(id) => {
+                  selectOnly(id);
+                  setEditingEdgeId(id);
+                }}
+                onContextMenu={openEdgeMenu}
+                onStartBendDrag={onStartBendDrag}
+              />
+            ))}
           {renderNodes.map((node) => (
             <NodeShape
               key={node.id}
@@ -1702,13 +1738,15 @@ function BpmnCanvas({
       </svg>
 
       <LaneRail
-        lanes={lanes}
+        lanes={displayLanes}
         viewport={viewport}
         onMoveLane={moveLane}
         onResizeLane={resizeLane}
         onRenameLane={renameLane}
         onAddLaneAt={addLaneAt}
         onDeleteLane={deleteLane}
+        collapsedLaneIds={collapsedLaneIds}
+        onToggleCollapse={toggleLaneCollapse}
       />
 
       <ShapePalette />
