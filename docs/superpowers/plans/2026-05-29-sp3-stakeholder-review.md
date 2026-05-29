@@ -963,3 +963,25 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - **Spec coverage:** GET/PATCH/POST endpoints (Tasks 1-2) ✓; auto-transition (`_recompute_version_status`, Task 2) ✓; orphan cleanup (Task 3) ✓; per-node panel wiring + Assign-disabled (Task 5) ✓; Review-tab meter/buckets/send (Task 6) ✓; review-mode overlay (Task 7) ✓; pure helper + Vitest (Task 4) ✓; no migration (tables pre-exist) ✓.
 - **Type consistency:** `ReviewState`/`NodeReview`/`NodeReviewUpdate`/`ReviewDecision` defined in Task 4, consumed in 5-7; `reviewByNodeMap`/`bucketNodes` defined in Task 4, used in 5/6; `reviewByNode` prop name consistent page→canvas (Task 7); endpoint URLs identical between api.ts (Task 4) and routes (Tasks 1-2).
 - **Verify-against-source reminders:** the `<RightPanel>` render call in the page (Task 6 Step 3) and the exact `delete_node` / sqlalchemy-import lines (Task 3 Step 3) should be confirmed by reading before editing. The Properties "Stakeholder Review" section line range (Task 5 Step 3) is approximate — match the actual JSX.
+
+---
+
+## Execution outcome (2026-05-29)
+
+All 8 tasks executed via subagent-driven development (fresh implementer + spec review + code-quality review per task, plus a final holistic review). Backend Tasks 1-3, frontend Tasks 4-7, verification Task 8. Commits `96cdb5f` → `aba0b4e` on branch `sp3-stakeholder-review` (stacked on `sp2-node-lane-editing`). No migration (the `reviews`/`review_comments` tables pre-existed).
+
+**Review-driven fixes folded in during execution:**
+- T1→T2: tightened `_recompute_version_status` so promotion to `approved` requires an existing request (`and vr is not None`); approve-all-without-request stays `draft`.
+- T2: added the de-approval regression test (approved → change-request → back to review); dropped a redundant guard.
+- T5: reset the change-note UI on node-selection change (was leaking/mis-attributing a note across nodes); status lookup uses the `reviewByNode` memo; textarea `aria-label`.
+- T6: all three Review-tab bucket headers derive from `buckets.*.length` (internally consistent during a query-lag window).
+- Final holistic review (CHANGES NEEDED → fixed in `aba0b4e`): **Gap A** — `delete_node` now recomputes version status (deleting the last pending node of a requested version completes the sign-off); **Gap B** — `handleNodeDeleted` invalidates `issues` + `graph` + `review` so the meter/buckets/badges drop a deleted node without a reload; removed two stale "not yet wired" comments.
+
+**Verification:** `npx tsc --noEmit` clean · `npm test` 20/20 · `npm run build` succeeds · backend `pytest` 62/62 (11 SP-3 tests) · **live API lifecycle smoke PASS** against the running server (28-node map: draft → request → review → approve-all → approved → change-request → review), dev DB restored afterward.
+
+### Deferred follow-ups (out of SP-3 scope)
+
+1. **Mutation double-fire.** Approve / Request-change / Send-request buttons aren't disabled during the in-flight mutation, so a fast double-click fires twice. Idempotent (status set is convergent; re-request just resets to `requested`), so harmless for the single-user app. Candidate: thread `mutation.isPending` into `disabled`.
+2. **Canvas edits don't refresh the right-panel node list.** The `["graph"]` query is now invalidated on node *delete* (Gap B), but other canvas edits (rename, type change, lane move, add-node) mutate local canvas state and never refetch `["graph"]`, so the Review-tab bucket node *labels* (from `data.nodes`) can lag until reload. Pre-existing optimistic-editor tradeoff; a broader "reconcile graph query after canvas mutations" pass is the real fix (shared with the SP-2 deferred panel-sync item).
+3. **No DB unique constraint on `(target_type, target_id)`** for reviews. `set_node_review` is read-then-write with no backing unique index; safe under the current single-user/no-concurrency reality, but a partial unique index would be needed before multi-reviewer concurrency.
+4. Threaded `ReviewComment` UI, real assignment/identity + a user-list endpoint, notifications, edge/lane review, per-node review history — all explicitly out of this first cut (see spec "Out of scope").
