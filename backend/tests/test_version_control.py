@@ -195,3 +195,63 @@ def test_copy_has_fresh_review_slate(client, db):
         )
     ).all()
     assert reviews == []
+
+
+def _diff_url(proj, model, vfrom, vto):
+    # Distinct path (`version-diff`, not `versions/diff`) so it can't be
+    # shadowed by the existing GET `/versions/{version_id}` graph route.
+    return (
+        f"/api/v2/projects/{proj.id}/process-maps/{model.id}"
+        f"/version-diff?from={vfrom}&to={vto}"
+    )
+
+
+def test_diff_detects_renamed_moved_added_removed(client, db):
+    proj, model, version, lanes, nodes = _seed(db)
+    laneA, laneB = lanes
+    # Stamp lineage on v1 nodes so the diff can track identity.
+    for n in nodes:
+        n.properties = {**n.properties, "_lineage_id": str(n.id)}
+    db.commit()
+
+    # Copy v1 -> v2, then mutate v2: rename n0, move n1 to lane B, add a node.
+    v2_id = client.post(_copy_url(proj, model, version), json={}).json()["id"]
+    v2_nodes = {n.name: n for n in db.scalars(
+        select(ProcessNode).where(ProcessNode.version_id == v2_id)
+    ).all()}
+    v2_lanes = {l.name: l for l in db.scalars(
+        select(ProcessLane).where(ProcessLane.version_id == v2_id)
+    ).all()}
+    v2_nodes["n0"].name = "n0-renamed"
+    v2_nodes["n1"].lane_id = v2_lanes["Lane B"].id
+    db.add(ProcessNode(
+        version_id=v2_id, lane_id=v2_lanes["Lane A"].id, type="task",
+        name="n2-new", position={}, properties={"_lineage_id": "brand-new"},
+    ))
+    db.commit()
+
+    d = client.get(_diff_url(proj, model, version.id, v2_id)).json()
+    renamed = {c["name"]: c for c in d["nodes"]["renamed"]}
+    assert "n0-renamed" in renamed
+    assert renamed["n0-renamed"]["from_name"] == "n0"
+    moved = {c["name"]: c for c in d["nodes"]["moved"]}
+    assert moved["n1"]["from_lane"] == "Lane A"
+    assert moved["n1"]["to_lane"] == "Lane B"
+    added = {c["name"] for c in d["nodes"]["added"]}
+    assert "n2-new" in added
+
+
+def test_diff_name_fallback_without_lineage(client, db):
+    """Pre-SP-4 versions (no _lineage_id) fall back to name matching."""
+    proj, model, version, lanes, nodes = _seed(db)  # no lineage stamped
+    v2_id = client.post(_copy_url(proj, model, version), json={}).json()["id"]
+    d = client.get(_diff_url(proj, model, version.id, v2_id)).json()
+    assert d["nodes"]["added"] == []
+    assert d["nodes"]["removed"] == []
+
+
+def test_diff_404_for_foreign_version(client, db):
+    proj, model, version, lanes, nodes = _seed(db)
+    proj2, model2, version2, _, _ = _seed(db, suffix="2")
+    r = client.get(_diff_url(proj, model, version.id, version2.id))
+    assert r.status_code == 404, r.text

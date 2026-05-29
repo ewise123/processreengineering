@@ -4,7 +4,7 @@ compares two versions using node lineage ids stamped in properties."""
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -24,7 +24,17 @@ from app.models.process import (
 )
 from app.models.project import Project
 from app.schemas.process_map import ProcessVersionRead
-from app.schemas.version import VersionCopyRequest, VersionSummaryRead
+from app.schemas.version import (
+    EdgeChange,
+    EdgeDiff,
+    LaneChange,
+    LaneDiff,
+    NodeChange,
+    NodeDiff,
+    VersionCopyRequest,
+    VersionDiffRead,
+    VersionSummaryRead,
+)
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["versions"])
 
@@ -224,3 +234,144 @@ def copy_version(
     db.commit()
     db.refresh(new_version)
     return new_version
+
+
+# ---------------------------------------------------------------------------
+# Diff helpers
+# ---------------------------------------------------------------------------
+
+def _graph(db: Session, version: ProcessVersion):
+    lanes = db.scalars(
+        select(ProcessLane).where(ProcessLane.version_id == version.id)
+    ).all()
+    nodes = db.scalars(
+        select(ProcessNode).where(ProcessNode.version_id == version.id)
+    ).all()
+    edges = db.scalars(
+        select(ProcessEdge).where(ProcessEdge.version_id == version.id)
+    ).all()
+    return lanes, nodes, edges
+
+
+def _lineage(node: ProcessNode) -> str | None:
+    return (node.properties or {}).get(LINEAGE_KEY)
+
+
+def _match_nodes(a_nodes, b_nodes):
+    """Pair A-side and B-side nodes. Match by lineage id first, then fall
+    back to name for nodes that have no lineage on one side. Returns
+    (pairs, only_a, only_b) where pairs is a list of (a_node, b_node)."""
+    a_by_lin = {_lineage(n): n for n in a_nodes if _lineage(n)}
+    b_by_lin = {_lineage(n): n for n in b_nodes if _lineage(n)}
+    pairs = []
+    matched_a, matched_b = set(), set()
+    for lin, a in a_by_lin.items():
+        b = b_by_lin.get(lin)
+        if b is not None:
+            pairs.append((a, b))
+            matched_a.add(a.id)
+            matched_b.add(b.id)
+    # Name fallback for the leftovers.
+    rem_a = [n for n in a_nodes if n.id not in matched_a]
+    rem_b = [n for n in b_nodes if n.id not in matched_b]
+    b_by_name: dict[str, ProcessNode] = {}
+    for n in rem_b:
+        b_by_name.setdefault(n.name, n)
+    for a in rem_a:
+        b = b_by_name.pop(a.name, None)
+        if b is not None:
+            pairs.append((a, b))
+            matched_a.add(a.id)
+            matched_b.add(b.id)
+    only_a = [n for n in a_nodes if n.id not in matched_a]
+    only_b = [n for n in b_nodes if n.id not in matched_b]
+    return pairs, only_a, only_b
+
+
+# ---------------------------------------------------------------------------
+# Diff endpoint
+# ---------------------------------------------------------------------------
+
+@router.get(
+    # NOTE: `version-diff`, NOT `versions/diff` — the latter would be matched
+    # by the existing GET `/process-maps/{model_id}/versions/{version_id}`
+    # (registered earlier in process_maps.py) with version_id="diff", which
+    # 422s before reaching this handler.
+    "/process-maps/{model_id}/version-diff",
+    response_model=VersionDiffRead,
+)
+def diff_versions(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+    from_: UUID = Query(alias="from"),
+    to: UUID = Query(...),
+) -> VersionDiffRead:
+    model = _model_or_404(db, model_id, project.id)
+    va = _version_or_404(db, model, from_)
+    vb = _version_or_404(db, model, to)
+
+    a_lanes, a_nodes, a_edges = _graph(db, va)
+    b_lanes, b_nodes, b_edges = _graph(db, vb)
+
+    a_lane_name = {l.id: l.name for l in a_lanes}
+    b_lane_name = {l.id: l.name for l in b_lanes}
+
+    pairs, only_a, only_b = _match_nodes(a_nodes, b_nodes)
+
+    renamed, moved = [], []
+    unchanged = 0
+    for a, b in pairs:
+        a_lane = a_lane_name.get(a.lane_id)
+        b_lane = b_lane_name.get(b.lane_id)
+        if a.name != b.name:
+            renamed.append(NodeChange(name=b.name, from_name=a.name))
+        elif a_lane != b_lane:
+            moved.append(NodeChange(name=b.name, from_lane=a_lane, to_lane=b_lane))
+        else:
+            unchanged += 1
+
+    node_diff = NodeDiff(
+        added=[NodeChange(name=n.name) for n in only_b],
+        removed=[NodeChange(name=n.name) for n in only_a],
+        renamed=renamed,
+        moved=moved,
+        unchanged_count=unchanged,
+    )
+
+    def _edge_keys(nodes, edges):
+        ident = {}
+        for n in nodes:
+            ident[n.id] = _lineage(n) or f"name:{n.name}"
+        names = {n.id: n.name for n in nodes}
+        keys = {}
+        for e in edges:
+            keys[(ident[e.source_node_id], ident[e.target_node_id])] = (
+                names[e.source_node_id],
+                names[e.target_node_id],
+            )
+        return keys
+
+    a_edge_keys = _edge_keys(a_nodes, a_edges)
+    b_edge_keys = _edge_keys(b_nodes, b_edges)
+    edge_diff = EdgeDiff(
+        added=[
+            EdgeChange(source=s, target=t)
+            for k, (s, t) in b_edge_keys.items()
+            if k not in a_edge_keys
+        ],
+        removed=[
+            EdgeChange(source=s, target=t)
+            for k, (s, t) in a_edge_keys.items()
+            if k not in b_edge_keys
+        ],
+    )
+
+    a_lane_names = {l.name for l in a_lanes}
+    b_lane_names = {l.name for l in b_lanes}
+    lane_diff = LaneDiff(
+        added=[LaneChange(name=n) for n in b_lane_names - a_lane_names],
+        removed=[LaneChange(name=n) for n in a_lane_names - b_lane_names],
+    )
+
+    return VersionDiffRead(nodes=node_diff, edges=edge_diff, lanes=lane_diff)
