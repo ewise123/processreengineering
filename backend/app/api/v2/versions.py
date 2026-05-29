@@ -240,7 +240,7 @@ def copy_version(
 # Diff helpers
 # ---------------------------------------------------------------------------
 
-def _graph(db: Session, version: ProcessVersion):
+def _graph(db: Session, version: ProcessVersion) -> tuple[list, list, list]:
     lanes = db.scalars(
         select(ProcessLane).where(ProcessLane.version_id == version.id)
     ).all()
@@ -257,7 +257,7 @@ def _lineage(node: ProcessNode) -> str | None:
     return (node.properties or {}).get(LINEAGE_KEY)
 
 
-def _match_nodes(a_nodes, b_nodes):
+def _match_nodes(a_nodes, b_nodes) -> tuple[list, list, list]:
     """Pair A-side and B-side nodes. Match by lineage id first, then fall
     back to name for nodes that have no lineage on one side. Returns
     (pairs, only_a, only_b) where pairs is a list of (a_node, b_node)."""
@@ -286,6 +286,21 @@ def _match_nodes(a_nodes, b_nodes):
     only_a = [n for n in a_nodes if n.id not in matched_a]
     only_b = [n for n in b_nodes if n.id not in matched_b]
     return pairs, only_a, only_b
+
+
+def _edge_keys(nodes, edges) -> dict[tuple[str, str], tuple[str, str]]:
+    # NB: parallel edges between the same node pair collapse to one key — a
+    # multi-edge add/remove is treated as a single structural change. Fine for
+    # a heuristic structural diff.
+    ident = {n.id: _lineage(n) or f"name:{n.name}" for n in nodes}
+    names = {n.id: n.name for n in nodes}
+    keys: dict[tuple[str, str], tuple[str, str]] = {}
+    for e in edges:
+        keys[(ident[e.source_node_id], ident[e.target_node_id])] = (
+            names[e.source_node_id],
+            names[e.target_node_id],
+        )
+    return keys
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +334,7 @@ def diff_versions(
 
     pairs, only_a, only_b = _match_nodes(a_nodes, b_nodes)
 
+    # Renamed wins over moved: a node that changed both name and lane is reported as renamed only.
     renamed, moved = [], []
     unchanged = 0
     for a, b in pairs:
@@ -338,19 +354,6 @@ def diff_versions(
         moved=moved,
         unchanged_count=unchanged,
     )
-
-    def _edge_keys(nodes, edges):
-        ident = {}
-        for n in nodes:
-            ident[n.id] = _lineage(n) or f"name:{n.name}"
-        names = {n.id: n.name for n in nodes}
-        keys = {}
-        for e in edges:
-            keys[(ident[e.source_node_id], ident[e.target_node_id])] = (
-                names[e.source_node_id],
-                names[e.target_node_id],
-            )
-        return keys
 
     a_edge_keys = _edge_keys(a_nodes, a_edges)
     b_edge_keys = _edge_keys(b_nodes, b_edges)

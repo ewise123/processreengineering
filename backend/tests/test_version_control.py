@@ -248,6 +248,7 @@ def test_diff_name_fallback_without_lineage(client, db):
     d = client.get(_diff_url(proj, model, version.id, v2_id)).json()
     assert d["nodes"]["added"] == []
     assert d["nodes"]["removed"] == []
+    assert d["nodes"]["unchanged_count"] == 2
 
 
 def test_diff_404_for_foreign_version(client, db):
@@ -255,3 +256,47 @@ def test_diff_404_for_foreign_version(client, db):
     proj2, model2, version2, _, _ = _seed(db, suffix="2")
     r = client.get(_diff_url(proj, model, version.id, version2.id))
     assert r.status_code == 404, r.text
+
+
+def test_diff_detects_removed_node(client, db):
+    proj, model, version, lanes, nodes = _seed(db)
+    for n in nodes:
+        n.properties = {**n.properties, "_lineage_id": str(n.id)}
+    db.commit()
+    v2_id = client.post(_copy_url(proj, model, version), json={}).json()["id"]
+    # Delete n1 from v2 (and its edge so the FK is clean).
+    v2_nodes = {n.name: n for n in db.scalars(
+        select(ProcessNode).where(ProcessNode.version_id == v2_id)
+    ).all()}
+    v2_edges = db.scalars(select(ProcessEdge).where(ProcessEdge.version_id == v2_id)).all()
+    for e in v2_edges:
+        db.delete(e)
+    db.delete(v2_nodes["n1"])
+    db.commit()
+    d = client.get(_diff_url(proj, model, version.id, v2_id)).json()
+    removed = {c["name"] for c in d["nodes"]["removed"]}
+    assert "n1" in removed
+    assert {c["name"] for c in d["nodes"]["added"]} == set()
+
+
+def test_diff_detects_edge_and_lane_changes(client, db):
+    proj, model, version, lanes, nodes = _seed(db)
+    for n in nodes:
+        n.properties = {**n.properties, "_lineage_id": str(n.id)}
+    db.commit()
+    v2_id = client.post(_copy_url(proj, model, version), json={}).json()["id"]
+    v2_nodes = {n.name: n for n in db.scalars(
+        select(ProcessNode).where(ProcessNode.version_id == v2_id)
+    ).all()}
+    # Remove the existing edge, add a new lane in v2.
+    for e in db.scalars(select(ProcessEdge).where(ProcessEdge.version_id == v2_id)).all():
+        db.delete(e)
+    db.add(ProcessLane(version_id=v2_id, name="Lane C", order_index=2))
+    db.commit()
+    d = client.get(_diff_url(proj, model, version.id, v2_id)).json()
+    # The v1 edge (n0->n1) is gone in v2 → removed.
+    assert len(d["edges"]["removed"]) == 1
+    assert d["edges"]["added"] == []
+    # Lane C is new in v2 → added; nothing removed.
+    assert {c["name"] for c in d["lanes"]["added"]} == {"Lane C"}
+    assert d["lanes"]["removed"] == []
