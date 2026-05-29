@@ -689,6 +689,10 @@ def update_lane(
         lane.order_index = payload.order_index
     if payload.height_px is not None:
         lane.height_px = payload.height_px
+    if payload.color is not None:
+        lane.color = payload.color
+    if payload.collapsed is not None:
+        lane.collapsed = payload.collapsed
     db.commit()
     db.refresh(lane)
     return lane
@@ -728,6 +732,7 @@ def add_lane(
         name=payload.name,
         order_index=payload.order_index,
         height_px=payload.height_px or 150,
+        color=payload.color,
     )
     db.add(lane)
     db.commit()

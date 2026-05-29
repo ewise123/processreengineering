@@ -111,3 +111,53 @@ def test_patch_node_type_preserves_claim_links(client, db):
     )
     assert len(links) == 1
     assert links[0].claim_id == claim.id
+
+
+from sqlalchemy import text as _sa_text
+
+
+def test_lane_columns_exist(test_engine):
+    with test_engine.connect() as conn:
+        rows = conn.execute(
+            _sa_text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='process_lanes' AND column_name IN ('color','collapsed')"
+            )
+        ).fetchall()
+    assert {r[0] for r in rows} == {"color", "collapsed"}
+
+
+def test_patch_lane_color_and_collapsed(client, db):
+    proj, _v, lane, _n, _c = _seed_map(db)
+    resp = client.patch(
+        f"/api/v2/projects/{proj.id}/lanes/{lane.id}",
+        json={"color": "#aabbcc", "collapsed": True},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["color"] == "#aabbcc"
+    assert body["collapsed"] is True
+    db.expire_all()
+    fresh = db.get(ProcessLane, lane.id)
+    assert fresh.color == "#aabbcc"
+    assert fresh.collapsed is True
+
+
+def test_patch_lane_color_invalid_rejected(client, db):
+    proj, _v, lane, _n, _c = _seed_map(db)
+    resp = client.patch(
+        f"/api/v2/projects/{proj.id}/lanes/{lane.id}",
+        json={"color": "red"},
+    )
+    assert resp.status_code == 422, resp.text
+
+
+def test_lane_read_defaults_when_unset(client, db):
+    proj, version, _lane, _n, _c = _seed_map(db)
+    resp = client.get(
+        f"/api/v2/projects/{proj.id}/process-maps/{version.model_id}/versions/{version.id}"
+    )
+    assert resp.status_code == 200, resp.text
+    lane0 = resp.json()["lanes"][0]
+    assert lane0["color"] is None
+    assert lane0["collapsed"] is False
