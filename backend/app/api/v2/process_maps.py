@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -14,6 +14,7 @@ from app.enums import (
     ConflictStatus,
     NodeType,
     ProcessVersionStatus,
+    ReviewTargetType,
 )
 from app.models.identity import User
 from app.models.process import (
@@ -26,6 +27,7 @@ from app.models.process import (
     ProcessVersion,
 )
 from app.models.project import Project
+from app.models.workflow import Review
 from app.models.claim import Claim, ClaimCitation, ClaimConflict
 from app.models.input import Chunk, DocumentSection, Input
 from app.schemas.process_map import (
@@ -667,6 +669,12 @@ def delete_node(
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     _check_node_in_project(node, project.id, db)
+    db.execute(
+        delete(Review).where(
+            Review.target_type == ReviewTargetType.PROCESS_NODE.value,
+            Review.target_id == node_id,
+        )
+    )
     db.delete(node)
     db.commit()
 

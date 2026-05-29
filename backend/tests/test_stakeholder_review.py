@@ -130,3 +130,20 @@ def test_approved_version_deapproves_on_change_request(client, db):
     body = client.get(_state_url(proj, model, version)).json()
     assert body["version_status"] == "review"
     assert body["request_status"] == "requested"
+
+
+def test_deleted_node_review_is_removed(client, db):
+    proj, model, version, nodes = _seed(db)
+    client.patch(f"/api/v2/projects/{proj.id}/nodes/{nodes[0].id}/review", json={"status": "approved"})
+    d = client.delete(f"/api/v2/projects/{proj.id}/nodes/{nodes[0].id}")
+    assert d.status_code == 204, d.text
+    body = client.get(_state_url(proj, model, version)).json()
+    assert body["counts"]["total"] == 1
+    assert body["counts"]["approved"] == 0
+    assert body["nodes"] == []
+    db.expire_all()
+    rows = db.query(Review).filter(
+        Review.target_type == ReviewTargetType.PROCESS_NODE.value,
+        Review.target_id == nodes[0].id,
+    ).all()
+    assert rows == []
