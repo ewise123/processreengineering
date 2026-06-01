@@ -17,6 +17,7 @@ import type {
   ReviewDecision,
   SuggestedStep,
   UUID,
+  ViewerTarget,
 } from "@/lib/types";
 
 import { AiEditPanel } from "./ai-edit-panel";
@@ -42,6 +43,7 @@ export function PropertiesPanel({
   onDelete,
   onUpdate,
   onAddStep,
+  onOpenSource,
   review,
 }: {
   projectId: UUID;
@@ -59,6 +61,8 @@ export function PropertiesPanel({
     patch: { name?: string; laneId?: UUID; type?: string; description?: string }
   ) => Promise<void> | void;
   onAddStep?: (sourceId: UUID, step: SuggestedStep) => void;
+  /** Open a source document in the viewer, jumping to a citation's quote. */
+  onOpenSource: (target: ViewerTarget) => void;
   review?: {
     status: ReviewDecision | null;
     onApprove: () => void;
@@ -360,6 +364,7 @@ export function PropertiesPanel({
                     key={cit.citation_id}
                     kind={claim.kind}
                     citation={cit}
+                    onOpenSource={onOpenSource}
                   />
                 ))
               )}
@@ -454,38 +459,54 @@ const KIND_TINT: Record<string, string> = {
 function CitationCard({
   kind,
   citation,
+  onOpenSource,
 }: {
   kind: string;
   citation: CitationDetail;
+  onOpenSource: (target: ViewerTarget) => void;
 }) {
   const ref = citation.section_ref;
   const refLabel = formatSectionRef(citation.section_kind, ref);
   return (
-    <li className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <span
-          className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-700"
-          style={{ background: KIND_TINT[kind] ?? "#e2e8f0" }}
-        >
-          {kind.replace(/_/g, " ")}
-        </span>
-        <span className="ml-1 truncate text-[10px] font-semibold text-slate-700">
-          {citation.input_name}
-        </span>
-        {citation.confidence != null && (
-          <span className="ml-1 text-[9px] tabular-nums text-slate-400">
-            {Math.round(citation.confidence * 100)}%
+    <li>
+      <button
+        type="button"
+        onClick={() =>
+          onOpenSource({
+            inputId: citation.input_id,
+            inputName: citation.input_name,
+            sectionRef: citation.section_ref,
+            quote: citation.quote,
+          })
+        }
+        title="View this quote in the source document"
+        className="w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-left hover:border-violet-300 hover:bg-violet-50"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span
+            className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-700"
+            style={{ background: KIND_TINT[kind] ?? "#e2e8f0" }}
+          >
+            {kind.replace(/_/g, " ")}
           </span>
-        )}
-      </div>
-      <div className="mt-0.5 text-[10.5px] italic leading-snug text-slate-500">
-        “{citation.quote}”
-      </div>
-      {refLabel && (
-        <div className="mt-0.5 text-[9px] uppercase tracking-wider text-slate-400">
-          {refLabel}
+          <span className="ml-1 truncate text-[10px] font-semibold text-slate-700">
+            {citation.input_name}
+          </span>
+          {citation.confidence != null && (
+            <span className="ml-1 text-[9px] tabular-nums text-slate-400">
+              {Math.round(citation.confidence * 100)}%
+            </span>
+          )}
         </div>
-      )}
+        <div className="mt-0.5 text-[10.5px] italic leading-snug text-slate-500">
+          &ldquo;{citation.quote}&rdquo;
+        </div>
+        {refLabel && (
+          <div className="mt-0.5 text-[9px] uppercase tracking-wider text-slate-400">
+            {refLabel}
+          </div>
+        )}
+      </button>
     </li>
   );
 }
