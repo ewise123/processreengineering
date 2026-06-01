@@ -26,7 +26,7 @@ def test_native_pdf_by_suffix_when_mime_missing():
 
 def test_office_and_text_need_conversion():
     for nm, mime in [
-        ("a.docx", None), ("a.pptx", None), ("a.xlsx", None),
+        ("a.docx", None), ("a.pptx", None), ("a.xlsx", None), ("a.xlsm", None),
         ("a.txt", "text/plain"), ("a.md", "text/markdown"),
     ]:
         assert is_native_pdf(_inp(nm, mime)) is False
@@ -107,6 +107,7 @@ def test_convertible_miss_converts_and_caches(db, tmp_path, monkeypatch):
     assert out == rendered
     assert calls["n"] == 1
     assert inp.source_info["rendered_pdf"]["path"] == str(rendered)
+    assert inp.source_info["rendered_pdf"]["src_mtime"] == src.stat().st_mtime
 
 
 def test_convertible_cache_hit_skips_conversion(db, tmp_path, monkeypatch):
@@ -158,3 +159,18 @@ def test_unsupported_format_raises(db, tmp_path, monkeypatch):
     monkeypatch.setattr(render_pdf, "resolve_path", lambda rel: src)
     with pytest.raises(render_pdf.UnsupportedRenderFormat):
         render_pdf.rendered_pdf_path(inp, db)
+
+
+def test_missing_source_file_raises(db, tmp_path, monkeypatch):
+    missing = tmp_path / "nope.docx"
+    inp = _seed_input(db, name="nope.docx", mime=None)
+    monkeypatch.setattr(render_pdf, "resolve_path", lambda rel: missing)
+    with pytest.raises(FileNotFoundError):
+        render_pdf.rendered_pdf_path(inp, db)
+
+
+def test_convert_without_soffice_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(render_pdf, "_soffice_bin", lambda: None)
+    assert render_pdf.libreoffice_available() is False
+    with pytest.raises(render_pdf.UnsupportedRenderFormat):
+        render_pdf.convert_to_pdf(tmp_path / "x.docx", tmp_path)
