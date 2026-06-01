@@ -1,10 +1,14 @@
 import type {
+  AcceptDetectionRunResult,
   ChatRequest,
   ChatResponse,
   Claim,
   ClaimConflict,
   ClaimExtractionResult,
   ConflictDetectionResult,
+  DetectProcessesRequest,
+  DetectionRunDetail,
+  DetectionRunListRow,
   EmbedResult,
   InputParseResult,
   InputRow,
@@ -25,6 +29,7 @@ import type {
   ProcessMapGenerateResult,
   ProcessModel,
   ProcessNode,
+  ProcessSegment,
   Project,
   ProjectCreate,
   ProjectUpdate,
@@ -248,5 +253,71 @@ export const api = {
     request<ChatResponse>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/chat`,
       { method: "POST", json: body }
+    ),
+
+  // Process detection
+  detectProcesses: (projectId: UUID, body: DetectProcessesRequest = {}) =>
+    request<DetectionRunDetail>(
+      `/api/v2/projects/${projectId}/detect-processes`,
+      { method: "POST", json: body }
+    ),
+  listDetectionRuns: (projectId: UUID) =>
+    request<DetectionRunListRow[]>(
+      `/api/v2/projects/${projectId}/detection-runs`
+    ),
+  getDetectionRun: (projectId: UUID, runId: UUID) =>
+    request<DetectionRunDetail>(
+      `/api/v2/projects/${projectId}/detection-runs/${runId}`
+    ),
+  updateSegment: (
+    projectId: UUID,
+    segmentId: UUID,
+    body: { name?: string | null; description?: string | null }
+  ) =>
+    request<ProcessSegment>(
+      `/api/v2/projects/${projectId}/segments/${segmentId}`,
+      { method: "PATCH", json: body }
+    ),
+  createSegment: (
+    projectId: UUID,
+    runId: UUID,
+    body: { name: string }
+  ) =>
+    request<ProcessSegment>(
+      `/api/v2/projects/${projectId}/detection-runs/${runId}/segments`,
+      { method: "POST", json: body }
+    ),
+  mergeSegment: (
+    projectId: UUID,
+    segmentId: UUID,
+    body: { into_segment_id: UUID }
+  ) =>
+    request<ProcessSegment>(
+      `/api/v2/projects/${projectId}/segments/${segmentId}/merge`,
+      { method: "POST", json: body }
+    ),
+  deleteSegment: (projectId: UUID, segmentId: UUID) =>
+    request<void>(
+      `/api/v2/projects/${projectId}/segments/${segmentId}`,
+      { method: "DELETE" }
+    ),
+  moveClaimToSegment: (
+    projectId: UUID,
+    segmentId: UUID,
+    body: { claim_id: UUID }
+  ) =>
+    request<ProcessSegment>(
+      `/api/v2/projects/${projectId}/segments/${segmentId}/claims`,
+      { method: "POST", json: body }
+    ),
+  acceptDetectionRun: (projectId: UUID, runId: UUID) =>
+    request<AcceptDetectionRunResult>(
+      `/api/v2/projects/${projectId}/detection-runs/${runId}/accept`,
+      { method: "POST" }
+    ),
+  discardDetectionRun: (projectId: UUID, runId: UUID) =>
+    request<void>(
+      `/api/v2/projects/${projectId}/detection-runs/${runId}`,
+      { method: "DELETE" }
     ),
 };

@@ -23,6 +23,9 @@ export type CanvasNodeKind =
  */
 export interface CanvasNode {
   id: UUID;
+  /** Backend NodeType string, e.g. "task", "gateway_exclusive". Preserved
+   * so copy/paste recreates the exact type (kind alone is lossy). */
+  type: string;
   kind: CanvasNodeKind;
   label: string;
   laneId: UUID | null;

@@ -27,6 +27,8 @@ export function LaneRail({
   onRenameLane,
   onAddLaneAt,
   onDeleteLane,
+  collapsedLaneIds,
+  onToggleCollapse,
 }: {
   lanes: CanvasLane[];
   viewport: Viewport;
@@ -35,6 +37,8 @@ export function LaneRail({
   onRenameLane: (laneId: string, newName: string) => void;
   onAddLaneAt: (index: number) => void;
   onDeleteLane: (laneId: string) => void;
+  collapsedLaneIds: Set<string>;
+  onToggleCollapse: (laneId: string) => void;
 }) {
   const railRef = useRef<HTMLDivElement>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
@@ -214,6 +218,38 @@ export function LaneRail({
                 }}
               />
             )}
+
+            {/* Collapse/expand toggle. Anchored at the top-right of the header
+              strip so it stays reachable in a 28px collapsed strip and clears
+              the left-edge drag/options controls. */}
+            <button
+              onClick={(ev) => {
+                ev.stopPropagation();
+                onToggleCollapse(lane.id);
+              }}
+              title={collapsedLaneIds.has(lane.id) ? "Expand lane" : "Collapse lane"}
+              style={{
+                position: "absolute",
+                top: 4,
+                left: `${headerW - 20}px`,
+                width: 16,
+                height: 16,
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                color: "#475569",
+                padding: 0,
+                zIndex: 3,
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                {collapsedLaneIds.has(lane.id) ? (
+                  <path d="M9 18l6-6-6-6" />
+                ) : (
+                  <path d="M6 9l6 6 6-6" />
+                )}
+              </svg>
+            </button>
 
             <div
               style={{
@@ -458,7 +494,7 @@ export function LaneRail({
               </div>
             )}
 
-            {!isDragging && (
+            {!isDragging && !collapsedLaneIds.has(lane.id) && (
               <div
                 onMouseDown={(e) => {
                   e.preventDefault();

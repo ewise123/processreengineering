@@ -99,9 +99,35 @@ def generate_process_map(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ProcessMapGenerateResult:
-    # 1. Load claims (optionally scoped to specific input ids via citations)
+    # 1. Load claims (optionally scoped to a detection segment or input ids)
     claim_query = select(Claim).where(Claim.project_id == project.id)
-    if payload.scope_input_ids:
+    if payload.segment_id is not None:
+        from app.enums import DetectionRunStatus
+        from app.models.process_detection import (
+            ClaimSegmentMembership,
+            DetectionRun,
+            ProcessSegment,
+        )
+
+        segment = db.get(ProcessSegment, payload.segment_id)
+        if segment is None or segment.project_id != project.id:
+            raise HTTPException(
+                status_code=404, detail="Detection segment not found"
+            )
+        run = db.get(DetectionRun, segment.detection_run_id)
+        if run is None or run.status != DetectionRunStatus.ACCEPTED.value:
+            raise HTTPException(
+                status_code=409,
+                detail="Segment belongs to a detection run that is not accepted.",
+            )
+        claim_query = (
+            claim_query.join(
+                ClaimSegmentMembership,
+                ClaimSegmentMembership.claim_id == Claim.id,
+            )
+            .where(ClaimSegmentMembership.segment_id == payload.segment_id)
+        )
+    elif payload.scope_input_ids:
         from app.models.claim import ClaimCitation
 
         claim_query = (
@@ -185,6 +211,7 @@ def generate_process_map(
         bpmn_xml=bpmn_xml,
         notes=f"Generated from {len(claims)} claim(s).",
         created_by=user.id,
+        source_segment_id=payload.segment_id,
     )
     db.add(version)
     db.flush()
@@ -376,12 +403,18 @@ def list_process_maps(
 
     # One row per model: the highest version_number row, via DISTINCT ON.
     model_ids = [m.id for m in models]
+    from app.models.process_detection import DetectionRun, ProcessSegment
+
     rows = db.execute(
         select(
             ProcessVersion.model_id,
             ProcessVersion.id,
             ProcessVersion.version_number,
+            ProcessVersion.source_segment_id,
+            DetectionRun.status,
         )
+        .outerjoin(ProcessSegment, ProcessSegment.id == ProcessVersion.source_segment_id)
+        .outerjoin(DetectionRun, DetectionRun.id == ProcessSegment.detection_run_id)
         .where(ProcessVersion.model_id.in_(model_ids))
         .order_by(
             ProcessVersion.model_id,
@@ -390,14 +423,16 @@ def list_process_maps(
         .distinct(ProcessVersion.model_id)
     ).all()
     latest_by_model: dict = {
-        row[0]: (row[1], row[2]) for row in rows
+        row[0]: (row[1], row[2], row[3], row[4]) for row in rows
     }
 
     return [
         ProcessModelRead.model_validate(m).model_copy(
             update={
-                "latest_version_id": latest_by_model.get(m.id, (None, None))[0],
-                "latest_version_number": latest_by_model.get(m.id, (None, None))[1],
+                "latest_version_id": latest_by_model.get(m.id, (None, None, None, None))[0],
+                "latest_version_number": latest_by_model.get(m.id, (None, None, None, None))[1],
+                "latest_source_segment_id": latest_by_model.get(m.id, (None, None, None, None))[2],
+                "latest_source_run_status": latest_by_model.get(m.id, (None, None, None, None))[3],
             }
         )
         for m in models

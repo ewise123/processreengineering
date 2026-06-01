@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { BpmnCanvas, type BpmnCanvasHandle } from "@/components/canvas/bpmn-canvas";
+import { BpmnCanvas, type BpmnCanvasHandle, type CanvasSelection } from "@/components/canvas/bpmn-canvas";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { RightPanel } from "@/components/canvas/right-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
@@ -39,16 +39,6 @@ const STATUS_COLOR: Record<SaveStatus, string> = {
   error: "#dc2626",
 };
 
-type Selected =
-  | {
-      id: string;
-      kind: "node" | "edge";
-      name?: string;
-      nodeKind?: string;
-      laneId?: string | null;
-    }
-  | null;
-
 export default function CanvasPage() {
   const params = useParams<{
     id: string;
@@ -58,7 +48,7 @@ export default function CanvasPage() {
   const [showXml, setShowXml] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Selected>(null);
+  const [selected, setSelected] = useState<CanvasSelection>({ kind: "none" });
   // The right panel is always present; only its collapsed/expanded state
   // varies. Lifting it to the page so the Properties panel can shift as
   // the right panel changes width.
@@ -66,6 +56,11 @@ export default function CanvasPage() {
   // Properties panel collapse state lifted so the page can resize the
   // wrapper to a small button when collapsed.
   const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
+  const [counts, setCounts] = useState<{ lanes: number; nodes: number; edges: number } | null>(null);
+  const handleCountsChange = useCallback(
+    (c: { lanes: number; nodes: number; edges: number }) => setCounts(c),
+    []
+  );
   const canvasRef = useRef<BpmnCanvasHandle>(null);
   const queryClient = useQueryClient();
 
@@ -73,7 +68,7 @@ export default function CanvasPage() {
     async (id: UUID) => {
       if (!canvasRef.current) return;
       await canvasRef.current.deleteNode(id);
-      setSelected(null);
+      setSelected({ kind: "none" });
     },
     []
   );
@@ -84,7 +79,7 @@ export default function CanvasPage() {
       await canvasRef.current.updateNode(id, patch);
       // Reflect the new label/lane in the panel without forcing a re-select.
       setSelected((curr) =>
-        curr && curr.id === id
+        curr.kind === "node" && curr.id === id
           ? {
               ...curr,
               ...(patch.name !== undefined ? { name: patch.name } : {}),
@@ -98,7 +93,7 @@ export default function CanvasPage() {
 
   const handleNodeDeleted = useCallback(
     (_id: UUID) => {
-      setSelected(null);
+      setSelected({ kind: "none" });
       queryClient.invalidateQueries({
         queryKey: ["issues", params.id, params.modelId, params.versionId],
       });
@@ -114,11 +109,9 @@ export default function CanvasPage() {
     []
   );
 
-  const handleSelectionChange = useCallback((s: Selected) => {
+  const handleSelectionChange = useCallback((s: CanvasSelection) => {
     setSelected(s);
-    // A new selection should always re-expand the panel — without this the
-    // user can lose the panel after a previous collapse.
-    if (s) setPropertiesCollapsed(false);
+    if (s.kind === "node") setPropertiesCollapsed(false);
   }, []);
 
   const { data, isLoading, error } = useQuery({
@@ -146,7 +139,7 @@ export default function CanvasPage() {
     [data]
   );
 
-  const selectedNode = selected?.kind === "node" ? selected : null;
+  const selectedNode = selected.kind === "node" ? selected : null;
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
@@ -194,11 +187,11 @@ export default function CanvasPage() {
                 fontSize: 12,
               }}
             >
-              <span style={{ fontWeight: 600 }}>{data.lanes.length} lanes</span>
+              <span style={{ fontWeight: 600 }}>{counts?.lanes ?? data.lanes.length} lanes</span>
               <span style={{ color: "#94a3b8" }}>·</span>
-              <span style={{ fontWeight: 600 }}>{data.nodes.length} nodes</span>
+              <span style={{ fontWeight: 600 }}>{counts?.nodes ?? data.nodes.length} nodes</span>
               <span style={{ color: "#94a3b8" }}>·</span>
-              <span style={{ fontWeight: 600 }}>{data.edges.length} edges</span>
+              <span style={{ fontWeight: 600 }}>{counts?.edges ?? data.edges.length} edges</span>
               <span style={{ color: "#94a3b8" }}>·</span>
               <Badge variant="outline">v{data.version.version_number}</Badge>
               <Badge variant="secondary">{data.version.status}</Badge>
@@ -266,6 +259,7 @@ export default function CanvasPage() {
           onSaveStatusChange={handleSaveStatusChange}
           onSelectionChange={handleSelectionChange}
           onNodeDeleted={handleNodeDeleted}
+          onCountsChange={handleCountsChange}
         />
       )}
 
@@ -300,6 +294,26 @@ export default function CanvasPage() {
         </div>
       )}
 
+      {selected.kind === "multi" && data && (
+        <div
+          style={{
+            position: "absolute",
+            right: rightCollapsed ? 64 : 384,
+            top: 60,
+            zIndex: 25,
+            transition: "right 150ms ease",
+          }}
+        >
+          <BulkActionBar
+            count={selected.nodeIds.length + selected.edgeIds.length}
+            lanes={data.lanes.map((l) => ({ id: l.id, name: l.name }))}
+            onDelete={() => canvasRef.current?.deleteSelection()}
+            onCopy={() => canvasRef.current?.copySelection()}
+            onMoveToLane={(laneId) => canvasRef.current?.moveSelectionToLane(laneId as UUID)}
+          />
+        </div>
+      )}
+
       {/* Tabbed right panel — always visible, anchored to the right edge.
           User collapses it via the chevron inside the panel. */}
       {data && (
@@ -325,7 +339,13 @@ export default function CanvasPage() {
               type: n.type,
               lane_id: n.lane_id,
             }))}
-            selected={selected as { id: UUID; kind: "node" | "edge"; name?: string; nodeKind?: string } | null}
+            selected={
+              selected.kind === "node"
+                ? { id: selected.id, kind: "node", name: selected.name, nodeKind: selected.nodeKind }
+                : selected.kind === "edge"
+                  ? { id: selected.id, kind: "edge" }
+                  : null
+            }
             onFocusNode={(id) => canvasRef.current?.selectNode(id)}
             collapsed={rightCollapsed}
             onCollapsedChange={setRightCollapsed}
@@ -388,6 +408,71 @@ function SaveIndicator({
         }}
       />
       {STATUS_LABEL[status]}
+    </div>
+  );
+}
+
+function BulkActionBar({
+  count,
+  lanes,
+  onDelete,
+  onCopy,
+  onMoveToLane,
+}: {
+  count: number;
+  lanes: { id: string; name: string }[];
+  onDelete: () => void;
+  onCopy: () => void;
+  onMoveToLane: (laneId: string) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 12px",
+        background: "rgba(255,255,255,0.98)",
+        borderRadius: 8,
+        border: "1px solid #e2e8f0",
+        boxShadow: "0 8px 28px -8px rgba(15,23,42,0.18)",
+        fontSize: 13,
+        height: 44,
+      }}
+    >
+      <span style={{ fontWeight: 600 }}>{count} selected</span>
+      <span style={{ color: "#94a3b8" }}>·</span>
+      <Button size="sm" variant="outline" onClick={onCopy}>
+        Copy
+      </Button>
+      <select
+        defaultValue=""
+        onChange={(e) => {
+          if (e.target.value) {
+            onMoveToLane(e.target.value);
+            e.target.value = "";
+          }
+        }}
+        style={{
+          height: 32,
+          borderRadius: 6,
+          border: "1px solid #e2e8f0",
+          fontSize: 12,
+          padding: "0 6px",
+        }}
+      >
+        <option value="" disabled>
+          Move to lane…
+        </option>
+        {lanes.map((l) => (
+          <option key={l.id} value={l.id}>
+            {l.name}
+          </option>
+        ))}
+      </select>
+      <Button size="sm" variant="destructive" onClick={onDelete}>
+        Delete
+      </Button>
     </div>
   );
 }

@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { GenerateMapForm } from "@/components/generate-map-form";
+import { PostAcceptPanel } from "@/components/detect/post-accept-panel";
 import { api } from "@/lib/api";
 
 export default function MapsPage() {
@@ -14,6 +15,16 @@ export default function MapsPage() {
     queryKey: ["maps", id],
     queryFn: () => api.listProcessMaps(id),
   });
+
+  const params = useSearchParams();
+  const router = useRouter();
+  const postAcceptRun = params.get("postAcceptRun");
+
+  const dismissPanel = () => {
+    const sp = new URLSearchParams(params.toString());
+    sp.delete("postAcceptRun");
+    router.replace(`/projects/${id}/maps${sp.toString() ? `?${sp}` : ""}`);
+  };
 
   return (
     <div className="space-y-4">
@@ -24,6 +35,14 @@ export default function MapsPage() {
         </p>
         <GenerateMapForm projectId={id} />
       </div>
+
+      {postAcceptRun && (
+        <PostAcceptPanel
+          projectId={id}
+          runId={postAcceptRun}
+          onDismiss={dismissPanel}
+        />
+      )}
 
       {isLoading && (
         <p className="text-sm text-muted-foreground">Loading…</p>
@@ -37,7 +56,9 @@ export default function MapsPage() {
           <CardHeader>
             <CardTitle>No maps yet</CardTitle>
             <CardDescription>
-              Extract claims from at least one document, then click Generate map.
+              Find the processes in your documents — open the Processes tab and
+              click Detect processes. You can also generate a single map
+              directly with the button above.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -55,7 +76,17 @@ export default function MapsPage() {
                   <CardHeader>
                     <div className="flex items-start justify-between gap-2">
                       <CardTitle className="line-clamp-1">{m.name}</CardTitle>
-                      <Badge variant="outline">{m.level}</Badge>
+                      <div className="flex items-center gap-1">
+                        <Badge variant="outline">{m.level}</Badge>
+                        {m.latest_source_run_status === "superseded" && (
+                          <Badge
+                            variant="secondary"
+                            title="Generated from a detection run that has since been superseded."
+                          >
+                            stale
+                          </Badge>
+                        )}
+                      </div>
                     </div>
                     <CardDescription>
                       {m.latest_version_number

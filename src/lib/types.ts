@@ -108,6 +108,13 @@ export interface ProcessModel {
   updated_at: string;
   latest_version_id: UUID | null;
   latest_version_number: number | null;
+  latest_source_segment_id?: UUID | null;
+  latest_source_run_status?:
+    | "draft"
+    | "accepted"
+    | "archived"
+    | "superseded"
+    | null;
 }
 
 export interface ProcessVersion {
@@ -272,6 +279,7 @@ export interface ProcessMapGenerateRequest {
   focus?: string | null;
   map_type?: string | null;
   scope_input_ids?: UUID[] | null;
+  segment_id?: UUID | null;
 }
 
 export interface ProcessMapGenerateResult {
@@ -323,3 +331,44 @@ export const CLAIM_KINDS = [
   "system",
   "gateway_condition",
 ] as const;
+
+export interface ProcessSegment {
+  id: UUID;
+  detection_run_id: UUID;
+  name: string;
+  description: string;
+  order_index: number;
+  claim_count: number;
+  confidence: number | null;
+  is_unassigned: boolean;
+  claims: Array<{ id: UUID; kind: string; subject: string }>;
+}
+
+export interface DetectionRunDetail {
+  id: UUID;
+  project_id: UUID;
+  status: "draft" | "accepted" | "archived" | "superseded";
+  claim_count_at_run: number;
+  model_used: string | null;
+  reasoning_summary: string | null;
+  created_at: string;
+  segments: ProcessSegment[];
+  unassigned_segment: ProcessSegment;
+}
+
+export interface DetectionRunListRow {
+  id: UUID;
+  status: "draft" | "accepted" | "archived" | "superseded";
+  claim_count_at_run: number;
+  segment_count: number;
+  created_at: string;
+}
+
+export interface AcceptDetectionRunResult {
+  run_id: UUID;
+  accepted_segment_count: number;
+}
+
+export interface DetectProcessesRequest {
+  scope_input_ids?: UUID[] | null;
+}

@@ -80,7 +80,9 @@ export default function DocumentsPage() {
           Upload documents (interviews, SOPs, policies, …) to feed the claim
           extractor and process generator.
         </p>
-        <UploadForm projectId={id} />
+        <div className="flex items-center gap-2">
+          <UploadForm projectId={id} />
+        </div>
       </div>
 
       {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}

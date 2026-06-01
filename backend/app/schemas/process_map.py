@@ -10,6 +10,7 @@ class ProcessMapGenerateRequest(BaseModel):
     focus: str | None = Field(default=None, max_length=300)
     map_type: str | None = Field(default=None, pattern=r"^(current_state|future_state)?$")
     scope_input_ids: list[UUID] | None = None
+    segment_id: UUID | None = None
 
 
 class ProcessMapGenerateResult(BaseModel):
@@ -222,3 +223,5 @@ class ProcessModelRead(BaseModel):
     updated_at: datetime
     latest_version_id: UUID | None = None
     latest_version_number: int | None = None
+    latest_source_segment_id: UUID | None = None
+    latest_source_run_status: str | None = None

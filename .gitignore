@@ -47,3 +47,6 @@ next-env.d.ts
 # python bytecode
 __pycache__/
 *.pyc
+
+# client interview transcripts / sample source documents — keep local only
+*_transcript.txt

@@ -12,12 +12,16 @@ import {
   type MouseEvent,
 } from "react";
 
+import { toast } from "sonner";
+
 import { api } from "@/lib/api";
 import type { IssueSeverity, UUID } from "@/lib/types";
 
+import { CanvasContextMenu, type ContextMenuItem } from "./canvas-context-menu";
 import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT } from "./layout";
+import { normalizeMarquee, nodesInMarquee } from "./selection";
 import {
   PALETTE_DRAG_MIME,
   PALETTE_SHAPES,
@@ -39,12 +43,20 @@ import type {
   ResolvedNode,
   Viewport,
 } from "./types";
+import { useClipboard } from "./use-clipboard";
 import { useGraphPersistence, type SaveStatus } from "./use-persistence";
 import { useUndoStack } from "./use-undo-stack";
 
 const WORLD_WIDTH_MIN = 1700;
 const WORLD_RIGHT_PADDING = 240;
 const MIN_LANE_HEIGHT = 90;
+const COLLAPSED_LANE_HEIGHT = 28;
+
+const PASTE_OFFSET = 24;
+
+const MIN_SCALE = 0.2;
+const MAX_SCALE = 2.5;
+const ZOOM_STEP = 1.2;
 
 const LANE_PALETTE = [
   "#dbeafe",
@@ -60,13 +72,16 @@ const LANE_PALETTE = [
 type Drag =
   | {
       type: "node";
-      id: string;
+      id: string; // the grabbed node
       offX: number;
       offY: number;
-      // Captured at drag-start so we can record the inverse for undo.
-      origX: number;
-      origRelativeY: number;
-      origLaneId: UUID | null;
+      members: Array<{
+        id: string;
+        origX: number;
+        origAbsY: number;
+        origRelativeY: number;
+        origLaneId: UUID | null;
+      }>;
     }
   | { type: "pan"; startX: number; startY: number; tx0: number; ty0: number }
   | {
@@ -84,6 +99,14 @@ type Drag =
       // The persisted bend value before the drag started, so we can record
       // an undo entry that snaps back to it.
       origBend: number | null;
+    }
+  | {
+      type: "marquee";
+      startX: number; // world coords
+      startY: number;
+      currX: number;
+      currY: number;
+      additive: boolean; // Shift held at start → add to existing selection
     };
 
 /** Orthogonal preview path from a node-side anchor toward an arbitrary
@@ -113,6 +136,12 @@ function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
   return lanes.find((l) => y >= l.y && y < l.y + l.h);
 }
 
+export type CanvasSelection =
+  | { kind: "none" }
+  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; laneId?: UUID | null }
+  | { kind: "edge"; id: UUID }
+  | { kind: "multi"; nodeIds: UUID[]; edgeIds: UUID[] };
+
 export interface BpmnCanvasHandle {
   /** Calls the API + removes the node (and any edges touching it) from
    * local state without re-fetching the whole graph. */
@@ -126,6 +155,12 @@ export interface BpmnCanvasHandle {
   /** Select a node (drives Properties panel + chat context) from outside
    * the canvas, e.g. clicking a node link in the Issues tab. */
   selectNode: (id: UUID) => void;
+  /** Delete every selected node and edge (node deletes are non-undoable). */
+  deleteSelection: () => Promise<void>;
+  /** Copy the current selection to the in-memory clipboard. */
+  copySelection: () => void;
+  /** Reassign every selected node to a lane (grouped undo). */
+  moveSelectionToLane: (laneId: UUID) => void;
 }
 
 interface BpmnCanvasProps {
@@ -137,20 +172,11 @@ interface BpmnCanvasProps {
   initialLanes: CanvasLane[];
   issuesByNode?: Record<string, IssueSeverity>;
   onSaveStatusChange?: (status: SaveStatus, error: string | null) => void;
-  onSelectionChange?: (
-    selected:
-      | {
-          id: string;
-          kind: "node" | "edge";
-          name?: string;
-          nodeKind?: string;
-          laneId?: string | null;
-        }
-      | null
-  ) => void;
+  onSelectionChange?: (selected: CanvasSelection) => void;
   /** Fires after a node is removed (via panel Delete or keyboard). The page
    * uses this to invalidate dependent queries like issue badges. */
   onNodeDeleted?: (id: UUID) => void;
+  onCountsChange?: (counts: { lanes: number; nodes: number; edges: number }) => void;
 }
 
 export const BpmnCanvas = forwardRef<BpmnCanvasHandle, BpmnCanvasProps>(
@@ -165,6 +191,7 @@ function BpmnCanvas({
   onSaveStatusChange,
   onSelectionChange,
   onNodeDeleted,
+  onCountsChange,
 }, ref) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState(initialNodes);
@@ -175,27 +202,68 @@ function BpmnCanvas({
     ty: 60,
     scale: 1,
   });
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [drag, setDrag] = useState<Drag | null>(null);
   const [tool, setTool] = useState<CanvasTool>("select");
   const [showIssues, setShowIssues] = useState(true);
   const [reviewMode, setReviewMode] = useState(false);
   const [editingEdgeId, setEditingEdgeId] = useState<UUID | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    items: ContextMenuItem[];
+  } | null>(null);
+  const [collapsedLaneIds, setCollapsedLaneIds] = useState<Set<string>>(() => new Set());
+  const toggleLaneCollapse = useCallback((laneId: string) => {
+    setCollapsedLaneIds((curr) => {
+      const next = new Set(curr);
+      if (next.has(laneId)) next.delete(laneId);
+      else next.add(laneId);
+      return next;
+    });
+  }, []);
 
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
 
   const { record, undo, redo, canUndo, canRedo } = useUndoStack();
+  const clipboard = useClipboard();
+
+  const selectOnly = useCallback((id: string) => setSelectedIds(new Set([id])), []);
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+  const toggleSelection = useCallback((id: string) => {
+    setSelectedIds((curr) => {
+      const next = new Set(curr);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const setSelection = useCallback((ids: string[], additive: boolean) => {
+    setSelectedIds((curr) => {
+      const next = additive ? new Set(curr) : new Set<string>();
+      for (const id of ids) next.add(id);
+      return next;
+    });
+  }, []);
+  const deselect = useCallback((id: string) => {
+    setSelectedIds((curr) => {
+      if (!curr.has(id)) return curr;
+      const next = new Set(curr);
+      next.delete(id);
+      return next;
+    });
+  }, []);
 
   const deleteNodeImpl = useCallback(
     async (id: UUID) => {
       await api.deleteNode(projectId, id);
       setNodes((curr) => curr.filter((n) => n.id !== id));
       setEdges((curr) => curr.filter((e) => e.from !== id && e.to !== id));
-      setSelectedId((curr) => (curr === id ? null : curr));
+      deselect(id);
       onNodeDeleted?.(id);
     },
-    [projectId, onNodeDeleted]
+    [projectId, onNodeDeleted, deselect]
   );
 
   const applyNodeEditLocal = useCallback(
@@ -271,7 +339,7 @@ function BpmnCanvas({
       let currentId = id;
       const remove = (rid: UUID) => {
         setEdges((curr) => curr.filter((e2) => e2.id !== rid));
-        setSelectedId((curr) => (curr === rid ? null : curr));
+        deselect(rid);
       };
       const recreate = async () => {
         const created = await api.createEdge(projectId, modelId, versionId, {
@@ -301,8 +369,25 @@ function BpmnCanvas({
         undo: recreate,
       });
     },
-    [projectId, modelId, versionId, record]
+    [projectId, modelId, versionId, record, deselect]
   );
+
+  const deleteSelectionImpl = useCallback(async () => {
+    const ids = [...selectedIdsRef.current];
+    if (ids.length === 0) return;
+    const nodeIds = ids.filter((id) => nodesRef.current.some((n) => n.id === id));
+    const edgeIds = ids.filter((id) => edgesRef.current.some((e) => e.id === id));
+    // Nodes first: deleteNodeImpl also strips their touching edges locally.
+    for (const id of nodeIds) {
+      await deleteNodeImpl(id);
+    }
+    // Then any still-present standalone edges (skip ones a node delete removed).
+    for (const id of edgeIds) {
+      if (edgesRef.current.some((e) => e.id === id)) {
+        await deleteEdgeImpl(id);
+      }
+    }
+  }, [deleteNodeImpl, deleteEdgeImpl]);
 
   const updateEdgeLabelLocal = useCallback(
     async (id: UUID, label: string | null) => {
@@ -360,11 +445,11 @@ function BpmnCanvas({
         undo: async () => {
           await api.deleteEdge(projectId, currentId);
           setEdges((curr) => curr.filter((e) => e.id !== currentId));
-          setSelectedId((curr) => (curr === currentId ? null : curr));
+          deselect(currentId);
         },
       });
     },
-    [projectId, modelId, versionId, record]
+    [projectId, modelId, versionId, record, deselect]
   );
 
   // Recenter the viewport on a node so it's actually visible after a remote
@@ -372,7 +457,7 @@ function BpmnCanvas({
   const focusNodeInViewport = useCallback((id: UUID) => {
     const node = nodesRef.current.find((n) => n.id === id);
     if (!node) return;
-    const lane = lanesRef.current.find((l) => l.id === node.laneId);
+    const lane = displayLanesRef.current.find((l) => l.id === node.laneId);
     const nodeAbsY = lane ? lane.y + node.relativeY : node.relativeY;
     const svg = svgRef.current;
     if (!svg) return;
@@ -394,11 +479,14 @@ function BpmnCanvas({
       deleteNode: deleteNodeImpl,
       updateNode: updateNodeImpl,
       selectNode: (id) => {
-        setSelectedId(id);
+        setSelectedIds(new Set([id]));
         focusNodeInViewport(id);
       },
+      deleteSelection: deleteSelectionImpl,
+      copySelection: copySelectionImpl,
+      moveSelectionToLane: moveSelectionToLaneImpl,
     }),
-    [deleteNodeImpl, updateNodeImpl, focusNodeInViewport]
+    [deleteNodeImpl, updateNodeImpl, focusNodeInViewport, deleteSelectionImpl]
   );
 
   // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
@@ -429,21 +517,41 @@ function BpmnCanvas({
         void redo();
         return;
       }
+      if (mod && (e.key === "c" || e.key === "C")) {
+        e.preventDefault();
+        copySelectionImpl();
+        return;
+      }
+      if (mod && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        void pasteClipboardImpl();
+        return;
+      }
+
+      if (!mod) {
+        if (e.key === "v" || e.key === "V") { setTool("select"); return; }
+        if (e.key === "h" || e.key === "H") { setTool("pan"); return; }
+        if (e.key === "c" || e.key === "C") { setTool("connect"); return; }
+        if (e.key === "Escape") {
+          if (contextMenuRef.current) {
+            setContextMenu(null);
+            return;
+          }
+          setTool("select");
+          clearSelection();
+          return;
+        }
+      }
 
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (!selectedId) return;
-        if (nodesRef.current.some((n) => n.id === selectedId)) {
-          e.preventDefault();
-          void deleteNodeImpl(selectedId);
-        } else if (edgesRef.current.some((edge) => edge.id === selectedId)) {
-          e.preventDefault();
-          void deleteEdgeImpl(selectedId);
-        }
+        if (selectedIdsRef.current.size === 0) return;
+        e.preventDefault();
+        void deleteSelectionImpl();
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [selectedId, deleteNodeImpl, deleteEdgeImpl, undo, redo]);
+  }, [deleteSelectionImpl, undo, redo, clearSelection]);
 
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
@@ -453,6 +561,10 @@ function BpmnCanvas({
   lanesRef.current = lanes;
   const edgesRef = useRef(edges);
   edgesRef.current = edges;
+  const selectedIdsRef = useRef(selectedIds);
+  selectedIdsRef.current = selectedIds;
+  const contextMenuRef = useRef(contextMenu);
+  contextMenuRef.current = contextMenu;
 
   const { status, error, markNode, markLane, flush } = useGraphPersistence({
     projectId,
@@ -466,44 +578,81 @@ function BpmnCanvas({
   // Notify parent of selection so it can drive side panels.
   useEffect(() => {
     if (!onSelectionChange) return;
-    if (selectedId == null) {
-      onSelectionChange(null);
+    const ids = [...selectedIds];
+    if (ids.length === 0) {
+      onSelectionChange({ kind: "none" });
       return;
     }
-    const node = nodesRef.current.find((n) => n.id === selectedId);
-    if (node) {
-      onSelectionChange({
-        id: selectedId,
-        kind: "node",
-        name: node.label,
-        nodeKind: node.kind,
-        laneId: node.laneId,
-      });
+    if (ids.length === 1) {
+      const id = ids[0];
+      const node = nodesRef.current.find((n) => n.id === id);
+      if (node) {
+        onSelectionChange({
+          kind: "node",
+          id,
+          name: node.label,
+          nodeKind: node.kind,
+          laneId: node.laneId,
+        });
+      } else {
+        onSelectionChange({ kind: "edge", id });
+      }
       return;
     }
-    onSelectionChange({ id: selectedId, kind: "edge" });
-  }, [selectedId, onSelectionChange]);
+    const nodeIds = ids.filter((id) => nodesRef.current.some((n) => n.id === id));
+    const edgeIds = ids.filter((id) => edgesRef.current.some((e) => e.id === id));
+    onSelectionChange({ kind: "multi", nodeIds, edgeIds });
+  }, [selectedIds, onSelectionChange]);
+
+  useEffect(() => {
+    onCountsChange?.({
+      lanes: lanes.length,
+      nodes: nodes.length,
+      edges: edges.length,
+    });
+  }, [lanes.length, nodes.length, edges.length, onCountsChange]);
 
   const worldWidth = useMemo(() => {
     const maxX = nodes.reduce((m, n) => Math.max(m, n.x + n.w), 0);
     return Math.max(WORLD_WIDTH_MIN, maxX + WORLD_RIGHT_PADDING);
   }, [nodes]);
 
+  // Lane geometry as shown on screen: collapsed lanes shrink to a thin strip.
+  // The real `lanes` (true heights) are kept for persistence; only display
+  // geometry changes, so expanding restores the stored height.
+  const displayLanes = useMemo(() => {
+    let y = 0;
+    return lanes.map((l) => {
+      const h = collapsedLaneIds.has(l.id) ? COLLAPSED_LANE_HEIGHT : l.h;
+      const out = { ...l, y, h };
+      y += h;
+      return out;
+    });
+  }, [lanes, collapsedLaneIds]);
+
+  const displayLanesRef = useRef(displayLanes);
+  displayLanesRef.current = displayLanes;
+
   const worldHeight = useMemo(() => {
-    const maxBottom = lanes.reduce((m, l) => Math.max(m, l.y + l.h), 0);
+    const maxBottom = displayLanes.reduce((m, l) => Math.max(m, l.y + l.h), 0);
     return Math.max(620, maxBottom);
-  }, [lanes]);
+  }, [displayLanes]);
 
   const renderNodes: ResolvedNode[] = useMemo(() => {
-    const laneMap = new Map(lanes.map((l) => [l.id, l]));
-    return nodes.map((n) => {
-      const lane = n.laneId ? laneMap.get(n.laneId) : undefined;
-      const y = lane ? lane.y + n.relativeY : n.relativeY;
-      const { relativeY: _ignore, ...rest } = n;
-      void _ignore;
-      return { ...rest, y };
-    });
-  }, [nodes, lanes]);
+    const laneMap = new Map(displayLanes.map((l) => [l.id, l]));
+    return nodes
+      .filter((n) => !(n.laneId && collapsedLaneIds.has(n.laneId)))
+      .map((n) => {
+        const lane = n.laneId ? laneMap.get(n.laneId) : undefined;
+        const y = lane ? lane.y + n.relativeY : n.relativeY;
+        const { relativeY: _ignore, ...rest } = n;
+        void _ignore;
+        return { ...rest, y };
+      });
+  }, [nodes, displayLanes, collapsedLaneIds]);
+
+  const renderNodesRef = useRef(renderNodes);
+  renderNodesRef.current = renderNodes;
 
   const toWorld = useCallback(
     (sx: number, sy: number) => {
@@ -529,7 +678,7 @@ function BpmnCanvas({
       const v = viewportRef.current;
       if (e.ctrlKey || e.metaKey) {
         const delta = -e.deltaY * 0.002;
-        const newScale = Math.max(0.1, Math.min(2.5, v.scale * (1 + delta)));
+        const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale * (1 + delta)));
         const wx = (mx - v.tx) / v.scale;
         const wy = (my - v.ty) / v.scale;
         setViewport({
@@ -546,8 +695,31 @@ function BpmnCanvas({
   }, []);
 
   const onNodeMouseDown = (e: MouseEvent, id: string) => {
+    if (e.button !== 0) return;
+    setContextMenu(null);
     e.stopPropagation();
-    setSelectedId(id);
+    if (tool === "pan") {
+      // Hand mode: dragging a node pans the canvas instead of moving it.
+      setDrag({
+        type: "pan",
+        startX: e.clientX,
+        startY: e.clientY,
+        tx0: viewportRef.current.tx,
+        ty0: viewportRef.current.ty,
+      });
+      return;
+    }
+    if (tool === "select" && e.shiftKey) {
+      // Shift-click (Select tool) toggles this node in the selection without
+      // starting a drag. In Connect mode, fall through so body-drag still connects.
+      toggleSelection(id);
+      return;
+    }
+    const isGroupDrag =
+      selectedIdsRef.current.has(id) && selectedIdsRef.current.size > 1;
+    // Defer selection change for a node that's already part of a multi-selection:
+    // a drag moves the whole group (kept selected), a click collapses it on mouseup.
+    if (!isGroupDrag) selectOnly(id);
     const resolved = renderNodes.find((n) => n.id === id);
     const stored = nodesRef.current.find((n) => n.id === id);
     if (!resolved || !stored) return;
@@ -570,15 +742,29 @@ function BpmnCanvas({
       setDrag({ type: "connect", sourceId: id, sourceSide: side, currX: x, currY: y });
       return;
     }
-    setDrag({
-      type: "node",
-      id,
-      offX: x - resolved.x,
-      offY: y - resolved.y,
-      origX: stored.x,
-      origRelativeY: stored.relativeY,
-      origLaneId: stored.laneId,
-    });
+    const groupIds = isGroupDrag
+      ? [...selectedIdsRef.current].filter((sid) => {
+          const n = nodesRef.current.find((nn) => nn.id === sid);
+          return !!n && !(n.laneId && collapsedLaneIds.has(n.laneId));
+        })
+      : [id];
+    const laneById = new Map(displayLanesRef.current.map((l) => [l.id, l]));
+    const members = groupIds
+      .map((sid) => {
+        const sn = nodesRef.current.find((n) => n.id === sid);
+        if (!sn) return null;
+        const lane = sn.laneId ? laneById.get(sn.laneId) : undefined;
+        const origAbsY = (lane ? lane.y : 0) + sn.relativeY;
+        return {
+          id: sid,
+          origX: sn.x,
+          origAbsY,
+          origRelativeY: sn.relativeY,
+          origLaneId: sn.laneId,
+        };
+      })
+      .filter((m): m is NonNullable<typeof m> => m !== null);
+    setDrag({ type: "node", id, offX: x - resolved.x, offY: y - resolved.y, members });
   };
 
   const onStartBendDrag = useCallback(
@@ -627,29 +813,34 @@ function BpmnCanvas({
   const onStartConnect = useCallback(
     (e: MouseEvent, sourceId: UUID, side: ConnectSide) => {
       e.stopPropagation();
-      setSelectedId(sourceId);
+      selectOnly(sourceId);
       const { x, y } = toWorld(e.clientX, e.clientY);
       setDrag({ type: "connect", sourceId, sourceSide: side, currX: x, currY: y });
     },
-    [toWorld]
+    [toWorld, selectOnly]
   );
 
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
+    if (e.button !== 0) return;
+    setContextMenu(null);
     const target = e.target as SVGElement;
     const isBg =
       target === svgRef.current ||
       (target.tagName === "rect" && target.getAttribute("data-bg") === "1");
     if (!isBg) return;
-    // Don't deselect yet — onUp checks whether the cursor actually moved
-    // (drag → keep selection so the Properties panel stays put while panning,
-    // pure click → deselect).
-    setDrag({
-      type: "pan",
-      startX: e.clientX,
-      startY: e.clientY,
-      tx0: viewport.tx,
-      ty0: viewport.ty,
-    });
+    if (tool === "pan") {
+      setDrag({
+        type: "pan",
+        startX: e.clientX,
+        startY: e.clientY,
+        tx0: viewport.tx,
+        ty0: viewport.ty,
+      });
+      return;
+    }
+    // Select tool: start a marquee. A non-moving marquee clears selection on up.
+    const { x, y } = toWorld(e.clientX, e.clientY);
+    setDrag({ type: "marquee", startX: x, startY: y, currX: x, currY: y, additive: e.shiftKey });
   };
 
   // Drag is tracked at the *document* level so motion across the lane-rail
@@ -668,6 +859,11 @@ function BpmnCanvas({
     };
 
     const onMove = (e: globalThis.MouseEvent) => {
+      if (drag.type === "marquee") {
+        const { x, y } = screenToWorld(e.clientX, e.clientY);
+        setDrag({ ...drag, currX: x, currY: y });
+        return;
+      }
       if (drag.type === "connect") {
         const { x, y } = screenToWorld(e.clientX, e.clientY);
         setDrag({ ...drag, currX: x, currY: y });
@@ -692,34 +888,38 @@ function BpmnCanvas({
       }
       if (drag.type === "node") {
         const { x, y } = screenToWorld(e.clientX, e.clientY);
-        const newX = x - drag.offX;
-        const newAbsY = y - drag.offY;
-        const currLanes = lanesRef.current;
+        const grabbed = drag.members.find((m) => m.id === drag.id);
+        if (!grabbed) return;
+        const deltaX = x - drag.offX - grabbed.origX;
+        const deltaY = y - drag.offY - grabbed.origAbsY;
+        const currLanes = displayLanesRef.current;
         setNodes((curr) =>
           curr.map((n) => {
-            if (n.id !== drag.id) return n;
+            const m = drag.members.find((mm) => mm.id === n.id);
+            if (!m) return n;
+            const newX = m.origX + deltaX;
+            const targetAbsY = m.origAbsY + deltaY;
             const targetLane =
-              laneAtY(newAbsY + n.h / 2, currLanes) ??
+              laneAtY(targetAbsY + n.h / 2, currLanes) ??
               (n.laneId
                 ? currLanes.find((l) => l.id === n.laneId)
                 : currLanes[0]);
-            if (!targetLane) {
+            // Never re-lane into a collapsed (hidden) lane: maxRel would be 0,
+            // stranding the node in the 28px strip and clobbering its real
+            // relativeY. (Real lanes are >= MIN_LANE_HEIGHT (90); only a
+            // collapsed display-lane has h === COLLAPSED_LANE_HEIGHT.) Keep the
+            // node's current lane/relativeY; only x changes.
+            if (!targetLane || targetLane.h === COLLAPSED_LANE_HEIGHT) {
               return { ...n, x: newX };
             }
             const maxRel = Math.max(0, targetLane.h - n.h);
-            const rel = Math.max(
-              0,
-              Math.min(maxRel, newAbsY - targetLane.y)
-            );
-            return {
-              ...n,
-              x: newX,
-              laneId: targetLane.id,
-              relativeY: rel,
-            };
+            const rel = Math.max(0, Math.min(maxRel, targetAbsY - targetLane.y));
+            return { ...n, x: newX, laneId: targetLane.id, relativeY: rel };
           })
         );
-      } else {
+        return;
+      }
+      if (drag.type === "pan") {
         const v = viewportRef.current;
         setViewport({
           ...v,
@@ -747,7 +947,10 @@ function BpmnCanvas({
                   ? { bend_x: finalValue }
                   : { bend_y: finalValue }
               )
-              .catch((err) => console.error("Failed to save edge bend", err));
+              .catch((err) => {
+                console.error("Failed to save edge bend", err);
+                toast.error("Couldn't save the connection shape.");
+              });
             const edgeId = drag.edgeId;
             const orientation = drag.orientation;
             const origBend = drag.origBend;
@@ -766,7 +969,7 @@ function BpmnCanvas({
         const target = nodesRef.current.find((n) => {
           // Resolve node Y the same way renderNodes does.
           const lane = n.laneId
-            ? lanesRef.current.find((l) => l.id === n.laneId)
+            ? displayLanesRef.current.find((l) => l.id === n.laneId)
             : undefined;
           const ny = lane ? lane.y + n.relativeY : n.relativeY;
           return (
@@ -784,45 +987,58 @@ function BpmnCanvas({
             (e2) => e2.from === sourceId && e2.to === targetId
           );
           if (!exists) {
-            void createEdgeImpl(sourceId, targetId).catch((err) =>
-              console.error("Failed to create edge", err)
-            );
+            void createEdgeImpl(sourceId, targetId).catch((err) => {
+              console.error("Failed to create edge", err);
+              toast.error("Couldn't connect those steps — please try again.");
+            });
           }
         }
         setDrag(null);
         return;
       }
       if (drag.type === "node") {
-        const final = nodesRef.current.find((n) => n.id === drag.id);
-        if (final) {
-          markNode(final.id, {
-            x: final.x,
-            relative_y: final.relativeY,
-            lane_id: final.laneId ?? undefined,
+        const finals = drag.members
+          .map((m) => nodesRef.current.find((n) => n.id === m.id))
+          .filter((n): n is NonNullable<typeof n> => !!n);
+        for (const f of finals) {
+          markNode(f.id, {
+            x: f.x,
+            relative_y: f.relativeY,
+            lane_id: f.laneId ?? undefined,
           });
-          // Only register an undo entry if the node actually moved —
-          // a click without drag should not pollute the history.
-          const moved =
-            final.x !== drag.origX ||
-            final.relativeY !== drag.origRelativeY ||
-            final.laneId !== drag.origLaneId;
-          if (moved) {
-            const newPos = {
-              x: final.x,
-              relativeY: final.relativeY,
-              laneId: final.laneId,
-            };
-            const oldPos = {
-              x: drag.origX,
-              relativeY: drag.origRelativeY,
-              laneId: drag.origLaneId,
-            };
-            record({
-              description: "Move node",
-              do: () => applyNodePositionLocal(drag.id, newPos),
-              undo: () => applyNodePositionLocal(drag.id, oldPos),
-            });
-          }
+        }
+        const moved = drag.members.some((m) => {
+          const f = finals.find((n) => n.id === m.id);
+          return (
+            f &&
+            (f.x !== m.origX ||
+              f.relativeY !== m.origRelativeY ||
+              f.laneId !== m.origLaneId)
+          );
+        });
+        if (moved) {
+          const newPositions = finals.map((f) => ({
+            id: f.id,
+            x: f.x,
+            relativeY: f.relativeY,
+            laneId: f.laneId,
+          }));
+          const oldPositions = drag.members.map((m) => ({
+            id: m.id,
+            x: m.origX,
+            relativeY: m.origRelativeY,
+            laneId: m.origLaneId,
+          }));
+          record({
+            description: finals.length > 1 ? `Move ${finals.length} nodes` : "Move node",
+            do: () => applyGroupPositionsLocal(newPositions),
+            undo: () => applyGroupPositionsLocal(oldPositions),
+          });
+        }
+        // A plain click (no drag) on a member of a multi-selection collapses the
+        // selection to just that node; a real group drag leaves the group selected.
+        if (!moved && drag.members.length > 1) {
+          selectOnly(drag.id);
         }
       }
       if (drag.type === "pan") {
@@ -832,8 +1048,27 @@ function BpmnCanvas({
         const dx = e.clientX - drag.startX;
         const dy = e.clientY - drag.startY;
         if (dx * dx + dy * dy < 16) {
-          setSelectedId(null);
+          clearSelection();
         }
+      }
+      if (drag.type === "marquee") {
+        const rect = normalizeMarquee(drag.startX, drag.startY, drag.currX, drag.currY);
+        const moved = rect.w * rect.w + rect.h * rect.h > 16; // >4 world units (≈4px at 1.0 zoom)
+        if (!moved) {
+          if (!drag.additive) clearSelection();
+        } else {
+          const positioned = renderNodesRef.current.map((n) => ({
+            id: n.id,
+            x: n.x,
+            y: n.y,
+            w: n.w,
+            h: n.h,
+          }));
+          const hit = nodesInMarquee(positioned, rect);
+          setSelection(hit, drag.additive);
+        }
+        setDrag(null);
+        return;
       }
       setDrag(null);
     };
@@ -844,7 +1079,7 @@ function BpmnCanvas({
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
-  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal]);
+  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal, clearSelection, setSelection, selectOnly]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
   const onCanvasDragOver = (e: ReactDragEvent<SVGSVGElement>) => {
@@ -862,10 +1097,10 @@ function BpmnCanvas({
     const { x, y } = toWorld(e.clientX, e.clientY);
     const dropCenterX = x - shape.w / 2;
     const dropCenterY = y - shape.h / 2;
-    const currLanes = lanesRef.current;
+    const currLanes = displayLanesRef.current;
     const targetLane =
       laneAtY(dropCenterY + shape.h / 2, currLanes) ?? currLanes[0];
-    if (!targetLane) return;
+    if (!targetLane || collapsedLaneIds.has(targetLane.id)) return;
     const maxRel = Math.max(0, targetLane.h - shape.h);
     const rel = Math.max(
       0,
@@ -881,6 +1116,7 @@ function BpmnCanvas({
       });
       const newNode: CanvasNode = {
         id: created.id,
+        type: shape.backendType,
         kind: shape.kind,
         label: created.name,
         laneId: targetLane.id,
@@ -890,9 +1126,10 @@ function BpmnCanvas({
         h: shape.h,
       };
       setNodes((curr) => [...curr, newNode]);
-      setSelectedId(newNode.id);
+      selectOnly(newNode.id);
     } catch (err) {
       console.error("Failed to create node from palette", err);
+      toast.error("Couldn't add that shape — please try again.");
     }
   };
 
@@ -905,8 +1142,8 @@ function BpmnCanvas({
     const usableW = Math.max(1, rect.width - padding * 2);
     const usableH = Math.max(1, rect.height - padding * 2);
     const scale = Math.max(
-      0.3,
-      Math.min(2.5, Math.min(usableW / worldWidth, usableH / worldHeight))
+      MIN_SCALE,
+      Math.min(MAX_SCALE, Math.min(usableW / worldWidth, usableH / worldHeight))
     );
     setViewport({
       scale,
@@ -915,27 +1152,257 @@ function BpmnCanvas({
     });
   }, [worldWidth, worldHeight]);
 
+  // Zoom toward the viewport center, mirroring the wheel handler's anchor math
+  // so the +/- buttons keep content centered instead of drifting to the origin.
+  const zoomByStep = useCallback((factor: number) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const v = viewportRef.current;
+    const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale * factor));
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const wx = (cx - v.tx) / v.scale;
+    const wy = (cy - v.ty) / v.scale;
+    setViewport({ scale: newScale, tx: cx - wx * newScale, ty: cy - wy * newScale });
+  }, []);
+
   // Low-level mutator used by undo/redo callbacks for node moves. Bypasses
   // record() so undo replay does not pollute the history stack.
-  const applyNodePositionLocal = useCallback(
-    (
-      id: UUID,
-      pos: { x: number; relativeY: number; laneId: UUID | null }
-    ) => {
+  const applyGroupPositionsLocal = useCallback(
+    (positions: Array<{ id: UUID; x: number; relativeY: number; laneId: UUID | null }>) => {
+      const byId = new Map(positions.map((p) => [p.id, p]));
       setNodes((curr) =>
-        curr.map((n) =>
-          n.id === id
-            ? { ...n, x: pos.x, relativeY: pos.relativeY, laneId: pos.laneId }
-            : n
-        )
+        curr.map((n) => {
+          const p = byId.get(n.id);
+          return p ? { ...n, x: p.x, relativeY: p.relativeY, laneId: p.laneId } : n;
+        })
       );
-      markNode(id, {
-        x: pos.x,
-        relative_y: pos.relativeY,
-        lane_id: pos.laneId ?? undefined,
-      });
+      for (const p of positions) {
+        markNode(p.id, { x: p.x, relative_y: p.relativeY, lane_id: p.laneId ?? undefined });
+      }
     },
     [markNode]
+  );
+
+  const moveSelectionToLaneImpl = useCallback(
+    (laneId: UUID) => {
+      const ids = [...selectedIdsRef.current].filter((id) =>
+        nodesRef.current.some((n) => n.id === id)
+      );
+      if (ids.length === 0) return;
+      const oldPositions = ids.map((id) => {
+        const n = nodesRef.current.find((nn) => nn.id === id)!;
+        return { id, x: n.x, relativeY: n.relativeY, laneId: n.laneId };
+      });
+      const newPositions = oldPositions.map((p) => ({ ...p, relativeY: 0, laneId }));
+      applyGroupPositionsLocal(newPositions);
+      record({
+        description: `Move ${ids.length} to lane`,
+        do: () => applyGroupPositionsLocal(newPositions),
+        undo: () => applyGroupPositionsLocal(oldPositions),
+      });
+    },
+    [applyGroupPositionsLocal, record]
+  );
+
+  const copySelectionImpl = useCallback(() => {
+    const ids = new Set(
+      [...selectedIdsRef.current].filter((id) =>
+        nodesRef.current.some((n) => n.id === id)
+      )
+    );
+    if (ids.size === 0) return;
+    const nodes = nodesRef.current
+      .filter((n) => ids.has(n.id))
+      .map((n) => ({
+        oldId: n.id,
+        type: n.type,
+        kind: n.kind,
+        label: n.label,
+        laneId: n.laneId,
+        x: n.x,
+        relativeY: n.relativeY,
+        w: n.w,
+        h: n.h,
+      }));
+    const edges = edgesRef.current
+      .filter((e) => ids.has(e.from) && ids.has(e.to))
+      .map((e) => ({ fromOldId: e.from, toOldId: e.to, label: e.label }));
+    clipboard.copy({ nodes, edges });
+  }, [clipboard]);
+
+  const pasteClipboardImpl = useCallback(async () => {
+    const snap = clipboard.get();
+    if (!snap || snap.nodes.length === 0) return;
+    const fallbackLane = lanesRef.current[0];
+    // Resolve target specs ONCE (offset positions, resolved/persistable lanes).
+    const nodeSpecs = snap.nodes
+      .map((cn) => {
+        const laneId =
+          (cn.laneId && lanesRef.current.some((l) => l.id === cn.laneId)
+            ? cn.laneId
+            : fallbackLane?.id) ?? null;
+        if (!laneId) return null;
+        return {
+          oldId: cn.oldId,
+          type: cn.type,
+          kind: cn.kind,
+          label: cn.label,
+          laneId,
+          x: cn.x + PASTE_OFFSET,
+          relativeY: cn.relativeY + PASTE_OFFSET,
+          w: cn.w,
+          h: cn.h,
+        };
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null);
+    if (nodeSpecs.length === 0) return;
+    const edgeSpecs = snap.edges;
+
+    // Ids of the currently-materialized paste; updated on each (re)create so
+    // undo always deletes the live set and redo recreates fresh ones.
+    let currentNodeIds: UUID[] = [];
+    let currentEdgeIds: UUID[] = [];
+
+    const materialize = async () => {
+      const idMap = new Map<UUID, UUID>();
+      const createdNodes: CanvasNode[] = [];
+      const createdEdgeIds: UUID[] = [];
+      for (const ns of nodeSpecs) {
+        const created = await api.createNode(projectId, modelId, versionId, {
+          type: ns.type,
+          name: ns.label,
+          lane_id: ns.laneId,
+          x: ns.x,
+          relative_y: ns.relativeY,
+        });
+        idMap.set(ns.oldId, created.id);
+        createdNodes.push({
+          id: created.id,
+          type: ns.type,
+          kind: ns.kind,
+          label: created.name,
+          laneId: ns.laneId,
+          x: ns.x,
+          relativeY: ns.relativeY,
+          w: ns.w,
+          h: ns.h,
+        });
+      }
+      setNodes((curr) => [...curr, ...createdNodes]);
+      for (const es of edgeSpecs) {
+        const from = idMap.get(es.fromOldId);
+        const to = idMap.get(es.toOldId);
+        if (!from || !to) continue;
+        const created = await api.createEdge(projectId, modelId, versionId, {
+          source_node_id: from,
+          target_node_id: to,
+          label: es.label ?? undefined,
+        });
+        createdEdgeIds.push(created.id);
+        setEdges((curr) => [
+          ...curr,
+          { id: created.id, from, to, label: created.label ?? null },
+        ]);
+      }
+      currentNodeIds = createdNodes.map((n) => n.id);
+      currentEdgeIds = createdEdgeIds;
+      setSelectedIds(new Set(currentNodeIds));
+    };
+
+    const remove = async () => {
+      const nodeIds = currentNodeIds;
+      const edgeIds = currentEdgeIds;
+      for (const id of edgeIds) await api.deleteEdge(projectId, id).catch(() => {});
+      for (const id of nodeIds) await api.deleteNode(projectId, id).catch(() => {});
+      setEdges((curr) => curr.filter((e) => !edgeIds.includes(e.id)));
+      setNodes((curr) => curr.filter((n) => !nodeIds.includes(n.id)));
+      setSelectedIds(new Set());
+    };
+
+    try {
+      await materialize();
+      record({
+        description: `Paste ${currentNodeIds.length} item${currentNodeIds.length > 1 ? "s" : ""}`,
+        do: materialize,
+        undo: remove,
+      });
+    } catch (err) {
+      console.error("Failed to paste", err);
+      toast.error("Couldn't paste — please try again.");
+    }
+  }, [clipboard, projectId, modelId, versionId, record]);
+
+  const openNodeMenu = useCallback(
+    (e: MouseEvent, nodeId: UUID) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const wasSelected = selectedIdsRef.current.has(nodeId);
+      if (!wasSelected) selectOnly(nodeId);
+      // When the node wasn't already selected we just collapsed to it (size 1);
+      // otherwise the ref accurately reflects the current multi-selection.
+      const count = wasSelected ? selectedIdsRef.current.size : 1;
+      const suffix = count > 1 ? ` ${count}` : "";
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          { label: `Copy${suffix}`, onSelect: copySelectionImpl },
+          {
+            label: "Duplicate",
+            onSelect: () => {
+              copySelectionImpl();
+              void pasteClipboardImpl();
+            },
+          },
+          { label: `Delete${suffix}`, onSelect: () => void deleteSelectionImpl() },
+        ],
+      });
+    },
+    [selectOnly, copySelectionImpl, pasteClipboardImpl, deleteSelectionImpl]
+  );
+
+  const openEdgeMenu = useCallback(
+    (e: MouseEvent, edgeId: UUID) => {
+      e.preventDefault();
+      e.stopPropagation();
+      selectOnly(edgeId);
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          { label: "Edit label", onSelect: () => setEditingEdgeId(edgeId) },
+          { label: "Delete", onSelect: () => void deleteEdgeImpl(edgeId) },
+        ],
+      });
+    },
+    [selectOnly, deleteEdgeImpl]
+  );
+
+  const openCanvasMenu = useCallback(
+    (e: MouseEvent<SVGSVGElement>) => {
+      e.preventDefault();
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          {
+            label: "Paste",
+            disabled: !clipboard.hasContent(),
+            onSelect: () => void pasteClipboardImpl(),
+          },
+          {
+            label: "Select all",
+            onSelect: () =>
+              setSelectedIds(new Set(renderNodesRef.current.map((n) => n.id))),
+          },
+          { label: "Fit to screen", onSelect: fitToWorld },
+        ],
+      });
+    },
+    [clipboard, pasteClipboardImpl, fitToWorld]
   );
 
   const recomputeY = (ls: CanvasLane[]): CanvasLane[] => {
@@ -1085,6 +1552,7 @@ function BpmnCanvas({
         // create transaction, so no follow-up PATCH calls are needed.
       } catch (e) {
         console.error("Failed to add lane", e);
+        toast.error("Couldn't add the lane — please try again.");
       }
     },
     [projectId, modelId, versionId, flush]
@@ -1115,6 +1583,7 @@ function BpmnCanvas({
         // transaction, so no follow-up PATCH calls are needed.
       } catch (e) {
         console.error("Failed to delete lane", e);
+        toast.error("Couldn't delete the lane — please try again.");
       }
     },
     [projectId, flush]
@@ -1125,6 +1594,7 @@ function BpmnCanvas({
       <svg
         ref={svgRef}
         onMouseDown={onSvgMouseDown}
+        onContextMenu={openCanvasMenu}
         onDragOver={onCanvasDragOver}
         onDrop={onCanvasDrop}
         style={{
@@ -1133,9 +1603,11 @@ function BpmnCanvas({
           cursor:
             drag?.type === "pan"
               ? "grabbing"
-              : tool === "connect"
-                ? "crosshair"
-                : "default",
+              : tool === "pan"
+                ? "grab"
+                : tool === "connect"
+                  ? "crosshair"
+                  : "default",
           userSelect: "none",
         }}
       >
@@ -1174,7 +1646,7 @@ function BpmnCanvas({
             height={worldHeight + 2000}
             fill="url(#poet-grid)"
           />
-          {lanes.map((lane) => (
+          {displayLanes.map((lane) => (
             <g key={lane.id}>
               <rect
                 data-bg="1"
@@ -1203,28 +1675,38 @@ function BpmnCanvas({
               />
             </g>
           ))}
-          {edges.map((edge) => (
-            <EdgeArrow
-              key={edge.id}
-              edge={edge}
-              nodes={renderNodes}
-              selected={selectedId === edge.id}
-              onClick={(id) => setSelectedId(id)}
-              onDoubleClick={(id) => {
-                setSelectedId(id);
-                setEditingEdgeId(id);
-              }}
-              onStartBendDrag={onStartBendDrag}
-            />
-          ))}
+          {edges
+            .filter((edge) => {
+              const f = nodes.find((n) => n.id === edge.from);
+              const t = nodes.find((n) => n.id === edge.to);
+              const hidden = (n?: CanvasNode) =>
+                !!n?.laneId && collapsedLaneIds.has(n.laneId);
+              return !hidden(f) && !hidden(t);
+            })
+            .map((edge) => (
+              <EdgeArrow
+                key={edge.id}
+                edge={edge}
+                nodes={renderNodes}
+                selected={selectedIds.has(edge.id)}
+                onClick={(id) => selectOnly(id)}
+                onDoubleClick={(id) => {
+                  selectOnly(id);
+                  setEditingEdgeId(id);
+                }}
+                onContextMenu={openEdgeMenu}
+                onStartBendDrag={onStartBendDrag}
+              />
+            ))}
           {renderNodes.map((node) => (
             <NodeShape
               key={node.id}
               node={node}
-              selected={selectedId === node.id}
+              selected={selectedIds.has(node.id)}
               issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
               showHandles={tool === "connect"}
               onMouseDown={onNodeMouseDown}
+              onContextMenu={openNodeMenu}
               onStartConnect={onStartConnect}
             />
           ))}
@@ -1279,17 +1761,36 @@ function BpmnCanvas({
                 />
               );
             })()}
+          {drag?.type === "marquee" &&
+            (() => {
+              const r = normalizeMarquee(drag.startX, drag.startY, drag.currX, drag.currY);
+              return (
+                <rect
+                  x={r.x}
+                  y={r.y}
+                  width={r.w}
+                  height={r.h}
+                  fill="rgba(37,99,235,0.08)"
+                  stroke="#2563eb"
+                  strokeWidth={1}
+                  strokeDasharray="4 3"
+                  pointerEvents="none"
+                />
+              );
+            })()}
         </g>
       </svg>
 
       <LaneRail
-        lanes={lanes}
+        lanes={displayLanes}
         viewport={viewport}
         onMoveLane={moveLane}
         onResizeLane={resizeLane}
         onRenameLane={renameLane}
         onAddLaneAt={addLaneAt}
         onDeleteLane={deleteLane}
+        collapsedLaneIds={collapsedLaneIds}
+        onToggleCollapse={toggleLaneCollapse}
       />
 
       <ShapePalette />
@@ -1299,7 +1800,8 @@ function BpmnCanvas({
         tool={tool}
         onToolChange={setTool}
         viewport={viewport}
-        onViewportChange={setViewport}
+        onZoomIn={() => zoomByStep(ZOOM_STEP)}
+        onZoomOut={() => zoomByStep(1 / ZOOM_STEP)}
         onFit={fitToWorld}
         showIssues={showIssues}
         onShowIssuesChange={setShowIssues}
@@ -1311,6 +1813,15 @@ function BpmnCanvas({
         onUndo={() => void undo()}
         onRedo={() => void redo()}
       />
+
+      {contextMenu && (
+        <CanvasContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenu.items}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 });
