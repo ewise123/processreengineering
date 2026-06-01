@@ -1302,3 +1302,27 @@ With the backend running and LibreOffice installed: upload a `.docx` and a `.pdf
 **Placeholder scan:** none. Every code step shows complete code.
 
 **Type consistency:** `ViewerTarget { inputId, inputName, sectionRef, quote }` defined in Task 7 and consumed identically in Tasks 8/9/11. `onOpenSource: (target: ViewerTarget) => void` is the same signature in properties-panel, right-panel, and the page. `rendered_pdf_path`, `convert_to_pdf`, `is_native_pdf`, `needs_conversion`, `libreoffice_available`, `UnsupportedRenderFormat` are named consistently across Tasks 1-4. `api.inputPdfUrl` matches the route `GET /{input_id}/pdf` in Task 4.
+
+---
+
+## Execution outcome (2026-06-01)
+
+Executed via subagent-driven development (fresh implementer per task + spec/quality review, plus a final holistic opus review across the whole branch).
+
+**Gates (final):** backend `pytest` **110 passed**; `tsc --noEmit` **clean**; `vitest` **47 passed**; `eslint` **no new errors** (the lone `_id` warning at `page.tsx:128` is pre-existing). Live AI-citation smoke is still pending a real `ANTHROPIC_API_KEY` (the propose path needs one to mint citations); the `/pdf` endpoint, conversion/caching, Sources-tab open path, and all pure UI logic are covered by the suites.
+
+**Deviations from the plan (all intentional, reconciled):**
+- Viewer state lives at the **page level**, not the RightPanel — the page is the true common parent of the citation source, the Sources tab, and the canvas overlay (already flagged in the plan self-review).
+- Render-failure fallback shows the **cited quote** with a notice rather than full `DocumentSection.text` (no section-text endpoint exists; YAGNI).
+
+**Review findings fixed before shipping:**
+- *Critical (stale canvas/overlay state):* `DocumentViewer` kept internal `error`/`numPages`/`pinned` across document switches — a prior failed load would block the next document and flash a false "couldn't pin" banner. Fixed with `key={viewerTarget.inputId}` on the overlay (forces remount → resets state; same-document re-targeting still re-scrolls via the existing `[numPages, target]` effect).
+- *Important (provenance truthfulness):* `isQuoteFragment` did raw substring matching, so coincidental mid-word fragments ("in" in "within", "com" in "complete") were highlighted and could scroll to a wrong-page false positive while reporting `pinned=true`. Fixed to match on **word boundaries**, with regression tests.
+- *Backend hardening:* LibreOffice conversion failures/timeouts now map to **415** (caught `subprocess.SubprocessError` → `UnsupportedRenderFormat`) instead of a bare 500; cached-PDF pointers are trusted only when the rendered file lives **beside its source** (defense-in-depth).
+- *Lint:* escaped two pre-existing unescaped apostrophes in `right-panel.tsx`.
+
+**Known follow-ups (deferred, non-blocking — holistic reviewer concurred):**
+- The viewer renders **all pages** rather than virtualizing; large PDFs (up to the 50 MB cap) mount many canvases and can make the 300 ms scroll-to-hit timeout racy (degrades to the honest "couldn't pin" notice). Window the page list post-merge.
+- Concurrent first-open of the same input can briefly serve a half-written PDF (self-heals next request); an atomic temp-file + rename would close the window.
+- `textRenderer` is recreated per render (cosmetic churn in react-pdf's TextLayer); a `useCallback` keyed on `target.quote` would settle it.
+- Manual live smoke with `ANTHROPIC_API_KEY` set: citation click → original-format render + highlight + scroll; width toggle; close; Sources-tab open.
