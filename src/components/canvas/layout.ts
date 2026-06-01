@@ -127,6 +127,8 @@ export function buildCanvasState(graph: ProcessGraph): {
       relativeY,
       w: size.w,
       h: size.h,
+      aiProposed: (n.properties as { ai_proposed?: boolean } | null)?.ai_proposed === true,
+      description: (n.properties as { description?: string } | null)?.description,
     };
   });
 
