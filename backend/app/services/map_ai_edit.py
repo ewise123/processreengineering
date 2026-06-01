@@ -15,7 +15,7 @@ from app.enums import NodeType
 from app.services.map_chat import SYSTEM_PROMPT as CHAT_GUARDRAILS
 
 AI_EDIT_MODEL = os.getenv("MAP_AI_EDIT_MODEL", "claude-sonnet-4-6")
-MAX_TOKENS = 1200
+MAX_TOKENS = 1200  # suggest_next with many downstream steps can approach this; bump if truncated
 
 _NODE_TYPES = [t.value for t in NodeType]
 
@@ -66,6 +66,9 @@ DESCRIBE_TOOL = {
     },
 }
 
+# NOTE: the user-facing action is AiEditAction.VALIDATE ("validate"); the Anthropic tool and
+# service function are deliberately named "report_gaps" to be more descriptive of what the
+# model actually does (reports completeness gaps). The route resolves the mismatch.
 VALIDATE_TOOL = {
     "name": "report_gaps",
     "description": (
@@ -173,8 +176,9 @@ def _run(tool: dict, action: str, map_context_text: str, selected_label: str | N
         timeout=60.0,
     )
     for block in response.content:
-        if getattr(block, "type", None) == "tool_use" and block.name == tool["name"]:
-            return dict(block.input)
+        if block.type != "tool_use" or block.name != tool["name"]:
+            continue
+        return dict(block.input)
     return {}  # malformed/empty tool call → caller treats as empty proposal
 
 

@@ -92,6 +92,28 @@ def test_propose_suggest_next_parses_steps():
     assert out["steps"][0]["proposed_type"] == "task"
 
 
+def test_propose_description_parses_tool_output():
+    fake = _FakeClient(
+        "propose_description",
+        {"proposed_description": "Clerk logs the order in SAP.",
+         "rationale": "C1 describes the logging step.", "cited_claim_refs": ["C1"]},
+    )
+    with patch.object(map_ai_edit, "_get_client", return_value=fake):
+        out = map_ai_edit.propose_description(map_context_text="...", selected_label="N1")
+    assert out["proposed_description"] == "Clerk logs the order in SAP."
+
+
+def test_report_gaps_parses_tool_output():
+    fake = _FakeClient(
+        "report_gaps",
+        {"gaps": [{"summary": "No rejection path defined", "severity": "high",
+                   "cited_claim_refs": []}]},
+    )
+    with patch.object(map_ai_edit, "_get_client", return_value=fake):
+        out = map_ai_edit.report_gaps(map_context_text="...", selected_label="N1")
+    assert out["gaps"][0]["severity"] == "high"
+
+
 def test_service_raises_without_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     map_ai_edit._client = None
