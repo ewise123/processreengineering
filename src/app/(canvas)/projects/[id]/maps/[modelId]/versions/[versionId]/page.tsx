@@ -17,13 +17,14 @@ import {
 } from "@/components/ui/dialog";
 import { AiEditCacheProvider } from "@/components/canvas/ai-edit-cache";
 import { BpmnCanvas, type BpmnCanvasHandle, type CanvasSelection } from "@/components/canvas/bpmn-canvas";
+import { DocumentViewer } from "@/components/canvas/document-viewer";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { RightPanel } from "@/components/canvas/right-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
 import { reviewByNodeMap } from "@/components/canvas/review-summary";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
-import type { IssueSeverity, NodeReviewUpdate, ReviewDecision, UUID } from "@/lib/types";
+import type { IssueSeverity, NodeReviewUpdate, ReviewDecision, UUID, ViewerTarget } from "@/lib/types";
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
   idle: "Saved",
@@ -58,6 +59,8 @@ export default function CanvasPage() {
   // Properties panel collapse state lifted so the page can resize the
   // wrapper to a small button when collapsed.
   const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
+  const [viewerTarget, setViewerTarget] = useState<ViewerTarget | null>(null);
+  const [viewerExpanded, setViewerExpanded] = useState(true);
   const [counts, setCounts] = useState<{ lanes: number; nodes: number; edges: number } | null>(null);
   const handleCountsChange = useCallback(
     (c: { lanes: number; nodes: number; edges: number }) => setCounts(c),
@@ -357,6 +360,10 @@ export default function CanvasPage() {
             onDelete={handleNodeDelete}
             onUpdate={handleNodeUpdate}
             onAddStep={handleAddStep}
+            onOpenSource={(target) => {
+              setViewerTarget(target);
+              setViewerExpanded(true);
+            }}
             review={
               selectedNode
                 ? {
@@ -435,6 +442,29 @@ export default function CanvasPage() {
             onNavigateVersion={handleNavigateVersion}
             collapsed={rightCollapsed}
             onCollapsedChange={setRightCollapsed}
+          />
+        </div>
+      )}
+
+      {/* Source document viewer — floats over the canvas at single/double
+          width; opened from citation cards or the Sources tab. */}
+      {viewerTarget && (
+        <div
+          style={{
+            position: "absolute",
+            right: rightCollapsed ? 64 : 384,
+            top: 60,
+            bottom: 60,
+            zIndex: 30,
+            display: "flex",
+          }}
+        >
+          <DocumentViewer
+            projectId={params.id}
+            target={viewerTarget}
+            expanded={viewerExpanded}
+            onToggleExpanded={() => setViewerExpanded((v) => !v)}
+            onClose={() => setViewerTarget(null)}
           />
         </div>
       )}
