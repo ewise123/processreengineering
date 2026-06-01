@@ -4,9 +4,11 @@ import { Sparkles } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { useAiEditNode } from "@/components/canvas/ai-edit-cache";
+import { canDecompose } from "@/components/canvas/decompose-nav";
 import type {
   AiEditAction,
   AiEditResponse,
+  SubStep,
   SuggestedStep,
   UUID,
 } from "@/lib/types";
@@ -16,43 +18,50 @@ const LOADING_LABELS: Record<AiEditAction, string> = {
   describe: "Writing description…",
   validate: "Checking for gaps…",
   suggest_next: "Suggesting next steps…",
-  decompose: "Decomposing step…",
+  decompose: "Decomposing into sub-steps…",
 };
-
-const ACTIONS: { action: AiEditAction; label: string }[] = [
-  { action: "relabel", label: "Relabel step" },
-  { action: "describe", label: "Describe step" },
-  { action: "validate", label: "Validate completeness" },
-  { action: "suggest_next", label: "Suggest next step" },
-];
 
 export function AiEditPanel({
   projectId,
   modelId,
   versionId,
   nodeId,
+  level,
+  childModelId,
   onRelabel,
   onDescribe,
   onAddStep,
+  onDecompose,
+  onOpenChild,
 }: {
   projectId: UUID;
   modelId: UUID;
   versionId: UUID;
   nodeId: UUID;
+  level: string | null;
+  childModelId: UUID | null;
   onRelabel: (name: string) => void;
   onDescribe: (description: string) => void;
   onAddStep: (step: SuggestedStep) => void;
+  onDecompose: (subSteps: SubStep[]) => void;
+  onOpenChild: (childModelId: UUID) => void;
 }) {
-  // menuOpen stays local — it's purely transient UI chrome with no cross-mount
-  // relevance (if the user deselects a node the menu should close on reselect).
   const [menuOpen, setMenuOpen] = useState(false);
-
   const { entry, runAction, resolveStep, clear } = useAiEditNode(nodeId);
+
+  const decomposeAllowed = canDecompose(level);
 
   function handleMenuAction(action: AiEditAction) {
     setMenuOpen(false);
     runAction({ projectId, modelId, versionId, action });
   }
+
+  const baseActions: { action: AiEditAction; label: string }[] = [
+    { action: "relabel", label: "Relabel step" },
+    { action: "describe", label: "Describe step" },
+    { action: "validate", label: "Validate completeness" },
+    { action: "suggest_next", label: "Suggest next step" },
+  ];
 
   return (
     <div className="mt-2">
@@ -67,7 +76,7 @@ export function AiEditPanel({
 
       {menuOpen && (
         <div role="menu" className="mt-1 rounded-md border border-slate-200 bg-white py-1 shadow">
-          {ACTIONS.map((a) => (
+          {baseActions.map((a) => (
             <button
               key={a.action}
               role="menuitem"
@@ -78,26 +87,44 @@ export function AiEditPanel({
               {a.label}
             </button>
           ))}
+          {childModelId && (
+            <button
+              role="menuitem"
+              type="button"
+              onClick={() => { setMenuOpen(false); onOpenChild(childModelId); }}
+              className="block w-full px-3 py-1.5 text-left text-[11px] font-semibold text-violet-700 hover:bg-slate-50"
+            >
+              Open sub-process
+            </button>
+          )}
+          <button
+            role="menuitem"
+            type="button"
+            disabled={!decomposeAllowed}
+            title={decomposeAllowed ? undefined : "Already at the most detailed level (L4)"}
+            onClick={() => decomposeAllowed && handleMenuAction("decompose")}
+            className="block w-full px-3 py-1.5 text-left text-[11px] text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+          >
+            {childModelId ? "Re-decompose (new version)" : "Decompose into sub-steps"}
+          </button>
         </div>
       )}
 
-      {entry.loading && (
-        <LoadingSkeleton action={entry.loadingAction} />
-      )}
-      {entry.error && (
-        <p className="mt-2 text-[11px] text-rose-600">{entry.error}</p>
-      )}
+      {entry.loading && <LoadingSkeleton action={entry.loadingAction} />}
+      {entry.error && <p className="mt-2 text-[11px] text-rose-600">{entry.error}</p>}
 
       {entry.result && (
         <ProposalCards
           result={entry.result}
           pendingSteps={entry.pendingSteps}
+          isReDecompose={!!childModelId}
           onRelabel={(name) => { onRelabel(name); clear(); }}
           onDescribe={(d) => { onDescribe(d); clear(); }}
           onResolveStep={(step, accept) => {
             if (accept) onAddStep(step);
             resolveStep(step);
           }}
+          onDecompose={(subSteps) => { onDecompose(subSteps); clear(); }}
           onDismiss={clear}
         />
       )}
@@ -208,17 +235,21 @@ function AcceptReject({ onAccept, onReject }: { onAccept: () => void; onReject: 
 function ProposalCards({
   result,
   pendingSteps,
+  isReDecompose,
   onRelabel,
   onDescribe,
   onResolveStep,
+  onDecompose,
   onDismiss,
 }: {
   result: AiEditResponse;
   pendingSteps: SuggestedStep[] | null;
+  isReDecompose: boolean;
   onRelabel: (name: string) => void;
   onDescribe: (description: string) => void;
   /** Called for suggest_next cards. accept=true → apply; accept=false → discard. */
   onResolveStep: (step: SuggestedStep, accept: boolean) => void;
+  onDecompose: (subSteps: SubStep[]) => void;
   onDismiss: () => void;
 }) {
   if (result.relabel) {
@@ -288,6 +319,40 @@ function ProposalCards({
             />
           </Card>
         ))}
+      </div>
+    );
+  }
+  if (result.decompose) {
+    const steps = result.decompose.sub_steps;
+    if (steps.length === 0) {
+      return (
+        <p className="mt-2 text-[11px] text-slate-500">
+          The sources don&apos;t support a breakdown of this step.
+        </p>
+      );
+    }
+    return (
+      <div className="mt-2 rounded-md border border-slate-200 bg-slate-50/60 p-2">
+        <p className="text-[11px] font-semibold text-slate-800">
+          {steps.length} sub-step{steps.length > 1 ? "s" : ""}
+        </p>
+        {isReDecompose && (
+          <p className="mt-0.5 text-[10px] text-amber-700">
+            Creates a new version of the existing sub-process; the current version is kept in history.
+          </p>
+        )}
+        <ol className="mt-1 list-decimal space-y-1 pl-4">
+          {steps.map((s, i) => (
+            <li key={i} className="text-[10px] text-slate-700">
+              <span className="font-medium">{s.proposed_name}</span>
+              <span className="text-slate-400"> · {s.proposed_type} · {s.role}</span>
+              {s.cited_claim_ids.length === 0 && (
+                <span className="ml-1 italic text-amber-700">(inference)</span>
+              )}
+            </li>
+          ))}
+        </ol>
+        <AcceptReject onAccept={() => onDecompose(steps)} onReject={onDismiss} />
       </div>
     );
   }
