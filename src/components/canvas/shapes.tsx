@@ -163,6 +163,7 @@ export function NodeShape({
   onMouseDown,
   onContextMenu,
   onStartConnect,
+  onDoubleClick,
 }: {
   node: ResolvedNode;
   selected: boolean;
@@ -174,6 +175,7 @@ export function NodeShape({
   onMouseDown: (e: MouseEvent, id: string) => void;
   onContextMenu?: (e: MouseEvent, id: string) => void;
   onStartConnect?: (e: MouseEvent, sourceId: UUID, side: ConnectSide) => void;
+  onDoubleClick?: (id: string) => void;
 }) {
   const { kind, x, y, w, h, label, id } = node;
   const isEvent = kind === "start" || kind === "end" || kind === "intermediate";
@@ -201,6 +203,7 @@ export function NodeShape({
       style={{ cursor: showHandles ? "crosshair" : "move" }}
       onMouseDown={(e) => onMouseDown(e, id)}
       onContextMenu={(e) => onContextMenu?.(e, id)}
+      onDoubleClick={() => onDoubleClick?.(id)}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       data-node-id={id}

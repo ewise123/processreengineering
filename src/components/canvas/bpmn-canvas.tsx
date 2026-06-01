@@ -178,6 +178,9 @@ interface BpmnCanvasProps {
    * uses this to invalidate dependent queries like issue badges. */
   onNodeDeleted?: (id: UUID) => void;
   onCountsChange?: (counts: { lanes: number; nodes: number; edges: number }) => void;
+  /** Fires when a node with a child sub-process is double-clicked. The page
+   * resolves the child's latest version and routes there. */
+  onDrillIntoNode?: (childModelId: UUID) => void;
 }
 
 export const BpmnCanvas = forwardRef<BpmnCanvasHandle, BpmnCanvasProps>(
@@ -194,6 +197,7 @@ function BpmnCanvas({
   onSelectionChange,
   onNodeDeleted,
   onCountsChange,
+  onDrillIntoNode,
 }, ref) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState(initialNodes);
@@ -1904,6 +1908,10 @@ function BpmnCanvas({
               onMouseDown={onNodeMouseDown}
               onContextMenu={openNodeMenu}
               onStartConnect={onStartConnect}
+              onDoubleClick={(id) => {
+                const n = nodesRef.current.find((x) => x.id === id);
+                if (n?.childModelId) onDrillIntoNode?.(n.childModelId);
+              }}
             />
           ))}
           {editingEdgeId &&
