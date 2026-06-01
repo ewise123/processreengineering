@@ -464,6 +464,7 @@ export default function CanvasPage() {
           }}
         >
           <DocumentViewer
+            key={viewerTarget.inputId}
             projectId={params.id}
             target={viewerTarget}
             expanded={viewerExpanded}

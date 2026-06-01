@@ -497,7 +497,7 @@ function VersionsTab({
   if (versionsQuery.isError) {
     return (
       <div className="px-3 py-3 text-[11px] text-rose-600">
-        Couldn't load versions.
+        Couldn&apos;t load versions.
       </div>
     );
   }
@@ -522,7 +522,7 @@ function VersionsTab({
 
       {copyMutation.isError && (
         <div className="mb-2 rounded bg-rose-50 px-2 py-1 text-[10px] text-rose-700">
-          Couldn't create the version. Try again.
+          Couldn&apos;t create the version. Try again.
         </div>
       )}
 
