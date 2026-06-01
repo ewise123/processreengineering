@@ -174,3 +174,48 @@ def test_convert_without_soffice_raises(tmp_path, monkeypatch):
     assert render_pdf.libreoffice_available() is False
     with pytest.raises(render_pdf.UnsupportedRenderFormat):
         render_pdf.convert_to_pdf(tmp_path / "x.docx", tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Task 4: PDF-serving endpoint
+# ---------------------------------------------------------------------------
+
+from fastapi import HTTPException
+from fastapi.responses import FileResponse
+
+from app.api.v2.inputs import get_input_pdf
+
+
+def test_endpoint_returns_file_response_for_pdf(db, tmp_path, monkeypatch):
+    src = tmp_path / "real.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    inp = _seed_input(db, name="real.pdf", mime="application/pdf")
+    proj = db.get(Project, inp.project_id)
+    monkeypatch.setattr(render_pdf, "resolve_path", lambda rel: src)
+
+    resp = get_input_pdf(project=proj, input_id=inp.id, db=db)
+
+    assert isinstance(resp, FileResponse)
+    assert resp.media_type == "application/pdf"
+    assert str(resp.path) == str(src)
+
+
+def test_endpoint_404_for_cross_project_input(db, tmp_path, monkeypatch):
+    inp = _seed_input(db, name="real.pdf", mime="application/pdf")
+    other = Project(name="other", org_id=db.get(Project, inp.project_id).org_id, status="active")
+    db.add(other)
+    db.flush()
+    with pytest.raises(HTTPException) as ei:
+        get_input_pdf(project=other, input_id=inp.id, db=db)
+    assert ei.value.status_code == 404
+
+
+def test_endpoint_415_for_unsupported(db, tmp_path, monkeypatch):
+    src = tmp_path / "a.zip"
+    src.write_bytes(b"zip")
+    inp = _seed_input(db, name="a.zip", mime="application/zip")
+    proj = db.get(Project, inp.project_id)
+    monkeypatch.setattr(render_pdf, "resolve_path", lambda rel: src)
+    with pytest.raises(HTTPException) as ei:
+        get_input_pdf(project=proj, input_id=inp.id, db=db)
+    assert ei.value.status_code == 415

@@ -11,6 +11,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import FileResponse
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,10 @@ from app.schemas.common import Page
 from app.schemas.input import InputParseResult, InputRead
 from app.services.chunking import chunk_sections
 from app.services.parsing import parse_file
+from app.services.render_pdf import (
+    UnsupportedRenderFormat,
+    rendered_pdf_path,
+)
 from app.services.storage import resolve_path, save_upload
 
 router = APIRouter(prefix="/projects/{project_id}/inputs", tags=["inputs"])
@@ -178,3 +183,27 @@ def parse_input(
             retry.status = InputStatus.FAILED.value
             db.commit()
         raise HTTPException(status_code=500, detail=f"Parse failed: {e}")
+
+
+@router.get("/{input_id}/pdf")
+def get_input_pdf(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    input_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> FileResponse:
+    inp = db.get(Input, input_id)
+    if inp is None or inp.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Input not found")
+    if not inp.file_path:
+        raise HTTPException(status_code=422, detail="Input has no file_path")
+    try:
+        pdf_path = rendered_pdf_path(inp, db)
+    except UnsupportedRenderFormat as e:
+        raise HTTPException(status_code=415, detail=str(e))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Source file not found on disk")
+    return FileResponse(
+        path=str(pdf_path),
+        media_type="application/pdf",
+        filename=f"{inp.name}.pdf" if not inp.name.lower().endswith(".pdf") else inp.name,
+    )
