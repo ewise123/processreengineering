@@ -37,3 +37,124 @@ def test_unsupported_format_is_neither():
     inp = _inp("a.zip", "application/zip")
     assert is_native_pdf(inp) is False
     assert needs_conversion(inp) is False
+
+
+# ---------------------------------------------------------------------------
+# Task 2: convert + cache orchestration
+# ---------------------------------------------------------------------------
+
+from uuid import uuid4
+
+from app.models.identity import Organization, User
+from app.models.project import Project
+from app.services import render_pdf
+
+
+def _seed_input(db, *, name: str, mime: str | None) -> Input:
+    org = Organization(name="t-org")
+    db.add(org)
+    db.flush()
+    user = User(email=f"u-{uuid4()}@t.local", name="t", org_id=org.id)
+    db.add(user)
+    db.flush()
+    proj = Project(name="t-proj", org_id=org.id, status="active")
+    db.add(proj)
+    db.flush()
+    inp = Input(
+        project_id=proj.id, type="sop_document", name=name,
+        file_path=f"uploads/{proj.id}/{name}", mime_type=mime, status="parsed",
+        uploaded_by=user.id, source_info={},
+    )
+    db.add(inp)
+    db.flush()
+    return inp
+
+
+def test_native_pdf_returns_original_without_conversion(db, tmp_path, monkeypatch):
+    src = tmp_path / "real.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    inp = _seed_input(db, name="real.pdf", mime="application/pdf")
+    monkeypatch.setattr(render_pdf, "resolve_path", lambda rel: src)
+    called = {"convert": False}
+    monkeypatch.setattr(
+        render_pdf, "convert_to_pdf",
+        lambda *a, **k: called.__setitem__("convert", True) or src,
+    )
+
+    out = render_pdf.rendered_pdf_path(inp, db)
+
+    assert out == src
+    assert called["convert"] is False
+
+
+def test_convertible_miss_converts_and_caches(db, tmp_path, monkeypatch):
+    src = tmp_path / "doc.docx"
+    src.write_bytes(b"docx-bytes")
+    rendered = tmp_path / "doc.pdf"
+    rendered.write_bytes(b"%PDF rendered")
+    inp = _seed_input(db, name="doc.docx", mime=None)
+    monkeypatch.setattr(render_pdf, "resolve_path", lambda rel: src)
+    calls = {"n": 0}
+
+    def fake_convert(source, out_dir):
+        calls["n"] += 1
+        return rendered
+
+    monkeypatch.setattr(render_pdf, "convert_to_pdf", fake_convert)
+
+    out = render_pdf.rendered_pdf_path(inp, db)
+
+    assert out == rendered
+    assert calls["n"] == 1
+    assert inp.source_info["rendered_pdf"]["path"] == str(rendered)
+
+
+def test_convertible_cache_hit_skips_conversion(db, tmp_path, monkeypatch):
+    src = tmp_path / "doc.docx"
+    src.write_bytes(b"docx-bytes")
+    rendered = tmp_path / "doc.pdf"
+    rendered.write_bytes(b"%PDF rendered")
+    inp = _seed_input(db, name="doc.docx", mime=None)
+    inp.source_info = {
+        "rendered_pdf": {"path": str(rendered), "src_mtime": src.stat().st_mtime}
+    }
+    db.flush()
+    monkeypatch.setattr(render_pdf, "resolve_path", lambda rel: src)
+
+    def boom(*a, **k):
+        raise AssertionError("should not convert on cache hit")
+
+    monkeypatch.setattr(render_pdf, "convert_to_pdf", boom)
+
+    out = render_pdf.rendered_pdf_path(inp, db)
+    assert out == rendered
+
+
+def test_stale_cache_triggers_reconversion(db, tmp_path, monkeypatch):
+    src = tmp_path / "doc.docx"
+    src.write_bytes(b"docx-bytes")
+    rendered = tmp_path / "doc.pdf"
+    rendered.write_bytes(b"%PDF rendered")
+    inp = _seed_input(db, name="doc.docx", mime=None)
+    inp.source_info = {
+        "rendered_pdf": {"path": str(rendered), "src_mtime": src.stat().st_mtime - 999}
+    }
+    db.flush()
+    monkeypatch.setattr(render_pdf, "resolve_path", lambda rel: src)
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        render_pdf, "convert_to_pdf",
+        lambda *a, **k: calls.__setitem__("n", calls["n"] + 1) or rendered,
+    )
+
+    render_pdf.rendered_pdf_path(inp, db)
+    assert calls["n"] == 1
+
+
+def test_unsupported_format_raises(db, tmp_path, monkeypatch):
+    src = tmp_path / "a.zip"
+    src.write_bytes(b"zip")
+    inp = _seed_input(db, name="a.zip", mime="application/zip")
+    monkeypatch.setattr(render_pdf, "resolve_path", lambda rel: src)
+    with pytest.raises(render_pdf.UnsupportedRenderFormat):
+        render_pdf.rendered_pdf_path(inp, db)
