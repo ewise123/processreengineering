@@ -277,6 +277,13 @@ export function NodeShape({
               ✦
             </text>
           )}
+          {node.childModelId && (
+            <g transform={`translate(${w / 2 - 7}, ${h - 14})`} aria-label="Has sub-process" style={{ pointerEvents: "none" }}>
+              <rect width={14} height={12} rx={2} fill="#fff" stroke="#475569" strokeWidth={1} />
+              <line x1={7} y1={3} x2={7} y2={9} stroke="#475569" strokeWidth={1.2} />
+              <line x1={4} y1={6} x2={10} y2={6} stroke="#475569" strokeWidth={1.2} />
+            </g>
+          )}
           <foreignObject x={6} y={10} width={w - 12} height={h - 16}>
             <div
               style={{
