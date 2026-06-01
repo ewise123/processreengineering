@@ -508,3 +508,13 @@ export interface AiProposedStepResult {
   node: ProcessNode;
   edge: ProcessEdge;
 }
+
+/** What the document viewer should open to. `sectionRef`/`quote` drive the
+ *  jump-and-highlight; both null when opening a document without a citation
+ *  (e.g. from the Sources tab). */
+export interface ViewerTarget {
+  inputId: UUID;
+  inputName: string;
+  sectionRef: Record<string, unknown> | null;
+  quote: string | null;
+}

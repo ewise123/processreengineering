@@ -106,6 +106,10 @@ export const api = {
     const suffix = qs.toString() ? `?${qs}` : "";
     return request<Page<InputRow>>(`/api/v2/projects/${projectId}/inputs${suffix}`);
   },
+  /** Absolute URL of the rendered-PDF stream for a source document.
+   *  react-pdf fetches by URL, so this returns a string (not a JSON request). */
+  inputPdfUrl: (projectId: UUID, inputId: UUID) =>
+    `${API_BASE}/api/v2/projects/${projectId}/inputs/${inputId}/pdf`,
   uploadInput: async (projectId: UUID, type: string, file: File) => {
     const fd = new FormData();
     fd.append("type", type);
