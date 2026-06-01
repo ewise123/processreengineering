@@ -440,6 +440,10 @@ export default function CanvasPage() {
             reviewState={reviewState}
             onSendRequest={() => requestReviewMutation.mutate()}
             onNavigateVersion={handleNavigateVersion}
+            onOpenSource={(target) => {
+              setViewerTarget(target);
+              setViewerExpanded(true);
+            }}
             collapsed={rightCollapsed}
             onCollapsedChange={setRightCollapsed}
           />
