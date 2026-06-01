@@ -190,3 +190,15 @@ parallel conversions of different documents.
 - **Quote highlighting on converted files is best-effort** text search, not a guaranteed
   char-offset match. The extracted-text fallback and the "showing the cited page" notice cover
   the misses.
+
+## Addendum (post-implementation): text fast-path
+
+During live smoke-testing we found that the dev backend has no LibreOffice, so every non-PDF
+source — including `.txt` transcripts, the most common input — fell back to just the quote.
+Decision (user-approved): add a **text fast-path** alongside the PDF viewer. `.txt`/`.md` (and
+`text/*`) sources are served verbatim via `GET /inputs/{id}/text` and rendered as text with a
+reliable whitespace/quote-tolerant substring highlight — no LibreOffice, no PDF round-trip. The
+viewer probes `/text` first and falls back to the PDF path (LibreOffice-converted) for
+`docx`/`pptx`/`xlsx`/native PDF. This is a deliberate refinement of the "single PDF viewer"
+decision: for plain text, text *is* the original format, so converting it to PDF adds cost and
+fragility without fidelity. LibreOffice remains required only for true Office binaries.

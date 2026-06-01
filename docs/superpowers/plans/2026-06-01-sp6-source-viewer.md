@@ -1321,6 +1321,11 @@ Executed via subagent-driven development (fresh implementer per task + spec/qual
 - *Backend hardening:* LibreOffice conversion failures/timeouts now map to **415** (caught `subprocess.SubprocessError` → `UnsupportedRenderFormat`) instead of a bare 500; cached-PDF pointers are trusted only when the rendered file lives **beside its source** (defense-in-depth).
 - *Lint:* escaped two pre-existing unescaped apostrophes in `right-panel.tsx`.
 
+**Live-smoke fixes (found by the user running the dev server, after the holistic review):**
+- *Critical (SSR 500):* the versions page is a `"use client"` component, but Next still server-renders it; statically importing `DocumentViewer` pulled `react-pdf`/`pdfjs` (browser-only globals at module eval) onto the server path and 500'd the route. Fixed by loading the viewer via `next/dynamic` with `{ ssr: false }`.
+- *Feature gap (every non-PDF 415'd):* LibreOffice isn't installed in the dev WSL backend, so all non-PDF sources — including `.txt` transcripts, the common case — fell back to just the quote. Per the user's decision, added a **text fast-path**: `GET /inputs/{id}/text` (415 for non-text) + `api.getInputText` + a text render-mode in `DocumentViewer` that probes `/text` first and renders `.txt`/`.md` in a `<pre>` with reliable whitespace/quote-tolerant substring highlighting (`findQuoteInText`), no LibreOffice needed. LibreOffice remains the path for `docx`/`pptx`/`xlsx` (install it to render those). This is an intentional, reviewed deviation from the spec's "one PDF viewer" — text is its own original format and a PDF round-trip for it is wasteful and fragile.
+- Post-fix gates: **pytest 114**, **tsc clean**, **vitest 53**, **lint clean** (touched files; pre-existing `_id` warning only). Focused review of both fixes: READY, no Critical/Important issues.
+
 **Known follow-ups (deferred, non-blocking — holistic reviewer concurred):**
 - The viewer renders **all pages** rather than virtualizing; large PDFs (up to the 50 MB cap) mount many canvases and can make the 300 ms scroll-to-hit timeout racy (degrades to the honest "couldn't pin" notice). Window the page list post-merge.
 - Concurrent first-open of the same input can briefly serve a half-written PDF (self-heals next request); an atomic temp-file + rename would close the window.
