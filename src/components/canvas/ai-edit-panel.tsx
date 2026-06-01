@@ -16,6 +16,7 @@ const LOADING_LABELS: Record<AiEditAction, string> = {
   describe: "Writing description…",
   validate: "Checking for gaps…",
   suggest_next: "Suggesting next steps…",
+  decompose: "Decomposing step…",
 };
 
 const ACTIONS: { action: AiEditAction; label: string }[] = [

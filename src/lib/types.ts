@@ -448,7 +448,7 @@ export interface DetectProcessesRequest {
   scope_input_ids?: UUID[] | null;
 }
 
-export type AiEditAction = "relabel" | "describe" | "validate" | "suggest_next";
+export type AiEditAction = "relabel" | "describe" | "validate" | "suggest_next" | "decompose";
 
 export interface RelabelProposal {
   proposed_name: string;
@@ -485,12 +485,42 @@ export interface SuggestNextProposal {
   steps: SuggestedStep[];
 }
 
+export interface SubStep {
+  proposed_name: string;
+  proposed_type: string;
+  role: string;
+  edge_label: string | null;
+  rationale: string;
+  cited_claim_ids: UUID[];
+}
+
+export interface DecomposeProposal {
+  sub_steps: SubStep[];
+}
+
+export interface DecomposeRequest {
+  sub_steps: SubStep[];
+}
+
+export interface DecomposeResult {
+  child_model_id: UUID;
+  child_version_id: UUID;
+}
+
+export interface AncestryCrumb {
+  model_id: UUID;
+  version_id: UUID | null;
+  level: string;
+  label: string;
+}
+
 export interface AiEditResponse {
   action: AiEditAction;
   relabel?: RelabelProposal | null;
   describe?: DescribeProposal | null;
   validate?: ValidateProposal | null;
   suggest_next?: SuggestNextProposal | null;
+  decompose?: DecomposeProposal | null;
 }
 
 export interface AiProposedStepRequest {

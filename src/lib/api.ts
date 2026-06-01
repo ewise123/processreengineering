@@ -4,6 +4,9 @@ import type {
   AiEditResponse,
   AiProposedStepRequest,
   AiProposedStepResult,
+  AncestryCrumb,
+  DecomposeRequest,
+  DecomposeResult,
   ChatRequest,
   ChatResponse,
   Claim,
@@ -332,6 +335,35 @@ export const api = {
     request<AiProposedStepResult>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/ai-proposed-step`,
       { method: "POST", json: body }
+    ),
+  applyDecompose: (
+    projectId: UUID,
+    modelId: UUID,
+    versionId: UUID,
+    nodeId: UUID,
+    body: DecomposeRequest
+  ) =>
+    request<DecomposeResult>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/nodes/${nodeId}/decompose`,
+      { method: "POST", json: body }
+    ),
+  removeSubProcess: (
+    projectId: UUID,
+    modelId: UUID,
+    versionId: UUID,
+    nodeId: UUID
+  ) =>
+    request<void>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/nodes/${nodeId}/decompose`,
+      { method: "DELETE" }
+    ),
+  getProcessMap: (projectId: UUID, modelId: UUID) =>
+    request<ProcessModel>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}`
+    ),
+  getMapAncestry: (projectId: UUID, modelId: UUID) =>
+    request<AncestryCrumb[]>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/ancestry`
     ),
 
   // Process detection
