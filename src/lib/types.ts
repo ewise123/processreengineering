@@ -132,6 +132,8 @@ export interface ProcessLane {
   name: string;
   order_index: number;
   height_px: number;
+  color: string | null;
+  collapsed: boolean;
 }
 
 export interface LaneCreate {
@@ -144,10 +146,13 @@ export interface LaneUpdate {
   name?: string;
   order_index?: number;
   height_px?: number;
+  color?: string;
+  collapsed?: boolean;
 }
 
 export interface NodeUpdate {
   name?: string;
+  type?: string;
   lane_id?: UUID;
   x?: number;
   relative_y?: number;

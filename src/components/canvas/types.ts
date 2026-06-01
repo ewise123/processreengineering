@@ -54,6 +54,7 @@ export interface CanvasLane {
   id: UUID;
   label: string;
   color: string;
+  collapsed: boolean;
   y: number;
   h: number;
 }

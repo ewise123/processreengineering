@@ -20,7 +20,8 @@ import type { IssueSeverity, UUID } from "@/lib/types";
 import { CanvasContextMenu, type ContextMenuItem } from "./canvas-context-menu";
 import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
-import { LANE_HEIGHT } from "./layout";
+import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType } from "./layout";
+import { sizeForNodeType } from "./node-type";
 import { normalizeMarquee, nodesInMarquee } from "./selection";
 import {
   PALETTE_DRAG_MIME,
@@ -57,17 +58,6 @@ const PASTE_OFFSET = 24;
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 2.5;
 const ZOOM_STEP = 1.2;
-
-const LANE_PALETTE = [
-  "#dbeafe",
-  "#dcfce7",
-  "#fef9c3",
-  "#fae8ff",
-  "#fce7f3",
-  "#cffafe",
-  "#ffedd5",
-  "#e0e7ff",
-];
 
 type Drag =
   | {
@@ -138,7 +128,7 @@ function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
 
 export type CanvasSelection =
   | { kind: "none" }
-  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; laneId?: UUID | null }
+  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; type?: string; laneId?: UUID | null }
   | { kind: "edge"; id: UUID }
   | { kind: "multi"; nodeIds: UUID[]; edgeIds: UUID[] };
 
@@ -150,7 +140,7 @@ export interface BpmnCanvasHandle {
    * canvas (e.g. the Properties panel). Records an undo entry. */
   updateNode: (
     id: UUID,
-    patch: { name?: string; laneId?: UUID }
+    patch: { name?: string; laneId?: UUID; type?: string }
   ) => Promise<void>;
   /** Select a node (drives Properties panel + chat context) from outside
    * the canvas, e.g. clicking a node link in the Issues tab. */
@@ -213,15 +203,6 @@ function BpmnCanvas({
     y: number;
     items: ContextMenuItem[];
   } | null>(null);
-  const [collapsedLaneIds, setCollapsedLaneIds] = useState<Set<string>>(() => new Set());
-  const toggleLaneCollapse = useCallback((laneId: string) => {
-    setCollapsedLaneIds((curr) => {
-      const next = new Set(curr);
-      if (next.has(laneId)) next.delete(laneId);
-      else next.add(laneId);
-      return next;
-    });
-  }, []);
 
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
@@ -292,13 +273,40 @@ function BpmnCanvas({
     [projectId]
   );
 
+  const applyNodeTypeLocal = useCallback(
+    async (id: UUID, newType: string) => {
+      const kind = nodeKindFromType(newType);
+      const size = sizeForNodeType(newType);
+      setNodes((curr) =>
+        curr.map((n) =>
+          n.id === id
+            ? { ...n, type: newType, kind, w: size.w, h: size.h }
+            : n
+        )
+      );
+      await api.updateNode(projectId, id, { type: newType });
+    },
+    [projectId]
+  );
+
   const updateNodeImpl = useCallback(
     async (
       id: UUID,
-      patch: { name?: string; laneId?: UUID }
+      patch: { name?: string; laneId?: UUID; type?: string }
     ) => {
       const old = nodesRef.current.find((n) => n.id === id);
       if (!old) return;
+      if (patch.type !== undefined && patch.type !== old.type) {
+        const newType = patch.type;
+        const oldType = old.type;
+        await applyNodeTypeLocal(id, newType);
+        record({
+          description: "Change node type",
+          do: () => applyNodeTypeLocal(id, newType),
+          undo: () => applyNodeTypeLocal(id, oldType),
+        });
+        return;
+      }
       const oldName = old.label;
       const oldLaneId = old.laneId;
       const oldRelativeY = old.relativeY;
@@ -327,7 +335,7 @@ function BpmnCanvas({
         undo: () => applyNodeEditLocal(id, prev),
       });
     },
-    [applyNodeEditLocal, record]
+    [applyNodeEditLocal, applyNodeTypeLocal, record]
   );
 
   const deleteEdgeImpl = useCallback(
@@ -570,6 +578,28 @@ function BpmnCanvas({
     projectId,
   });
 
+  // Lane collapse is view state, seeded from each lane's persisted `collapsed`
+  // flag and persisted back via markLane on toggle. Kept out of the undo stack.
+  const [collapsedLaneIds, setCollapsedLaneIds] = useState<Set<string>>(
+    () => new Set(initialLanes.filter((l) => l.collapsed).map((l) => l.id))
+  );
+  const collapsedLaneIdsRef = useRef(collapsedLaneIds);
+  collapsedLaneIdsRef.current = collapsedLaneIds;
+
+  const toggleLaneCollapse = useCallback(
+    (laneId: string) => {
+      const willCollapse = !collapsedLaneIdsRef.current.has(laneId);
+      setCollapsedLaneIds((curr) => {
+        const next = new Set(curr);
+        if (willCollapse) next.add(laneId);
+        else next.delete(laneId);
+        return next;
+      });
+      markLane(laneId, { collapsed: willCollapse });
+    },
+    [markLane]
+  );
+
   // Notify parent of save state transitions for UI indicator.
   useEffect(() => {
     onSaveStatusChange?.(status, error);
@@ -592,6 +622,7 @@ function BpmnCanvas({
           id,
           name: node.label,
           nodeKind: node.kind,
+          type: node.type,
           laneId: node.laneId,
         });
       } else {
@@ -1521,6 +1552,31 @@ function BpmnCanvas({
     [renameLaneLocal, record]
   );
 
+  const setLaneColorLocal = useCallback(
+    (laneId: string, color: string) => {
+      setLanes((curr) =>
+        curr.map((l) => (l.id === laneId ? { ...l, color } : l))
+      );
+      markLane(laneId, { color });
+    },
+    [markLane]
+  );
+
+  const setLaneColor = useCallback(
+    (laneId: string, color: string) => {
+      const old = lanesRef.current.find((l) => l.id === laneId);
+      if (!old || old.color === color) return;
+      const oldColor = old.color;
+      setLaneColorLocal(laneId, color);
+      record({
+        description: "Set lane color",
+        do: () => setLaneColorLocal(laneId, color),
+        undo: () => setLaneColorLocal(laneId, oldColor),
+      });
+    },
+    [setLaneColorLocal, record]
+  );
+
   const addLaneAt = useCallback(
     async (atIndex: number) => {
       // Flush pending lane patches before mutating the lane set so we don't
@@ -1536,6 +1592,7 @@ function BpmnCanvas({
           id: created.id,
           label: created.name,
           color: LANE_PALETTE[atIndex % LANE_PALETTE.length],
+          collapsed: false,
           y: 0,
           h: created.height_px,
         };
@@ -1570,6 +1627,14 @@ function BpmnCanvas({
         if (remaining.length === 0) return;
         const fallback = remaining[0];
         setLanes(recomputeY(remaining));
+        // Drop the deleted lane from the collapse set so the (now persisted)
+        // set doesn't accumulate orphaned IDs over a long session.
+        setCollapsedLaneIds((curr) => {
+          if (!curr.has(laneId)) return curr;
+          const next = new Set(curr);
+          next.delete(laneId);
+          return next;
+        });
         // Mirror server-side reassignment so the UI stays consistent without
         // refetching the graph.
         setNodes((nodesNow) =>
@@ -1789,6 +1854,7 @@ function BpmnCanvas({
         onRenameLane={renameLane}
         onAddLaneAt={addLaneAt}
         onDeleteLane={deleteLane}
+        onSetColor={setLaneColor}
         collapsedLaneIds={collapsedLaneIds}
         onToggleCollapse={toggleLaneCollapse}
       />

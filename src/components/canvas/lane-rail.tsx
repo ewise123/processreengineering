@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
+import { LANE_PALETTE } from "./layout";
 import type { CanvasLane, Viewport } from "./types";
 
 const HEADER_PX = 44;
@@ -27,6 +28,7 @@ export function LaneRail({
   onRenameLane,
   onAddLaneAt,
   onDeleteLane,
+  onSetColor,
   collapsedLaneIds,
   onToggleCollapse,
 }: {
@@ -37,6 +39,7 @@ export function LaneRail({
   onRenameLane: (laneId: string, newName: string) => void;
   onAddLaneAt: (index: number) => void;
   onDeleteLane: (laneId: string) => void;
+  onSetColor: (laneId: string, color: string) => void;
   collapsedLaneIds: Set<string>;
   onToggleCollapse: (laneId: string) => void;
 }) {
@@ -432,6 +435,88 @@ export function LaneRail({
                     setEditingId(lane.id);
                     setMenuFor(null);
                   }}
+                />
+                <div style={{ padding: "4px 6px 2px" }}>
+                  <div
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 600,
+                      color: "#64748b",
+                      marginBottom: 4,
+                    }}
+                  >
+                    Lane color
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 4,
+                      alignItems: "center",
+                    }}
+                  >
+                    {LANE_PALETTE.map((c) => {
+                      const active =
+                        lane.color.toLowerCase() === c.toLowerCase();
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          title={c}
+                          aria-label={`Lane color ${c}`}
+                          onClick={() => {
+                            onSetColor(lane.id, c);
+                            setMenuFor(null);
+                          }}
+                          style={{
+                            width: 18,
+                            height: 18,
+                            borderRadius: 4,
+                            background: c,
+                            border: active
+                              ? "2px solid #0f172a"
+                              : "1px solid #cbd5e1",
+                            cursor: "pointer",
+                            padding: 0,
+                          }}
+                        />
+                      );
+                    })}
+                    <label
+                      title="Custom color"
+                      style={{
+                        width: 18,
+                        height: 18,
+                        borderRadius: 4,
+                        border: "1px dashed #94a3b8",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: "pointer",
+                        fontSize: 12,
+                        color: "#64748b",
+                        position: "relative",
+                        overflow: "hidden",
+                      }}
+                    >
+                      +
+                      <input
+                        type="color"
+                        aria-label="Custom lane color"
+                        value={lane.color}
+                        onChange={(e) => onSetColor(lane.id, e.target.value)}
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          opacity: 0,
+                          cursor: "pointer",
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
+                <div
+                  style={{ height: 1, background: "#f1f5f9", margin: "3px 2px" }}
                 />
                 <MenuItem
                   icon="arrow-up"

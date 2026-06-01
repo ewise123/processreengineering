@@ -18,24 +18,15 @@ import type {
   UUID,
 } from "@/lib/types";
 
+import { NODE_TYPE_OPTIONS } from "./node-type";
+
 interface SelectedNode {
   id: UUID;
   name?: string;
   nodeKind?: string;
+  type?: string;
   laneId?: string | null;
 }
-
-const NODE_KINDS = [
-  "start",
-  "end",
-  "intermediate",
-  "user",
-  "service",
-  "manual",
-  "send",
-  "receive",
-  "gateway",
-] as const;
 
 export function PropertiesPanel({
   projectId,
@@ -56,7 +47,7 @@ export function PropertiesPanel({
   onDelete?: (id: UUID) => Promise<void> | void;
   onUpdate?: (
     id: UUID,
-    patch: { name?: string; laneId?: UUID }
+    patch: { name?: string; laneId?: UUID; type?: string }
   ) => Promise<void> | void;
 }) {
   const { data, isLoading } = useQuery({
@@ -194,14 +185,16 @@ export function PropertiesPanel({
               Type
             </label>
             <select
-              value={selected.nodeKind ?? "user"}
-              disabled
-              title="Type editing coming soon"
-              className="mt-1 w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-600 focus:outline-none"
+              value={selected.type ?? "task"}
+              onChange={(e) =>
+                onUpdate?.(selected.id, { type: e.target.value })
+              }
+              disabled={!onUpdate}
+              className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800 focus:border-slate-500 focus:outline-none disabled:bg-slate-50 disabled:text-slate-500"
             >
-              {NODE_KINDS.map((k) => (
-                <option key={k} value={k}>
-                  {k}
+              {NODE_TYPE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
                 </option>
               ))}
             </select>

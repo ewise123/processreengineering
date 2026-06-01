@@ -3,6 +3,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.enums import NodeType
+
+_NODE_TYPE_PATTERN = rf"^({'|'.join(t.value for t in NodeType)})$"
+
 
 class ProcessMapGenerateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=300)
@@ -31,18 +35,23 @@ class ProcessLaneRead(BaseModel):
     name: str
     order_index: int
     height_px: int
+    color: str | None = None
+    collapsed: bool = False
 
 
 class LaneCreate(BaseModel):
     name: str = Field(min_length=1, max_length=300)
     order_index: int = Field(ge=0)
     height_px: int | None = Field(default=None, ge=80)
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
 
 
 class LaneUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=300)
     order_index: int | None = Field(default=None, ge=0)
     height_px: int | None = Field(default=None, ge=80)
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    collapsed: bool | None = None
 
 
 class NodeUpdate(BaseModel):
@@ -50,6 +59,10 @@ class NodeUpdate(BaseModel):
     lane_id: UUID | None = None
     x: float | None = None
     relative_y: float | None = None
+    type: str | None = Field(
+        default=None,
+        pattern=_NODE_TYPE_PATTERN,
+    )
 
 
 class NodeCreate(BaseModel):
@@ -57,9 +70,7 @@ class NodeCreate(BaseModel):
     target lane and where the user dropped, so we accept those directly
     instead of re-running auto-layout."""
 
-    type: str = Field(
-        pattern=r"^(task|event_start|event_end|event_intermediate|gateway_exclusive|gateway_parallel|gateway_inclusive|subprocess)$"
-    )
+    type: str = Field(pattern=_NODE_TYPE_PATTERN)
     name: str = Field(min_length=1, max_length=500)
     lane_id: UUID
     x: float
