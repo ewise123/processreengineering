@@ -22,6 +22,7 @@ import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType } from "./layout";
 import { sizeForNodeType } from "./node-type";
+import { placeProposedStep } from "./ai-edit";
 import { normalizeMarquee, nodesInMarquee } from "./selection";
 import {
   PALETTE_DRAG_MIME,
@@ -128,7 +129,7 @@ function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
 
 export type CanvasSelection =
   | { kind: "none" }
-  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; type?: string; laneId?: UUID | null }
+  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; type?: string; laneId?: UUID | null; description?: string }
   | { kind: "edge"; id: UUID }
   | { kind: "multi"; nodeIds: UUID[]; edgeIds: UUID[] };
 
@@ -136,12 +137,21 @@ export interface BpmnCanvasHandle {
   /** Calls the API + removes the node (and any edges touching it) from
    * local state without re-fetching the whole graph. */
   deleteNode: (id: UUID) => Promise<void>;
-  /** Apply a node-level edit (label, lane assignment) from outside the
-   * canvas (e.g. the Properties panel). Records an undo entry. */
+  /** Apply a node-level edit (label, lane assignment, description) from
+   * outside the canvas (e.g. the Properties panel). Records an undo entry. */
   updateNode: (
     id: UUID,
-    patch: { name?: string; laneId?: UUID; type?: string }
+    patch: { name?: string; laneId?: UUID; type?: string; description?: string }
   ) => Promise<void>;
+  /** Insert an AI-proposed downstream step (node + edge) via the apply
+   * endpoint, select it, and record a replayable undo entry. */
+  addProposedStep: (args: {
+    sourceId: UUID;
+    name: string;
+    type: string;
+    citedClaimIds: UUID[];
+    edgeLabel?: string | null;
+  }) => Promise<void>;
   /** Select a node (drives Properties panel + chat context) from outside
    * the canvas, e.g. clicking a node link in the Issues tab. */
   selectNode: (id: UUID) => void;
@@ -253,7 +263,7 @@ function BpmnCanvas({
   const applyNodeEditLocal = useCallback(
     async (
       id: UUID,
-      next: { name: string; laneId: UUID | null; relativeY: number }
+      next: { name: string; laneId: UUID | null; relativeY: number; description?: string }
     ) => {
       setNodes((curr) =>
         curr.map((n) =>
@@ -263,6 +273,7 @@ function BpmnCanvas({
                 label: next.name,
                 laneId: next.laneId,
                 relativeY: next.relativeY,
+                ...(next.description !== undefined ? { description: next.description } : {}),
               }
             : n
         )
@@ -271,6 +282,7 @@ function BpmnCanvas({
         name: next.name,
         lane_id: next.laneId ?? undefined,
         relative_y: next.relativeY,
+        ...(next.description !== undefined ? { description: next.description } : {}),
       });
     },
     [projectId]
@@ -295,7 +307,7 @@ function BpmnCanvas({
   const updateNodeImpl = useCallback(
     async (
       id: UUID,
-      patch: { name?: string; laneId?: UUID; type?: string }
+      patch: { name?: string; laneId?: UUID; type?: string; description?: string }
     ) => {
       const old = nodesRef.current.find((n) => n.id === id);
       if (!old) return;
@@ -307,6 +319,22 @@ function BpmnCanvas({
           description: "Change node type",
           do: () => applyNodeTypeLocal(id, newType),
           undo: () => applyNodeTypeLocal(id, oldType),
+        });
+        return;
+      }
+      if (
+        patch.description !== undefined &&
+        patch.name === undefined &&
+        patch.laneId === undefined
+      ) {
+        const oldDescription = old.description;
+        const newDescription = patch.description;
+        const base = { name: old.label, laneId: old.laneId, relativeY: old.relativeY };
+        await applyNodeEditLocal(id, { ...base, description: newDescription });
+        record({
+          description: "Edit description",
+          do: () => applyNodeEditLocal(id, { ...base, description: newDescription }),
+          undo: () => applyNodeEditLocal(id, { ...base, description: oldDescription }),
         });
         return;
       }
@@ -339,6 +367,96 @@ function BpmnCanvas({
       });
     },
     [applyNodeEditLocal, applyNodeTypeLocal, record]
+  );
+
+  const addProposedStep = useCallback(
+    async (args: {
+      sourceId: UUID;
+      name: string;
+      type: string;
+      citedClaimIds: UUID[];
+      edgeLabel?: string | null;
+    }) => {
+      const source = nodesRef.current.find((n) => n.id === args.sourceId);
+      if (!source) return;
+      const lane = source.laneId;
+      if (!lane) {
+        toast.error("Can't place a step from a node with no lane.");
+        return;
+      }
+      const pos = placeProposedStep({ x: source.x, relativeY: source.relativeY, w: source.w });
+      try {
+        const res = await api.applyProposedStep(projectId, modelId, versionId, {
+          source_node_id: args.sourceId,
+          name: args.name,
+          type: args.type,
+          lane_id: lane,
+          x: pos.x,
+          relative_y: pos.relativeY,
+          edge_label: args.edgeLabel ?? null,
+          cited_claim_ids: args.citedClaimIds,
+        });
+        const size = sizeForNodeType(res.node.type);
+        const newNode: CanvasNode = {
+          id: res.node.id,
+          type: res.node.type,
+          kind: nodeKindFromType(res.node.type),
+          label: res.node.name,
+          laneId: lane,
+          x: pos.x,
+          relativeY: pos.relativeY,
+          w: size.w,
+          h: size.h,
+          aiProposed: true,
+        };
+        const newEdge: CanvasEdge = {
+          id: res.edge.id,
+          from: res.edge.source_node_id,
+          to: res.edge.target_node_id,
+          label: res.edge.label,
+        };
+        setNodes((curr) => [...curr, newNode]);
+        setEdges((curr) => [...curr, newEdge]);
+        selectOnly(newNode.id);
+        // Replayable undo/redo. `undo` deletes via the API (local + edge
+        // cascade); `redo` re-creates through the apply endpoint and refreshes
+        // the captured ids (a fresh row each time) so a subsequent undo still
+        // targets live rows rather than the deleted ones.
+        let liveNode = newNode;
+        let liveEdge = newEdge;
+        const stepBody = {
+          source_node_id: args.sourceId,
+          name: args.name,
+          type: args.type,
+          lane_id: lane,
+          x: pos.x,
+          relative_y: pos.relativeY,
+          edge_label: args.edgeLabel ?? null,
+          cited_claim_ids: args.citedClaimIds,
+        };
+        record({
+          description: "Add AI-proposed step",
+          do: async () => {
+            const again = await api.applyProposedStep(projectId, modelId, versionId, stepBody);
+            liveNode = { ...newNode, id: again.node.id };
+            liveEdge = {
+              id: again.edge.id,
+              from: again.edge.source_node_id,
+              to: again.edge.target_node_id,
+              label: again.edge.label,
+            };
+            setNodes((curr) => [...curr, liveNode]);
+            setEdges((curr) => [...curr, liveEdge]);
+            selectOnly(liveNode.id);
+          },
+          undo: () => deleteNodeImpl(liveNode.id),
+        });
+      } catch (err) {
+        console.error("Failed to apply proposed step", err);
+        toast.error("Couldn't add the suggested step — please try again.");
+      }
+    },
+    [projectId, modelId, versionId, record, deleteNodeImpl, selectOnly]
   );
 
   const deleteEdgeImpl = useCallback(
@@ -489,6 +607,7 @@ function BpmnCanvas({
     () => ({
       deleteNode: deleteNodeImpl,
       updateNode: updateNodeImpl,
+      addProposedStep,
       selectNode: (id) => {
         setSelectedIds(new Set([id]));
         focusNodeInViewport(id);
@@ -497,7 +616,7 @@ function BpmnCanvas({
       copySelection: copySelectionImpl,
       moveSelectionToLane: moveSelectionToLaneImpl,
     }),
-    [deleteNodeImpl, updateNodeImpl, focusNodeInViewport, deleteSelectionImpl]
+    [deleteNodeImpl, updateNodeImpl, addProposedStep, focusNodeInViewport, deleteSelectionImpl]
   );
 
   // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
@@ -627,6 +746,7 @@ function BpmnCanvas({
           nodeKind: node.kind,
           type: node.type,
           laneId: node.laneId,
+          description: node.description,
         });
       } else {
         onSelectionChange({ kind: "edge", id });
