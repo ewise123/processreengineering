@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { AiEditCacheProvider } from "@/components/canvas/ai-edit-cache";
 import { BpmnCanvas, type BpmnCanvasHandle, type CanvasSelection } from "@/components/canvas/bpmn-canvas";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { RightPanel } from "@/components/canvas/right-panel";
@@ -85,10 +86,10 @@ export default function CanvasPage() {
   );
 
   const handleNodeUpdate = useCallback(
-    async (id: UUID, patch: { name?: string; laneId?: UUID; type?: string }) => {
+    async (id: UUID, patch: { name?: string; laneId?: UUID; type?: string; description?: string }) => {
       if (!canvasRef.current) return;
       await canvasRef.current.updateNode(id, patch);
-      // Reflect the new label/lane/type in the panel without forcing a re-select.
+      // Reflect the new label/lane/type/description in the panel without forcing a re-select.
       setSelected((curr) =>
         curr.kind === "node" && curr.id === id
           ? {
@@ -96,9 +97,26 @@ export default function CanvasPage() {
               ...(patch.name !== undefined ? { name: patch.name } : {}),
               ...(patch.laneId !== undefined ? { laneId: patch.laneId } : {}),
               ...(patch.type !== undefined ? { type: patch.type } : {}),
+              ...(patch.description !== undefined ? { description: patch.description } : {}),
             }
           : curr
       );
+    },
+    []
+  );
+
+  const handleAddStep = useCallback(
+    async (
+      sourceId: UUID,
+      step: { proposed_name: string; proposed_type: string; edge_label: string | null; cited_claim_ids: UUID[] }
+    ) => {
+      await canvasRef.current?.addProposedStep({
+        sourceId,
+        name: step.proposed_name,
+        type: step.proposed_type,
+        citedClaimIds: step.cited_claim_ids,
+        edgeLabel: step.edge_label,
+      });
     },
     []
   );
@@ -186,6 +204,7 @@ export default function CanvasPage() {
   const selectedNode = selected.kind === "node" ? selected : null;
 
   return (
+    <AiEditCacheProvider>
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       {/* Top floating bar */}
       <div
@@ -329,12 +348,15 @@ export default function CanvasPage() {
         >
           <PropertiesPanel
             projectId={params.id}
+            modelId={params.modelId}
+            versionId={params.versionId}
             selected={selectedNode}
             lanes={data.lanes}
             collapsed={propertiesCollapsed}
             onCollapsedChange={setPropertiesCollapsed}
             onDelete={handleNodeDelete}
             onUpdate={handleNodeUpdate}
+            onAddStep={handleAddStep}
             review={
               selectedNode
                 ? {
@@ -435,6 +457,7 @@ export default function CanvasPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </AiEditCacheProvider>
   );
 }
 

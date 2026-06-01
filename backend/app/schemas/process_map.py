@@ -63,6 +63,7 @@ class NodeUpdate(BaseModel):
         default=None,
         pattern=_NODE_TYPE_PATTERN,
     )
+    description: str | None = Field(default=None, max_length=5000)
 
 
 class NodeCreate(BaseModel):
@@ -203,6 +204,11 @@ class ProcessEdgeRead(BaseModel):
     condition_text: str | None
     bend_x: float | None = None
     bend_y: float | None = None
+
+
+class AiProposedStepResult(BaseModel):
+    node: ProcessNodeRead
+    edge: ProcessEdgeRead
 
 
 class ProcessVersionRead(BaseModel):

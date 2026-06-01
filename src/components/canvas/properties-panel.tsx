@@ -5,7 +5,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Sparkles,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -16,9 +15,11 @@ import type {
   NodeIssueDetail,
   ProcessLane,
   ReviewDecision,
+  SuggestedStep,
   UUID,
 } from "@/lib/types";
 
+import { AiEditPanel } from "./ai-edit-panel";
 import { NODE_TYPE_OPTIONS } from "./node-type";
 
 interface SelectedNode {
@@ -27,19 +28,25 @@ interface SelectedNode {
   nodeKind?: string;
   type?: string;
   laneId?: string | null;
+  description?: string;
 }
 
 export function PropertiesPanel({
   projectId,
+  modelId,
+  versionId,
   selected,
   lanes,
   collapsed,
   onCollapsedChange,
   onDelete,
   onUpdate,
+  onAddStep,
   review,
 }: {
   projectId: UUID;
+  modelId: UUID;
+  versionId: UUID;
   selected: SelectedNode;
   lanes: ProcessLane[];
   /** Controlled collapse state — the page lifts this so it can resize the
@@ -49,8 +56,9 @@ export function PropertiesPanel({
   onDelete?: (id: UUID) => Promise<void> | void;
   onUpdate?: (
     id: UUID,
-    patch: { name?: string; laneId?: UUID; type?: string }
+    patch: { name?: string; laneId?: UUID; type?: string; description?: string }
   ) => Promise<void> | void;
+  onAddStep?: (sourceId: UUID, step: SuggestedStep) => void;
   review?: {
     status: ReviewDecision | null;
     onApprove: () => void;
@@ -89,6 +97,11 @@ export function PropertiesPanel({
   useEffect(() => {
     setLabelDraft(selected.name ?? "");
   }, [selected.id, selected.name]);
+
+  const [descriptionDraft, setDescriptionDraft] = useState(selected.description ?? "");
+  useEffect(() => {
+    setDescriptionDraft(selected.description ?? "");
+  }, [selected.id, selected.description]);
 
   const handleDelete = async () => {
     if (!onDelete || deleting) return;
@@ -234,14 +247,36 @@ export function PropertiesPanel({
           </div>
         </div>
 
-        <button
-          disabled
-          title="AI editing coming in Phase 3c"
-          className="flex w-full items-center justify-center gap-1.5 rounded-md bg-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-500"
-        >
-          <Sparkles size={11} />
-          Ask AI to edit this step
-        </button>
+        <div>
+          <label className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+            Description
+          </label>
+          <textarea
+            value={descriptionDraft}
+            onChange={(e) => setDescriptionDraft(e.target.value)}
+            onBlur={() => {
+              if (descriptionDraft !== (selected.description ?? "")) {
+                onUpdate?.(selected.id, { description: descriptionDraft });
+              }
+            }}
+            disabled={!onUpdate}
+            rows={3}
+            className="mt-1 w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800 focus:border-slate-500 focus:outline-none disabled:bg-slate-50"
+          />
+        </div>
+
+        <AiEditPanel
+          projectId={projectId}
+          modelId={modelId}
+          versionId={versionId}
+          nodeId={selected.id}
+          onRelabel={(name) => onUpdate?.(selected.id, { name })}
+          onDescribe={(description) => {
+            setDescriptionDraft(description);
+            onUpdate?.(selected.id, { description });
+          }}
+          onAddStep={(step) => onAddStep?.(selected.id, step)}
+        />
       </div>
 
       {/* Issues — open conflicts touching this node's claims */}

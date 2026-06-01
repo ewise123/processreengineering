@@ -33,6 +33,7 @@ from app.models.workflow import Review
 from app.models.claim import Claim, ClaimCitation, ClaimConflict
 from app.models.input import Chunk, DocumentSection, Input
 from app.schemas.process_map import (
+    AiProposedStepResult,
     ChatRequest,
     ChatResponse,
     CitationDetail,
@@ -57,8 +58,27 @@ from app.schemas.process_map import (
     ProcessNodeRead,
     ProcessVersionRead,
 )
+from app.schemas.version_ai_edit import (
+    AiEditAction,
+    AiEditRequest,
+    AiEditResponse,
+    AiProposedStepRequest,
+    DescribeProposal,
+    RelabelProposal,
+    SuggestNextProposal,
+    SuggestedStep,
+    ValidateGap,
+    ValidateProposal,
+)
 from app.services.legacy_bpmn import build_bpmn_xml, validate_xml
-from app.services.map_chat import ChatTurn as MapChatTurn, build_map_context, chat as run_map_chat
+from app.services.map_ai_edit import (
+    propose_relabel,
+    propose_description,
+    report_gaps,
+    propose_next_steps,
+)
+from app.services.map_chat import ChatTurn as MapChatTurn, chat as run_map_chat
+from app.services.map_context import assemble_map_context
 from app.services.process_generation import generate_structure_from_claims
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
@@ -538,6 +558,11 @@ def update_node(
         node.name = payload.name
     if payload.type is not None:
         node.type = payload.type
+    if payload.description is not None:
+        new_props = dict(node.properties or {})
+        new_props["description"] = payload.description
+        node.properties = new_props
+        flag_modified(node, "properties")
     if payload.x is not None or payload.relative_y is not None:
         new_position = dict(node.position or {})
         if payload.x is not None:
@@ -1102,132 +1127,21 @@ def chat_with_map(
     if version is None or version.model_id != model.id:
         raise HTTPException(status_code=404, detail="Process version not found")
 
-    # Load the current map state so the model has a grounded view of it.
-    lanes = list(
-        db.scalars(
-            select(ProcessLane)
-            .where(ProcessLane.version_id == version.id)
-            .order_by(ProcessLane.order_index)
-        ).all()
-    )
-    nodes = list(
-        db.scalars(
-            select(ProcessNode).where(ProcessNode.version_id == version.id)
-        ).all()
-    )
-    edges = list(
-        db.scalars(
-            select(ProcessEdge).where(ProcessEdge.version_id == version.id)
-        ).all()
-    )
-
-    # Build short-id refs the model can cite back.
-    lane_ref_by_id: dict = {l.id: f"L{i + 1}" for i, l in enumerate(lanes)}
-    node_ref_by_id: dict = {n.id: f"N{i + 1}" for i, n in enumerate(nodes)}
-
-    lanes_ctx = [
-        {"idx": i + 1, "name": l.name} for i, l in enumerate(lanes)
-    ]
-    nodes_ctx = [
-        {
-            "idx": i + 1,
-            "label": n.name,
-            "type": n.type,
-            "lane_ref": lane_ref_by_id.get(n.lane_id) if n.lane_id else None,
-        }
-        for i, n in enumerate(nodes)
-    ]
-    edges_ctx = [
-        {
-            "idx": i + 1,
-            "source_ref": node_ref_by_id.get(e.source_node_id, "?"),
-            "target_ref": node_ref_by_id.get(e.target_node_id, "?"),
-            "label": e.label,
-        }
-        for i, e in enumerate(edges)
-    ]
-
-    # Pull all claims attached to any node in this version, plus their first
-    # citation (if any) so the model can quote source text directly.
-    node_claim_rows = list(
-        db.execute(
-            select(NodeClaimLink.claim_id, NodeClaimLink.node_id)
-            .join(ProcessNode, NodeClaimLink.node_id == ProcessNode.id)
-            .where(ProcessNode.version_id == version.id)
-        ).all()
-    )
-    attached_node_by_claim: dict = {
-        claim_id: node_ref_by_id.get(node_id, "?")
-        for claim_id, node_id in node_claim_rows
-    }
-
-    project_claim_ids = list(
-        db.scalars(
-            select(Claim.id).where(Claim.project_id == project.id)
-        ).all()
-    )
-    project_claims = list(
-        db.scalars(
-            select(Claim).where(Claim.id.in_(project_claim_ids))
-        ).all()
-    ) if project_claim_ids else []
-
-    quote_by_claim: dict = {}
-    source_by_claim: dict = {}
-    if project_claim_ids:
-        cit_rows = list(
-            db.execute(
-                select(
-                    ClaimCitation.claim_id,
-                    ClaimCitation.quote,
-                    Input.name,
-                )
-                .join(Chunk, Chunk.id == ClaimCitation.chunk_id)
-                .join(DocumentSection, DocumentSection.id == Chunk.section_id)
-                .join(Input, Input.id == DocumentSection.input_id)
-                .where(ClaimCitation.claim_id.in_(project_claim_ids))
-                .order_by(ClaimCitation.created_at)
-            ).all()
-        )
-        for claim_id, quote, input_name in cit_rows:
-            if claim_id not in quote_by_claim:
-                quote_by_claim[claim_id] = quote
-                source_by_claim[claim_id] = input_name
-
-    claims_ctx = [
-        {
-            "idx": i + 1,
-            "kind": c.kind,
-            "subject": c.subject,
-            "attached_to": attached_node_by_claim.get(c.id),
-            "quote": quote_by_claim.get(c.id),
-            "source": source_by_claim.get(c.id),
-        }
-        for i, c in enumerate(project_claims)
-    ]
-
-    # Render the selection label for the prompt.
-    selected_label: str | None = None
-    if payload.selected_node_id:
-        n = next((n for n in nodes if n.id == payload.selected_node_id), None)
-        if n is not None:
-            ref = node_ref_by_id.get(n.id, "?")
-            selected_label = f"{ref} (node) — \"{n.name}\""
-    elif payload.selected_edge_id:
-        e = next((e for e in edges if e.id == payload.selected_edge_id), None)
-        if e is not None:
-            src = node_ref_by_id.get(e.source_node_id, "?")
-            tgt = node_ref_by_id.get(e.target_node_id, "?")
-            label = f" '{e.label}'" if e.label else ""
-            selected_label = f"edge {src}->{tgt}{label}"
-
-    map_context_text = build_map_context(
-        lanes=lanes_ctx,
-        nodes=nodes_ctx,
-        edges=edges_ctx,
-        claims=claims_ctx,
-        selected_label=selected_label,
-    )
+    selected_id = payload.selected_node_id
+    ctx = assemble_map_context(db, version, selected_node_id=selected_id)
+    # The chat also lets an edge be the selection; preserve that label.
+    if selected_id is None and payload.selected_edge_id:
+        edge = db.get(ProcessEdge, payload.selected_edge_id)
+        if edge is not None and edge.version_id == version.id:
+            src = ctx.node_ref_by_id.get(edge.source_node_id, "?")
+            tgt = ctx.node_ref_by_id.get(edge.target_node_id, "?")
+            label = f" '{edge.label}'" if edge.label else ""
+            # Re-render with the edge selection label prepended.
+            map_context_text = f"Currently selected: edge {src}->{tgt}{label}\n\n{ctx.text}"
+        else:
+            map_context_text = ctx.text
+    else:
+        map_context_text = ctx.text
 
     history = [
         MapChatTurn(role=t.role, content=t.content) for t in payload.history
@@ -1242,3 +1156,181 @@ def chat_with_map(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return ChatResponse(content=content)
+
+
+def _resolve_refs(refs, claim_ref_to_id):
+    """Map the model's short claim refs to real UUIDs; drop any not present in
+    the grounding context (defeats fabricated citations)."""
+    out = []
+    for r in refs or []:
+        cid = claim_ref_to_id.get(str(r).strip().upper())
+        if cid is not None and cid not in out:
+            out.append(cid)
+    return out
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/nodes/{node_id}/ai-edit",
+    response_model=AiEditResponse,
+)
+def ai_edit_node(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    node_id: UUID,
+    payload: AiEditRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> AiEditResponse:
+    """Propose an AI edit for one node. Never mutates: returns structured
+    proposals the user accepts or rejects. Model claim citations are resolved
+    to UUIDs and fabricated refs dropped."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+    node = db.get(ProcessNode, node_id)
+    if node is None or node.version_id != version.id:
+        raise HTTPException(status_code=404, detail="Node not found in this version")
+
+    ctx = assemble_map_context(db, version, selected_node_id=node.id)
+
+    try:
+        if payload.action == AiEditAction.RELABEL:
+            raw = propose_relabel(map_context_text=ctx.text, selected_label=ctx.selected_label)
+            return AiEditResponse(
+                action=payload.action,
+                relabel=RelabelProposal(
+                    proposed_name=raw.get("proposed_name", node.name),
+                    unchanged=bool(raw.get("unchanged", False)),
+                    rationale=raw.get("rationale", ""),
+                    cited_claim_ids=_resolve_refs(raw.get("cited_claim_refs"), ctx.claim_ref_to_id),
+                ),
+            )
+        if payload.action == AiEditAction.DESCRIBE:
+            raw = propose_description(map_context_text=ctx.text, selected_label=ctx.selected_label)
+            return AiEditResponse(
+                action=payload.action,
+                describe=DescribeProposal(
+                    proposed_description=raw.get("proposed_description", ""),
+                    rationale=raw.get("rationale", ""),
+                    cited_claim_ids=_resolve_refs(raw.get("cited_claim_refs"), ctx.claim_ref_to_id),
+                ),
+            )
+        if payload.action == AiEditAction.VALIDATE:
+            raw = report_gaps(map_context_text=ctx.text, selected_label=ctx.selected_label)
+            gaps = [
+                ValidateGap(
+                    summary=g.get("summary", ""),
+                    severity=g.get("severity", "low"),
+                    cited_claim_ids=_resolve_refs(g.get("cited_claim_refs"), ctx.claim_ref_to_id),
+                )
+                for g in raw.get("gaps", [])
+            ]
+            return AiEditResponse(action=payload.action, validate_=ValidateProposal(gaps=gaps))
+        if payload.action == AiEditAction.SUGGEST_NEXT:
+            raw = propose_next_steps(map_context_text=ctx.text, selected_label=ctx.selected_label)
+            steps = [
+                SuggestedStep(
+                    proposed_name=s.get("proposed_name", ""),
+                    proposed_type=s.get("proposed_type", "task"),
+                    edge_label=s.get("edge_label"),
+                    rationale=s.get("rationale", ""),
+                    cited_claim_ids=_resolve_refs(s.get("cited_claim_refs"), ctx.claim_ref_to_id),
+                )
+                for s in raw.get("steps", [])
+                if s.get("proposed_name")
+            ]
+            return AiEditResponse(action=payload.action, suggest_next=SuggestNextProposal(steps=steps))
+        raise HTTPException(status_code=422, detail=f"Unsupported action: {payload.action}")
+    except (RuntimeError, ValueError) as exc:  # missing API key, bad proposal, etc.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/ai-proposed-step",
+    response_model=AiProposedStepResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def apply_proposed_step(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    payload: AiProposedStepRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> AiProposedStepResult:
+    """Accept a suggested next step: create one ai_proposed node downstream of
+    the source node, plus the connecting edge and NodeClaimLinks for any cited
+    claims that actually exist in this project. Everything happens in one
+    transaction; bogus/foreign claim ids are silently dropped."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+
+    source = db.get(ProcessNode, payload.source_node_id)
+    if source is None or source.version_id != version.id:
+        raise HTTPException(
+            status_code=422, detail="source_node_id must reference a node in this version"
+        )
+
+    lane = db.get(ProcessLane, payload.lane_id)
+    if lane is None or lane.version_id != version.id:
+        raise HTTPException(
+            status_code=422, detail="lane_id must reference a lane in this version"
+        )
+
+    # Create the new node; flush to obtain its id before we stamp the lineage key.
+    node = ProcessNode(
+        version_id=version.id,
+        type=payload.type,
+        name=payload.name,
+        lane_id=payload.lane_id,
+        position={"x": payload.x, "relative_y": payload.relative_y},
+        properties={},
+    )
+    db.add(node)
+    db.flush()
+
+    node.properties = {**node.properties, LINEAGE_KEY: str(node.id), "ai_proposed": True}
+    flag_modified(node, "properties")
+
+    # Create the edge from the source node to the new node.
+    edge = ProcessEdge(
+        version_id=version.id,
+        source_node_id=source.id,
+        target_node_id=node.id,
+        label=payload.edge_label or None,
+    )
+    db.add(edge)
+
+    # Resolve cited claim ids: only create links for claims that genuinely
+    # belong to this project; silently ignore any bogus/foreign ids.
+    if payload.cited_claim_ids:
+        real_claims = list(
+            db.scalars(
+                select(Claim).where(
+                    Claim.id.in_(payload.cited_claim_ids),
+                    Claim.project_id == project.id,
+                )
+            ).all()
+        )
+        for claim in real_claims:
+            db.add(
+                NodeClaimLink(
+                    node_id=node.id,
+                    claim_id=claim.id,
+                    link_kind=ClaimLinkKind.AI_PROPOSED.value,
+                )
+            )
+
+    db.commit()
+    db.refresh(node)
+    db.refresh(edge)
+    return AiProposedStepResult(
+        node=ProcessNodeRead.model_validate(node),
+        edge=ProcessEdgeRead.model_validate(edge),
+    )

@@ -33,6 +33,11 @@ export interface CanvasNode {
   relativeY: number;
   w: number;
   h: number;
+  /** True when this node was created by an AI proposal (properties.ai_proposed).
+   * Drives distinct rendering. */
+  aiProposed?: boolean;
+  /** Optional free-text description (properties.description). */
+  description?: string;
 }
 
 /** Resolved node with absolute world Y, used for SVG rendering. */
