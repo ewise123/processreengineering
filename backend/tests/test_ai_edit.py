@@ -14,6 +14,7 @@ from app.models.process import (
     NodeClaimLink, ProcessEdge, ProcessLane, ProcessModel, ProcessNode, ProcessVersion,
 )
 from app.models.project import Project
+from app.schemas.process_map import NodeUpdate
 from app.schemas.version_ai_edit import AiEditAction, AiEditRequest
 from app.services import map_ai_edit
 
@@ -189,3 +190,19 @@ def test_propose_relabel_empty_service_dict_falls_back_to_node_name(db):
         )
     assert resp.relabel.proposed_name == n1.name  # falls back, no 500
     assert resp.relabel.cited_claim_ids == []
+
+
+def test_update_node_writes_description_preserving_other_properties(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    # Seed an existing property so we can prove it's preserved.
+    n1.properties = {"_lineage_id": str(n1.id)}
+    db.commit()
+
+    result = pm_api.update_node(
+        project=project,
+        node_id=n1.id,
+        payload=NodeUpdate(description="Clerk logs the order into SAP."),
+        db=db,
+    )
+    assert result.properties["description"] == "Clerk logs the order into SAP."
+    assert result.properties["_lineage_id"] == str(n1.id)

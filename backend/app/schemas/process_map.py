@@ -63,6 +63,7 @@ class NodeUpdate(BaseModel):
         default=None,
         pattern=_NODE_TYPE_PATTERN,
     )
+    description: str | None = Field(default=None, max_length=5000)
 
 
 class NodeCreate(BaseModel):
