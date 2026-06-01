@@ -4,6 +4,7 @@ import { useState, type MouseEvent } from "react";
 
 import type { IssueSeverity, UUID } from "@/lib/types";
 
+import { isEdgeProposed } from "./ai-edit";
 import type { CanvasEdge, ResolvedNode } from "./types";
 
 const ISSUE_FILL: Record<IssueSeverity, string> = {
@@ -181,6 +182,13 @@ export function NodeShape({
   const strokeWidth = selected ? 2.5 : issueLevel ? 2 : 1.2;
   const fill = "#ffffff";
 
+  // AI-proposed styling: violet dashed outline, only when neither selected nor
+  // flagged with an issue (those states take precedence).
+  const proposed = node.aiProposed === true;
+  const proposedStroke = "#7c3aed";
+  const baseStroke = proposed && !selected && !issueStroke ? proposedStroke : stroke;
+  const proposedDash = proposed && !selected && !issueStroke ? "5 3" : undefined;
+
   const [hover, setHover] = useState(false);
   const handlesVisible =
     !!onStartConnect && (hover || selected || showHandles);
@@ -203,13 +211,16 @@ export function NodeShape({
             r={w / 2}
             fill={fill}
             stroke={
-              kind === "start"
-                ? "#16a34a"
-                : kind === "end"
-                  ? "#991b1b"
-                  : "#475569"
+              proposed && !selected && !issueStroke
+                ? proposedStroke
+                : kind === "start"
+                  ? "#16a34a"
+                  : kind === "end"
+                    ? "#991b1b"
+                    : "#475569"
             }
             strokeWidth={kind === "end" ? 3.5 : 2}
+            strokeDasharray={proposedDash}
           />
           {selected && (
             <circle
@@ -229,8 +240,9 @@ export function NodeShape({
           <polygon
             points={`${w / 2},0 ${w},${h / 2} ${w / 2},${h} 0,${h / 2}`}
             fill={fill}
-            stroke={stroke}
+            stroke={baseStroke}
             strokeWidth={strokeWidth}
+            strokeDasharray={proposedDash}
           />
           <text
             x={w / 2}
@@ -252,9 +264,15 @@ export function NodeShape({
             rx={8}
             ry={8}
             fill={fill}
-            stroke={stroke}
+            stroke={baseStroke}
             strokeWidth={strokeWidth}
+            strokeDasharray={proposedDash}
           />
+          {proposed && (
+            <text x={w - 12} y={14} fontSize="11" fill={proposedStroke} aria-label="AI proposed">
+              ✦
+            </text>
+          )}
           <foreignObject x={6} y={10} width={w - 12} height={h - 16}>
             <div
               style={{
@@ -388,6 +406,8 @@ export function EdgeArrow({
   const to = nodes.find((n) => n.id === edge.to);
   if (!from || !to) return null;
 
+  const edgeProposed = isEdgeProposed(from, to);
+
   const { d, midX, midY, orientation, midSegment } = buildEdgePath(from, to, {
     bendX: edge.bendX,
     bendY: edge.bendY,
@@ -410,8 +430,9 @@ export function EdgeArrow({
       <path
         d={d}
         fill="none"
-        stroke={selected ? "#0f172a" : "#94a3b8"}
+        stroke={selected ? "#0f172a" : edgeProposed ? "#7c3aed" : "#94a3b8"}
         strokeWidth={selected ? 2.5 : 1.5}
+        strokeDasharray={selected ? undefined : edgeProposed ? "5 3" : undefined}
         markerEnd="url(#poet-arrow)"
       />
       {/* Hit-area for click */}
