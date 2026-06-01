@@ -120,7 +120,7 @@ function ShimmerCard() {
       {/* Sweeping shimmer overlay — starts off-screen left, sweeps to right */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-violet-200/60 to-transparent animate-[ai-shimmer_1.6s_ease-in-out_infinite] motion-reduce:hidden"
+        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-violet-200/60 to-transparent animate-[ai-shimmer_1.6s_ease-in-out_infinite] motion-reduce:hidden"
       />
     </div>
   );
