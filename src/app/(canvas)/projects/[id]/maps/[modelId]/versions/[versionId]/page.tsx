@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { AiEditCacheProvider } from "@/components/canvas/ai-edit-cache";
 import { BpmnCanvas, type BpmnCanvasHandle, type CanvasSelection } from "@/components/canvas/bpmn-canvas";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { RightPanel } from "@/components/canvas/right-panel";
@@ -203,6 +204,7 @@ export default function CanvasPage() {
   const selectedNode = selected.kind === "node" ? selected : null;
 
   return (
+    <AiEditCacheProvider>
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       {/* Top floating bar */}
       <div
@@ -455,6 +457,7 @@ export default function CanvasPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </AiEditCacheProvider>
   );
 }
 

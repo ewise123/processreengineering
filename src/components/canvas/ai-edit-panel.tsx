@@ -3,7 +3,7 @@
 import { Sparkles } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
-import { api } from "@/lib/api";
+import { useAiEditNode } from "@/components/canvas/ai-edit-cache";
 import type {
   AiEditAction,
   AiEditResponse,
@@ -35,39 +35,15 @@ export function AiEditPanel({
   onDescribe: (description: string) => void;
   onAddStep: (step: SuggestedStep) => void;
 }) {
+  // menuOpen stays local — it's purely transient UI chrome with no cross-mount
+  // relevance (if the user deselects a node the menu should close on reselect).
   const [menuOpen, setMenuOpen] = useState(false);
-  const [loading, setLoading] = useState<AiEditAction | null>(null);
-  const [result, setResult] = useState<AiEditResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // Tracks the subset of suggest_next steps the user hasn't acted on yet.
-  // null means we're not in a suggest_next flow; an empty array means all steps
-  // have been resolved (triggers result clear).
-  const [pendingSteps, setPendingSteps] = useState<SuggestedStep[] | null>(null);
 
-  async function run(action: AiEditAction) {
+  const { entry, runAction, resolveStep, clear } = useAiEditNode(nodeId);
+
+  function handleMenuAction(action: AiEditAction) {
     setMenuOpen(false);
-    setResult(null);
-    setPendingSteps(null);
-    setError(null);
-    setLoading(action);
-    try {
-      const res = await api.aiEditNode(projectId, modelId, versionId, nodeId, action);
-      setResult(res);
-      if (res.suggest_next) {
-        setPendingSteps(res.suggest_next.steps);
-      }
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  function resolveStep(step: SuggestedStep, accept: boolean) {
-    if (accept) onAddStep(step);
-    const remaining = (pendingSteps ?? []).filter((s) => s !== step);
-    setPendingSteps(remaining);
-    if (remaining.length === 0) setResult(null);
+    runAction({ projectId, modelId, versionId, action });
   }
 
   return (
@@ -88,7 +64,7 @@ export function AiEditPanel({
               key={a.action}
               role="menuitem"
               type="button"
-              onClick={() => run(a.action)}
+              onClick={() => handleMenuAction(a.action)}
               className="block w-full px-3 py-1.5 text-left text-[11px] text-slate-700 hover:bg-slate-50"
             >
               {a.label}
@@ -97,21 +73,24 @@ export function AiEditPanel({
         </div>
       )}
 
-      {loading && (
+      {entry.loading && (
         <p className="mt-2 text-[11px] text-slate-500">Asking Claude…</p>
       )}
-      {error && (
-        <p className="mt-2 text-[11px] text-rose-600">{error}</p>
+      {entry.error && (
+        <p className="mt-2 text-[11px] text-rose-600">{entry.error}</p>
       )}
 
-      {result && (
+      {entry.result && (
         <ProposalCards
-          result={result}
-          pendingSteps={pendingSteps}
-          onRelabel={(name) => { onRelabel(name); setResult(null); }}
-          onDescribe={(d) => { onDescribe(d); setResult(null); }}
-          onResolveStep={resolveStep}
-          onDismiss={() => setResult(null)}
+          result={entry.result}
+          pendingSteps={entry.pendingSteps}
+          onRelabel={(name) => { onRelabel(name); clear(); }}
+          onDescribe={(d) => { onDescribe(d); clear(); }}
+          onResolveStep={(step, accept) => {
+            if (accept) onAddStep(step);
+            resolveStep(step);
+          }}
+          onDismiss={clear}
         />
       )}
     </div>
@@ -231,10 +210,10 @@ function ProposalCards({
     );
   }
   if (result.suggest_next) {
-    // Use pendingSteps (managed by AiEditPanel) so accepting/rejecting a card
-    // removes only that card; the last removal closes the panel entirely.
+    // Use pendingSteps (managed by AiEditCacheProvider) so accepting/rejecting
+    // a card removes only that card; the last removal clears the entry entirely.
     // Fall back to result.suggest_next.steps only if pendingSteps hasn't been
-    // wired up yet (should never happen in practice).
+    // populated yet (should not happen in practice).
     const steps = pendingSteps ?? result.suggest_next.steps;
     if (steps.length === 0) {
       return (
