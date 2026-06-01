@@ -3,17 +3,19 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.v2.deps import get_current_user, get_project_or_404
+from app.api.v2.reviews import _recompute_version_status
 from app.db.session import get_db
 from app.enums import (
     ClaimLinkKind,
     ConflictStatus,
     NodeType,
     ProcessVersionStatus,
+    ReviewTargetType,
 )
 from app.models.identity import User
 from app.models.process import (
@@ -26,6 +28,7 @@ from app.models.process import (
     ProcessVersion,
 )
 from app.models.project import Project
+from app.models.workflow import Review
 from app.models.claim import Claim, ClaimCitation, ClaimConflict
 from app.models.input import Chunk, DocumentSection, Input
 from app.schemas.process_map import (
@@ -667,7 +670,21 @@ def delete_node(
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     _check_node_in_project(node, project.id, db)
+    version_id = node.version_id
+    db.execute(
+        delete(Review).where(
+            Review.target_type == ReviewTargetType.PROCESS_NODE.value,
+            Review.target_id == node_id,
+        )
+    )
     db.delete(node)
+    db.flush()
+    # Removing a node changes the approved/total ratio, so re-evaluate whether
+    # the version's review lifecycle should advance (e.g. deleting the last
+    # pending node of a requested version completes the sign-off).
+    version = db.get(ProcessVersion, version_id)
+    if version is not None:
+        _recompute_version_status(db, version)
     db.commit()
 
 

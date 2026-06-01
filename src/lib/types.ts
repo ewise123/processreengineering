@@ -127,6 +127,34 @@ export interface ProcessVersion {
   created_at: string;
 }
 
+export type ReviewDecision = "approved" | "changes_requested";
+
+export interface NodeReview {
+  node_id: UUID;
+  status: ReviewDecision;
+  note: string | null;
+}
+
+export interface ReviewCounts {
+  approved: number;
+  changes_requested: number;
+  pending: number;
+  total: number;
+}
+
+export interface ReviewState {
+  version_id: UUID;
+  version_status: string;
+  request_status: string | null;
+  nodes: NodeReview[];
+  counts: ReviewCounts;
+}
+
+export interface NodeReviewUpdate {
+  status: ReviewDecision;
+  note?: string;
+}
+
 export interface ProcessLane {
   id: UUID;
   name: string;

@@ -161,6 +161,7 @@ interface BpmnCanvasProps {
   initialEdges: CanvasEdge[];
   initialLanes: CanvasLane[];
   issuesByNode?: Record<string, IssueSeverity>;
+  reviewByNode?: Record<string, "approved" | "changes_requested">;
   onSaveStatusChange?: (status: SaveStatus, error: string | null) => void;
   onSelectionChange?: (selected: CanvasSelection) => void;
   /** Fires after a node is removed (via panel Delete or keyboard). The page
@@ -178,6 +179,7 @@ function BpmnCanvas({
   initialEdges,
   initialLanes,
   issuesByNode,
+  reviewByNode,
   onSaveStatusChange,
   onSelectionChange,
   onNodeDeleted,
@@ -206,6 +208,7 @@ function BpmnCanvas({
 
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
+  const reviewMap = reviewByNode ?? {};
 
   const { record, undo, redo, canUndo, canRedo } = useUndoStack();
   const clipboard = useClipboard();
@@ -1769,6 +1772,7 @@ function BpmnCanvas({
               node={node}
               selected={selectedIds.has(node.id)}
               issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
+              reviewBadge={reviewMode ? reviewMap[node.id] ?? null : null}
               showHandles={tool === "connect"}
               onMouseDown={onNodeMouseDown}
               onContextMenu={openNodeMenu}

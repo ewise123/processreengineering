@@ -8,8 +8,8 @@
  * `flex-1` plus its label. The whole panel can also collapse to a vertical
  * icon rail.
  *
- * Versions and Review are intentionally minimal until backend tracking
- * lands — UI is in place so users can see where those features will live.
+ * Versions is intentionally minimal until backend tracking lands — UI is in
+ * place so users can see where that feature will live.
  */
 
 import {
@@ -37,8 +37,10 @@ import type {
   InputRow,
   NodeIssue,
   ProcessVersion,
+  ReviewState,
   UUID,
 } from "@/lib/types";
+import { bucketNodes, reviewByNodeMap } from "./review-summary";
 
 type TabId = "chat" | "versions" | "issues" | "review" | "sources";
 
@@ -72,6 +74,8 @@ export function RightPanel({
   nodes,
   selected,
   onFocusNode,
+  reviewState,
+  onSendRequest,
   collapsed,
   onCollapsedChange,
   initialTab = "chat",
@@ -84,6 +88,8 @@ export function RightPanel({
   selected: SelectedRef | null;
   /** Sets the canvas selection. Used by Issues "→ Node" links. */
   onFocusNode: (id: UUID) => void;
+  reviewState?: ReviewState;
+  onSendRequest: () => void;
   /** Controlled collapse state — the page lifts this so the Properties
    * panel can shift when the right panel collapses. */
   collapsed: boolean;
@@ -226,7 +232,14 @@ export function RightPanel({
             onFocusNode={onFocusNode}
           />
         )}
-        {tab === "review" && <ReviewTab nodes={nodes} onFocusNode={onFocusNode} />}
+        {tab === "review" && (
+          <ReviewTab
+            nodes={nodes}
+            onFocusNode={onFocusNode}
+            reviewState={reviewState}
+            onSendRequest={onSendRequest}
+          />
+        )}
         {tab === "sources" && <SourcesTab projectId={projectId} />}
       </div>
     </div>
@@ -563,13 +576,19 @@ function IssuesTab({
 function ReviewTab({
   nodes,
   onFocusNode,
+  reviewState,
+  onSendRequest,
 }: {
   nodes: { id: UUID; name: string }[];
   onFocusNode: (id: UUID) => void;
+  reviewState?: ReviewState;
+  onSendRequest: () => void;
 }) {
-  const total = nodes.length;
-  const approved = 0;
+  const total = reviewState?.counts.total ?? nodes.length;
+  const approved = reviewState?.counts.approved ?? 0;
   const pct = total === 0 ? 0 : Math.round((approved / total) * 100);
+  const byNode = reviewByNodeMap(reviewState?.nodes ?? []);
+  const buckets = bucketNodes(nodes, byNode);
   return (
     <div className="h-full overflow-y-auto px-3 py-3">
       <div className="mb-3 rounded-lg bg-gradient-to-br from-slate-800 to-slate-900 p-3 text-white">
@@ -578,40 +597,29 @@ function ReviewTab({
         </div>
         <div className="mb-2 flex items-baseline gap-1.5">
           <span className="text-2xl font-bold tabular-nums">{approved}</span>
-          <span className="text-xs text-slate-400">
-            of {total} steps approved
-          </span>
+          <span className="text-xs text-slate-400">of {total} steps approved</span>
         </div>
         <div className="h-1.5 overflow-hidden rounded-full bg-slate-700">
-          <div
-            className="h-full bg-emerald-400 transition-all"
-            style={{ width: `${pct}%` }}
-          />
+          <div className="h-full bg-emerald-400 transition-all" style={{ width: `${pct}%` }} />
         </div>
+        {reviewState?.request_status && (
+          <div className="mt-2 text-[10px] uppercase tracking-wider text-slate-400">
+            Status: {reviewState.version_status}
+          </div>
+        )}
         <button
-          disabled
-          title="Stakeholder review tracking coming soon"
-          className="mt-2.5 w-full rounded-md bg-slate-200 py-1.5 text-[11px] font-semibold text-slate-500"
+          type="button"
+          disabled={total === 0}
+          onClick={onSendRequest}
+          className="mt-2.5 w-full rounded-md bg-emerald-600 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-500"
         >
           Send review request to stakeholders
         </button>
       </div>
 
-      <Bucket title="Changes requested" count={0} colorDot="bg-rose-500" />
-      <Bucket
-        title="Pending"
-        count={total}
-        colorDot="bg-slate-400"
-        items={nodes}
-        onFocusNode={onFocusNode}
-      />
-      <Bucket title="Approved" count={0} colorDot="bg-emerald-500" />
-
-      <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-600">
-        Stakeholder review state isn&apos;t persisted yet — every node defaults
-        to Pending. Approve / Request changes / @Assign will land in a later
-        phase.
-      </div>
+      <Bucket title="Changes requested" count={buckets.changesRequested.length} colorDot="bg-rose-500" items={buckets.changesRequested} onFocusNode={onFocusNode} />
+      <Bucket title="Pending" count={buckets.pending.length} colorDot="bg-slate-400" items={buckets.pending} onFocusNode={onFocusNode} />
+      <Bucket title="Approved" count={buckets.approved.length} colorDot="bg-emerald-500" items={buckets.approved} onFocusNode={onFocusNode} />
     </div>
   );
 }
