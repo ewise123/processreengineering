@@ -49,7 +49,10 @@ def convert_to_pdf(source: Path, out_dir: Path) -> Path:
         soffice, "--headless", f"-env:UserInstallation={profile}",
         "--convert-to", "pdf", "--outdir", str(out_dir), str(source),
     ]
-    subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+    except subprocess.SubprocessError as e:
+        raise UnsupportedRenderFormat(f"LibreOffice conversion failed for {source.name}: {e}")
     out = out_dir / f"{source.stem}.pdf"
     if not out.is_file():
         raise UnsupportedRenderFormat(f"Conversion produced no PDF for {source.name}")
@@ -75,7 +78,11 @@ def rendered_pdf_path(inp: Input, db: Session) -> Path:
     cached = (inp.source_info or {}).get("rendered_pdf")
     if cached:
         cached_path = Path(cached["path"])
-        if cached_path.is_file() and cached.get("src_mtime") == mtime:
+        if (
+            cached_path.is_file()
+            and cached.get("src_mtime") == mtime
+            and cached_path.parent == src.parent
+        ):
             return cached_path
 
     rendered = convert_to_pdf(src, src.parent)

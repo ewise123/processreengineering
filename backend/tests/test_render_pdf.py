@@ -176,6 +176,16 @@ def test_convert_without_soffice_raises(tmp_path, monkeypatch):
         render_pdf.convert_to_pdf(tmp_path / "x.docx", tmp_path)
 
 
+def test_convert_subprocess_failure_raises_unsupported(tmp_path, monkeypatch):
+    import subprocess as _sp
+    monkeypatch.setattr(render_pdf, "_soffice_bin", lambda: "/usr/bin/soffice")
+    def boom(*a, **k):
+        raise _sp.CalledProcessError(1, a[0] if a else "soffice")
+    monkeypatch.setattr(render_pdf.subprocess, "run", boom)
+    with pytest.raises(render_pdf.UnsupportedRenderFormat):
+        render_pdf.convert_to_pdf(tmp_path / "x.docx", tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # Task 4: PDF-serving endpoint
 # ---------------------------------------------------------------------------
