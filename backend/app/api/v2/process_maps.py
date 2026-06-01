@@ -57,7 +57,25 @@ from app.schemas.process_map import (
     ProcessNodeRead,
     ProcessVersionRead,
 )
+from app.schemas.version_ai_edit import (
+    AiEditAction,
+    AiEditRequest,
+    AiEditResponse,
+    AiProposedStepRequest,
+    DescribeProposal,
+    RelabelProposal,
+    SuggestNextProposal,
+    SuggestedStep,
+    ValidateGap,
+    ValidateProposal,
+)
 from app.services.legacy_bpmn import build_bpmn_xml, validate_xml
+from app.services.map_ai_edit import (
+    propose_relabel,
+    propose_description,
+    report_gaps,
+    propose_next_steps,
+)
 from app.services.map_chat import ChatTurn as MapChatTurn, chat as run_map_chat
 from app.services.map_context import assemble_map_context
 from app.services.process_generation import generate_structure_from_claims
@@ -1132,3 +1150,92 @@ def chat_with_map(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return ChatResponse(content=content)
+
+
+def _resolve_refs(refs, claim_ref_to_id):
+    """Map the model's short claim refs to real UUIDs; drop any not present in
+    the grounding context (defeats fabricated citations)."""
+    out = []
+    for r in refs or []:
+        cid = claim_ref_to_id.get(str(r).strip().upper())
+        if cid is not None and cid not in out:
+            out.append(cid)
+    return out
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/nodes/{node_id}/ai-edit",
+    response_model=AiEditResponse,
+)
+def ai_edit_node(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    node_id: UUID,
+    payload: AiEditRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> AiEditResponse:
+    """Propose an AI edit for one node. Never mutates: returns structured
+    proposals the user accepts or rejects. Model claim citations are resolved
+    to UUIDs and fabricated refs dropped."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+    node = db.get(ProcessNode, node_id)
+    if node is None or node.version_id != version.id:
+        raise HTTPException(status_code=404, detail="Node not found in this version")
+
+    ctx = assemble_map_context(db, version, selected_node_id=node.id)
+
+    try:
+        if payload.action == AiEditAction.RELABEL:
+            raw = propose_relabel(map_context_text=ctx.text, selected_label=ctx.selected_label)
+            return AiEditResponse(
+                action=payload.action,
+                relabel=RelabelProposal(
+                    proposed_name=raw.get("proposed_name", node.name),
+                    unchanged=bool(raw.get("unchanged", False)),
+                    rationale=raw.get("rationale", ""),
+                    cited_claim_ids=_resolve_refs(raw.get("cited_claim_refs"), ctx.claim_ref_to_id),
+                ),
+            )
+        if payload.action == AiEditAction.DESCRIBE:
+            raw = propose_description(map_context_text=ctx.text, selected_label=ctx.selected_label)
+            return AiEditResponse(
+                action=payload.action,
+                describe=DescribeProposal(
+                    proposed_description=raw.get("proposed_description", ""),
+                    rationale=raw.get("rationale", ""),
+                    cited_claim_ids=_resolve_refs(raw.get("cited_claim_refs"), ctx.claim_ref_to_id),
+                ),
+            )
+        if payload.action == AiEditAction.VALIDATE:
+            raw = report_gaps(map_context_text=ctx.text, selected_label=ctx.selected_label)
+            gaps = [
+                ValidateGap(
+                    summary=g.get("summary", ""),
+                    severity=g.get("severity", "low"),
+                    cited_claim_ids=_resolve_refs(g.get("cited_claim_refs"), ctx.claim_ref_to_id),
+                )
+                for g in raw.get("gaps", [])
+            ]
+            return AiEditResponse(action=payload.action, validate_=ValidateProposal(gaps=gaps))
+        # SUGGEST_NEXT
+        raw = propose_next_steps(map_context_text=ctx.text, selected_label=ctx.selected_label)
+        steps = [
+            SuggestedStep(
+                proposed_name=s.get("proposed_name", ""),
+                proposed_type=s.get("proposed_type", "task"),
+                edge_label=s.get("edge_label"),
+                rationale=s.get("rationale", ""),
+                cited_claim_ids=_resolve_refs(s.get("cited_claim_refs"), ctx.claim_ref_to_id),
+            )
+            for s in raw.get("steps", [])
+            if s.get("proposed_name")
+        ]
+        return AiEditResponse(action=payload.action, suggest_next=SuggestNextProposal(steps=steps))
+    except RuntimeError as exc:  # missing API key, etc.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -119,3 +119,67 @@ def test_service_raises_without_key(monkeypatch):
     map_ai_edit._client = None
     with pytest.raises(RuntimeError):
         map_ai_edit._get_client()
+
+
+# ---------------------------------------------------------------------------
+# Task 4: propose endpoint + citation hygiene
+# ---------------------------------------------------------------------------
+from uuid import uuid4
+
+from fastapi import HTTPException
+
+from app.api.v2 import process_maps as pm_api
+from app.enums import ClaimLinkKind
+from app.models.claim import Claim
+from app.models.identity import Organization, User
+from app.models.process import (
+    NodeClaimLink, ProcessEdge, ProcessLane, ProcessModel, ProcessNode, ProcessVersion,
+)
+from app.models.project import Project
+
+
+def _seed_version_for_endpoint(db):
+    org = Organization(name="O")
+    db.add(org); db.flush()
+    user = User(org_id=org.id, email=f"u-{uuid4()}@x.io", name="U")
+    db.add(user); db.flush()
+    project = Project(org_id=org.id, name="P", created_by=user.id)
+    db.add(project); db.flush()
+    model = ProcessModel(project_id=project.id, name="M", level="L2")
+    db.add(model); db.flush()
+    version = ProcessVersion(model_id=model.id, version_number=1)
+    db.add(version); db.flush()
+    lane = ProcessLane(version_id=version.id, name="Ops", order_index=0)
+    db.add(lane); db.flush()
+    n1 = ProcessNode(version_id=version.id, lane_id=lane.id, type="task", name="Receive", position={}, properties={})
+    db.add(n1); db.flush()
+    claim = Claim(project_id=project.id, kind="task", subject="Clerk receives the order", normalized={})
+    db.add(claim); db.flush()
+    db.add(NodeClaimLink(node_id=n1.id, claim_id=claim.id, link_kind=ClaimLinkKind.SUPPORTS.value))
+    db.commit()
+    return project, version, n1, claim
+
+
+def test_propose_endpoint_resolves_and_filters_claim_refs(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    fake_payload = {
+        "proposed_name": "Receive PO", "unchanged": False,
+        "rationale": "C1 supports this.", "cited_claim_refs": ["C1", "C99"],
+    }
+    with patch.object(pm_api, "propose_relabel", return_value=fake_payload):
+        resp = pm_api.ai_edit_node(
+            project=project, model_id=version.model_id, version_id=version.id,
+            node_id=n1.id, payload=pm_api.AiEditRequest(action="relabel"), db=db,
+        )
+    assert resp.relabel.proposed_name == "Receive PO"
+    assert resp.relabel.cited_claim_ids == [claim.id]  # C99 dropped
+
+
+def test_propose_endpoint_404_for_foreign_node(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.ai_edit_node(
+            project=project, model_id=version.model_id, version_id=version.id,
+            node_id=uuid4(), payload=pm_api.AiEditRequest(action="relabel"), db=db,
+        )
+    assert exc.value.status_code == 404
