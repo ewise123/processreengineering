@@ -129,7 +129,7 @@ function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
 
 export type CanvasSelection =
   | { kind: "none" }
-  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; type?: string; laneId?: UUID | null; description?: string }
+  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; type?: string; laneId?: UUID | null; description?: string; childModelId?: UUID | null }
   | { kind: "edge"; id: UUID }
   | { kind: "multi"; nodeIds: UUID[]; edgeIds: UUID[] };
 
@@ -753,6 +753,7 @@ function BpmnCanvas({
           type: node.type,
           laneId: node.laneId,
           description: node.description,
+          childModelId: node.childModelId ?? null,
         });
       } else {
         onSelectionChange({ kind: "edge", id });

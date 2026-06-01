@@ -38,6 +38,9 @@ export interface CanvasNode {
   aiProposed?: boolean;
   /** Optional free-text description (properties.description). */
   description?: string;
+  /** Child ProcessModel id when this step has been decomposed
+   * (properties.child_model_id). Drives the subprocess "+" marker and drill-in. */
+  childModelId?: UUID | null;
 }
 
 /** Resolved node with absolute world Y, used for SVG rendering. */
