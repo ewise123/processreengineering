@@ -7,7 +7,11 @@ claims that justify it (already resolved + hygiene-filtered by the endpoint).
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.enums import NodeType
+
+_NODE_TYPE_PATTERN = rf"^({'|'.join(t.value for t in NodeType)})$"
 
 
 class AiEditAction(StrEnum):
@@ -22,33 +26,35 @@ class AiEditRequest(BaseModel):
 
 
 class RelabelProposal(BaseModel):
-    proposed_name: str
+    proposed_name: str = Field(min_length=1, max_length=500)
     unchanged: bool = False  # model judged the current label already faithful
-    rationale: str
+    rationale: str = Field(max_length=2000)
     cited_claim_ids: list[UUID] = Field(default_factory=list)
 
 
 class DescribeProposal(BaseModel):
-    proposed_description: str
-    rationale: str
+    proposed_description: str = Field(min_length=0, max_length=5000)
+    rationale: str = Field(max_length=2000)
     cited_claim_ids: list[UUID] = Field(default_factory=list)
 
 
 class ValidateGap(BaseModel):
-    summary: str
+    summary: str = Field(min_length=1, max_length=1000)
     severity: str = Field(pattern=r"^(low|medium|high)$")
     cited_claim_ids: list[UUID] = Field(default_factory=list)
 
 
+# No proposal-level rationale: the per-gap `summary` carries the reasoning
+# intentionally — asymmetry vs other proposals is deliberate.
 class ValidateProposal(BaseModel):
     gaps: list[ValidateGap] = Field(default_factory=list)
 
 
 class SuggestedStep(BaseModel):
-    proposed_name: str
-    proposed_type: str
+    proposed_name: str = Field(min_length=1, max_length=500)
+    proposed_type: str = Field(pattern=_NODE_TYPE_PATTERN)
     edge_label: str | None = None
-    rationale: str
+    rationale: str = Field(max_length=2000)
     cited_claim_ids: list[UUID] = Field(default_factory=list)
 
 
@@ -64,7 +70,7 @@ class AiEditResponse(BaseModel):
     validate_: ValidateProposal | None = Field(default=None, alias="validate")
     suggest_next: SuggestNextProposal | None = None
 
-    model_config = {"populate_by_name": True}
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class AiProposedStepRequest(BaseModel):
@@ -72,7 +78,7 @@ class AiProposedStepRequest(BaseModel):
     `source_node_id`, plus the connecting edge and any ai_proposed claim links."""
     source_node_id: UUID
     name: str = Field(min_length=1, max_length=500)
-    type: str
+    type: str = Field(pattern=_NODE_TYPE_PATTERN)
     lane_id: UUID
     x: float
     relative_y: float
