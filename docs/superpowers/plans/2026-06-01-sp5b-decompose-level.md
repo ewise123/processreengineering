@@ -2189,3 +2189,29 @@ Use **superpowers:finishing-a-development-branch** to open the stacked PR (base 
 - **The decomposed parent node is never marked `ai_proposed`** — it already exists and is sourced. Only the child's sub-steps are.
 - **Route ordering:** `GET /process-maps/{model_id}` sits between the list route and the version routes. After adding it, run the app-import smoke (Task 8 Step 4) to catch any path-collision/registration error early.
 - **`toast`/`sonner`:** copy the exact import already used in `bpmn-canvas.tsx` rather than guessing the package path.
+
+---
+
+## Execution outcome
+
+_Executed 2026-06-01 via superpowers:subagent-driven-development (fresh implementer + spec & code-quality review per task, plus a final holistic review)._
+
+**Gates (all green on the branch tip):**
+- Backend `pytest -q`: **113 passed** (24 new tests in `backend/tests/test_decompose.py`).
+- `npx tsc --noEmit`: **clean**.
+- `npm test` (Vitest): **39 passed / 8 files** (incl. the new `decompose-nav.test.ts`).
+- `eslint` (advisory): **no new errors/warnings** in SP-5b files; the repo's pre-existing lint debt is untouched.
+
+**All 18 tasks landed as planned** (16 feature commits on top of the 2 doc commits), each squarely matching the spec under two-stage review.
+
+**Deviations / fixes during execution:**
+- **Apply claim-scope (spec reconciled, not code-changed):** `apply_decompose` re-guards cited claims to **project scope** (one `Claim.project_id` query), mirroring SP-5a suggest-next, rather than re-filtering to node+neighbor scope. The propose endpoint already neighbor-filters the surviving refs, so in the real flow nothing is dropped at apply; project-scope is defense-in-depth and keeps provenance truthful. The design spec's Apply section was updated to describe this.
+- **Robustness:** `apply_decompose` / `remove_sub_process` guard `UUID(child_model_id)` parsing (corrupt JSONB → treat as no child / create fresh) — added with a regression test.
+- **Final-review fixes (commit `8d9b9df`):** the canvas is uncontrolled, so query invalidation alone doesn't refresh the mounted graph. Added an imperative `BpmnCanvasHandle.clearChildModelId(id)` called by the Remove handler (drops the `+` marker in place), and added a parent-graph `invalidateQueries` on decompose-accept so the marker shows on back-navigation within the 30s staleTime.
+
+**Known minor follow-ups (non-blocking):**
+- `get_map_ancestry` does not filter `deleted_at` on walked ancestors — a soft-deleted ancestor would still render a breadcrumb crumb. Edge case (mid-chain ancestor deletion isn't reachable through the normal UI).
+- Breadcrumb hard-clips (rather than ellipsing) at max L4 depth with very long labels — cosmetic.
+- `mapModel`/`ancestry` queries fire on every canvas mount without an `enabled: !!data` gate (two cheap reads); the breadcrumb appears slightly earlier as a result.
+
+**Live smoke:** deferred to manual — local `.env` `ANTHROPIC_API_KEY` is typically blank, so the AI propose path returns 502 without a key. The non-AI paths (marker render, double-click drill-in, breadcrumb, remove) and the apply/ancestry/remove endpoints are covered by the pytest suite end-to-end against a real DB.

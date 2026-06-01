@@ -108,7 +108,7 @@ Body: `DecomposeRequest` — the accepted `sub_steps` (name, type, role, edge_la
 4. Set parent `node.properties["child_model_id"]` (merge + `flag_modified`).
 5. Return `{child_model_id, child_version_id}` for navigation.
 
-Re-filter cited claims on apply to the **node+neighbor** scope (matching what propose presented) — unlike SP-5a suggest-next, which re-filters to project scope.
+On apply, re-guard cited claims to **project scope** (a single `Claim.project_id == project.id` query), mirroring SP-5a suggest-next. Since the propose endpoint already filtered the surviving refs to the node+neighbor set, the ids reaching apply in the real flow are a subset of project scope — so no claim that survived propose is dropped at apply. The project-scope re-guard is defense-in-depth against a forged request (it still only ever links real project claims, so provenance stays truthful); tightening it to node+neighbor would change nothing for the UI flow.
 
 ### Ancestry — new endpoint (breadcrumb)
 
