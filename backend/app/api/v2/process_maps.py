@@ -1102,132 +1102,25 @@ def chat_with_map(
     if version is None or version.model_id != model.id:
         raise HTTPException(status_code=404, detail="Process version not found")
 
-    # Load the current map state so the model has a grounded view of it.
-    lanes = list(
-        db.scalars(
-            select(ProcessLane)
-            .where(ProcessLane.version_id == version.id)
-            .order_by(ProcessLane.order_index)
-        ).all()
-    )
-    nodes = list(
-        db.scalars(
-            select(ProcessNode).where(ProcessNode.version_id == version.id)
-        ).all()
-    )
-    edges = list(
-        db.scalars(
-            select(ProcessEdge).where(ProcessEdge.version_id == version.id)
-        ).all()
-    )
+    from app.services.map_context import assemble_map_context
 
-    # Build short-id refs the model can cite back.
-    lane_ref_by_id: dict = {l.id: f"L{i + 1}" for i, l in enumerate(lanes)}
-    node_ref_by_id: dict = {n.id: f"N{i + 1}" for i, n in enumerate(nodes)}
+    selected_id = payload.selected_node_id or None
+    ctx = assemble_map_context(db, version, selected_node_id=selected_id)
+    # The chat also lets an edge be the selection; preserve that label.
+    if selected_id is None and payload.selected_edge_id:
+        edge = db.get(ProcessEdge, payload.selected_edge_id)
+        if edge is not None and edge.version_id == version.id:
+            src = ctx.node_ref_by_id.get(edge.source_node_id, "?")
+            tgt = ctx.node_ref_by_id.get(edge.target_node_id, "?")
+            label = f" '{edge.label}'" if edge.label else ""
+            # Re-render with the edge selection label prepended.
+            ctx_text = f"Currently selected: edge {src}->{tgt}{label}\n\n{ctx.text}"
+        else:
+            ctx_text = ctx.text
+    else:
+        ctx_text = ctx.text
 
-    lanes_ctx = [
-        {"idx": i + 1, "name": l.name} for i, l in enumerate(lanes)
-    ]
-    nodes_ctx = [
-        {
-            "idx": i + 1,
-            "label": n.name,
-            "type": n.type,
-            "lane_ref": lane_ref_by_id.get(n.lane_id) if n.lane_id else None,
-        }
-        for i, n in enumerate(nodes)
-    ]
-    edges_ctx = [
-        {
-            "idx": i + 1,
-            "source_ref": node_ref_by_id.get(e.source_node_id, "?"),
-            "target_ref": node_ref_by_id.get(e.target_node_id, "?"),
-            "label": e.label,
-        }
-        for i, e in enumerate(edges)
-    ]
-
-    # Pull all claims attached to any node in this version, plus their first
-    # citation (if any) so the model can quote source text directly.
-    node_claim_rows = list(
-        db.execute(
-            select(NodeClaimLink.claim_id, NodeClaimLink.node_id)
-            .join(ProcessNode, NodeClaimLink.node_id == ProcessNode.id)
-            .where(ProcessNode.version_id == version.id)
-        ).all()
-    )
-    attached_node_by_claim: dict = {
-        claim_id: node_ref_by_id.get(node_id, "?")
-        for claim_id, node_id in node_claim_rows
-    }
-
-    project_claim_ids = list(
-        db.scalars(
-            select(Claim.id).where(Claim.project_id == project.id)
-        ).all()
-    )
-    project_claims = list(
-        db.scalars(
-            select(Claim).where(Claim.id.in_(project_claim_ids))
-        ).all()
-    ) if project_claim_ids else []
-
-    quote_by_claim: dict = {}
-    source_by_claim: dict = {}
-    if project_claim_ids:
-        cit_rows = list(
-            db.execute(
-                select(
-                    ClaimCitation.claim_id,
-                    ClaimCitation.quote,
-                    Input.name,
-                )
-                .join(Chunk, Chunk.id == ClaimCitation.chunk_id)
-                .join(DocumentSection, DocumentSection.id == Chunk.section_id)
-                .join(Input, Input.id == DocumentSection.input_id)
-                .where(ClaimCitation.claim_id.in_(project_claim_ids))
-                .order_by(ClaimCitation.created_at)
-            ).all()
-        )
-        for claim_id, quote, input_name in cit_rows:
-            if claim_id not in quote_by_claim:
-                quote_by_claim[claim_id] = quote
-                source_by_claim[claim_id] = input_name
-
-    claims_ctx = [
-        {
-            "idx": i + 1,
-            "kind": c.kind,
-            "subject": c.subject,
-            "attached_to": attached_node_by_claim.get(c.id),
-            "quote": quote_by_claim.get(c.id),
-            "source": source_by_claim.get(c.id),
-        }
-        for i, c in enumerate(project_claims)
-    ]
-
-    # Render the selection label for the prompt.
-    selected_label: str | None = None
-    if payload.selected_node_id:
-        n = next((n for n in nodes if n.id == payload.selected_node_id), None)
-        if n is not None:
-            ref = node_ref_by_id.get(n.id, "?")
-            selected_label = f"{ref} (node) — \"{n.name}\""
-    elif payload.selected_edge_id:
-        e = next((e for e in edges if e.id == payload.selected_edge_id), None)
-        if e is not None:
-            src = node_ref_by_id.get(e.source_node_id, "?")
-            tgt = node_ref_by_id.get(e.target_node_id, "?")
-            label = f" '{e.label}'" if e.label else ""
-            selected_label = f"edge {src}->{tgt}{label}"
-
-    map_context_text = build_map_context(
-        lanes=lanes_ctx,
-        nodes=nodes_ctx,
-        edges=edges_ctx,
-        claims=claims_ctx,
-        selected_label=selected_label,
-    )
+    map_context_text = ctx_text
 
     history = [
         MapChatTurn(role=t.role, content=t.content) for t in payload.history
