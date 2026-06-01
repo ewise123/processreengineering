@@ -102,7 +102,7 @@ export function AiEditPanel({
             type="button"
             disabled={!decomposeAllowed}
             title={decomposeAllowed ? undefined : "Already at the most detailed level (L4)"}
-            onClick={() => decomposeAllowed && handleMenuAction("decompose")}
+            onClick={() => handleMenuAction("decompose")}
             className="block w-full px-3 py-1.5 text-left text-[11px] text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
           >
             {childModelId ? "Re-decompose (new version)" : "Decompose into sub-steps"}
