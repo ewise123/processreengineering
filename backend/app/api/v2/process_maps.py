@@ -112,6 +112,19 @@ def _level_for_prompt(level: str) -> str:
     return level.lstrip("Ll") or "2"
 
 
+def _next_level(level: str) -> str | None:
+    """L1->L2 ... L3->L4. Returns None at the deepest level (L4) or when
+    unparseable — the caller uses None to disable/422 decompose."""
+    canon = _normalize_level(level)  # "L3"
+    try:
+        n = int(canon[1:])
+    except (ValueError, IndexError):
+        return None
+    if n < 1 or n >= 4:
+        return None
+    return f"L{n + 1}"
+
+
 @router.post(
     "/generate-process-map",
     response_model=ProcessMapGenerateResult,
