@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v2 import router as v2_router
 from app.db.session import SessionLocal
+from app.services.render_pdf import libreoffice_available
 from app.services.startup import sweep_stale_extracting_inputs
 
 
@@ -15,6 +16,12 @@ async def lifespan(_app: FastAPI):
         swept = sweep_stale_extracting_inputs(db)
         if swept:
             print(f"[startup] swept {swept} stale extracting input(s) to failed")
+    if not libreoffice_available():
+        print(
+            "[startup] WARNING: LibreOffice (soffice) not found on PATH — "
+            "non-PDF source documents cannot be rendered; the viewer will fall "
+            "back to the cited quote."
+        )
     yield
 
 
