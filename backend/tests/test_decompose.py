@@ -122,3 +122,39 @@ def test_propose_decompose_parses_sub_steps():
     assert len(out["sub_steps"]) == 2
     assert out["sub_steps"][0]["role"] == "Support"
     assert out["sub_steps"][1]["cited_claim_refs"] == ["C2"]
+
+
+def test_propose_decompose_endpoint_filters_to_neighbor_scope(db):
+    project, version, n2, claims = _seed_neighbors(db)
+    # Model cites C2 (n2's own claim, in scope) and a project claim that is NOT
+    # in the node+neighbor scope -> only the in-scope one survives.
+    from app.services.map_context import assemble_map_context
+    ctx = assemble_map_context(db, version, selected_node_id=n2.id)
+    id_to_ref = {v: k for k, v in ctx.claim_ref_to_id.items()}
+    in_ref = id_to_ref[claims["c2"].id]
+    out_ref = id_to_ref[claims["c4"].id]
+    fake = {"sub_steps": [
+        {"proposed_name": "Sub A", "proposed_type": "task", "role": "Ops",
+         "edge_label": None, "rationale": "r", "cited_claim_refs": [in_ref, out_ref]},
+    ]}
+    with patch.object(pm_api, "propose_decompose", return_value=fake):
+        resp = pm_api.ai_edit_node(
+            project=project, model_id=version.model_id, version_id=version.id,
+            node_id=n2.id, payload=pm_api.AiEditRequest(action="decompose"), db=db,
+        )
+    step = resp.decompose.sub_steps[0]
+    assert step.cited_claim_ids == [claims["c2"].id]  # out-of-scope c4 dropped
+
+
+def test_propose_decompose_endpoint_422_at_l4(db):
+    project, version, n2, claims = _seed_neighbors(db)
+    model = db.get(ProcessModel, version.model_id)
+    model.level = "L4"; db.commit()
+    with patch.object(pm_api, "propose_decompose", return_value={"sub_steps": []}):
+        with pytest.raises(HTTPException) as exc:
+            pm_api.ai_edit_node(
+                project=project, model_id=version.model_id, version_id=version.id,
+                node_id=n2.id, payload=pm_api.AiEditRequest(action="decompose"), db=db,
+            )
+    assert exc.value.status_code == 422
+    assert "level" in exc.value.detail.lower() or "L4" in exc.value.detail

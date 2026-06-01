@@ -63,8 +63,13 @@ from app.schemas.version_ai_edit import (
     AiEditRequest,
     AiEditResponse,
     AiProposedStepRequest,
+    AncestryCrumb,
+    DecomposeProposal,
+    DecomposeRequest,
+    DecomposeResult,
     DescribeProposal,
     RelabelProposal,
+    SubStep,
     SuggestNextProposal,
     SuggestedStep,
     ValidateGap,
@@ -74,6 +79,7 @@ from app.services.legacy_bpmn import build_bpmn_xml, validate_xml
 from app.services.map_ai_edit import (
     propose_relabel,
     propose_description,
+    propose_decompose,
     report_gaps,
     propose_next_steps,
 )
@@ -1281,6 +1287,29 @@ def ai_edit_node(
                 if s.get("proposed_name")
             ]
             return AiEditResponse(action=payload.action, suggest_next=SuggestNextProposal(steps=steps))
+        if payload.action == AiEditAction.DECOMPOSE:
+            if _next_level(model.level) is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Cannot decompose: already at the most detailed level (L4).",
+                )
+            scope = _neighbor_claim_ids(db, version.id, node.id)
+            raw = propose_decompose(map_context_text=ctx.text, selected_label=ctx.selected_label)
+            steps = [
+                SubStep(
+                    proposed_name=s.get("proposed_name", ""),
+                    proposed_type=s.get("proposed_type", "task"),
+                    role=s.get("role", "Process Team"),
+                    edge_label=s.get("edge_label"),
+                    rationale=s.get("rationale", ""),
+                    cited_claim_ids=_resolve_refs_scoped(
+                        s.get("cited_claim_refs"), ctx.claim_ref_to_id, scope
+                    ),
+                )
+                for s in raw.get("sub_steps", [])
+                if s.get("proposed_name")
+            ]
+            return AiEditResponse(action=payload.action, decompose=DecomposeProposal(sub_steps=steps))
         raise HTTPException(status_code=422, detail=f"Unsupported action: {payload.action}")
     except (RuntimeError, ValueError) as exc:  # missing API key, bad proposal, etc.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
