@@ -1,7 +1,7 @@
 "use client";
 
 import { Sparkles } from "lucide-react";
-import React, { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { api } from "@/lib/api";
 import type {
@@ -126,7 +126,7 @@ function Card({
   title: string;
   rationale: string;
   citedIds: UUID[];
-  children?: React.ReactNode;
+  children?: ReactNode;
 }) {
   return (
     <div className="mt-2 rounded-md border border-slate-200 bg-slate-50/60 p-2">
