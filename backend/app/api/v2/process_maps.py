@@ -3,6 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -1245,3 +1246,96 @@ def ai_edit_node(
         raise HTTPException(status_code=422, detail=f"Unsupported action: {payload.action}")
     except (RuntimeError, ValueError) as exc:  # missing API key, bad proposal, etc.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+class AiProposedStepResult(BaseModel):
+    node: ProcessNodeRead
+    edge: ProcessEdgeRead
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/ai-proposed-step",
+    response_model=AiProposedStepResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def apply_proposed_step(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    payload: AiProposedStepRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> AiProposedStepResult:
+    """Accept a suggested next step: create one ai_proposed node downstream of
+    the source node, plus the connecting edge and NodeClaimLinks for any cited
+    claims that actually exist in this project. Everything happens in one
+    transaction; bogus/foreign claim ids are silently dropped."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+
+    source = db.get(ProcessNode, payload.source_node_id)
+    if source is None or source.version_id != version.id:
+        raise HTTPException(
+            status_code=422, detail="source_node_id must reference a node in this version"
+        )
+
+    lane = db.get(ProcessLane, payload.lane_id)
+    if lane is None or lane.version_id != version.id:
+        raise HTTPException(
+            status_code=422, detail="lane_id must reference a lane in this version"
+        )
+
+    # Create the new node; flush to obtain its id before we stamp the lineage key.
+    node = ProcessNode(
+        version_id=version.id,
+        type=payload.type,
+        name=payload.name,
+        lane_id=payload.lane_id,
+        position={"x": payload.x, "relative_y": payload.relative_y},
+        properties={},
+    )
+    db.add(node)
+    db.flush()
+
+    node.properties = {**node.properties, LINEAGE_KEY: str(node.id), "ai_proposed": True}
+    flag_modified(node, "properties")
+
+    # Create the edge from the source node to the new node.
+    edge = ProcessEdge(
+        version_id=version.id,
+        source_node_id=source.id,
+        target_node_id=node.id,
+        label=payload.edge_label or None,
+    )
+    db.add(edge)
+
+    # Resolve cited claim ids: only create links for claims that genuinely
+    # belong to this project; silently ignore any bogus/foreign ids.
+    if payload.cited_claim_ids:
+        real_claims = list(
+            db.scalars(
+                select(Claim).where(
+                    Claim.id.in_(payload.cited_claim_ids),
+                    Claim.project_id == project.id,
+                )
+            ).all()
+        )
+        for claim in real_claims:
+            db.add(
+                NodeClaimLink(
+                    node_id=node.id,
+                    claim_id=claim.id,
+                    link_kind=ClaimLinkKind.AI_PROPOSED.value,
+                )
+            )
+
+    db.commit()
+    db.refresh(node)
+    db.refresh(edge)
+    return AiProposedStepResult(
+        node=ProcessNodeRead.model_validate(node),
+        edge=ProcessEdgeRead.model_validate(edge),
+    )

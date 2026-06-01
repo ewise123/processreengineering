@@ -5,13 +5,14 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
 from app.api.v2 import process_maps as pm_api
 from app.enums import ClaimLinkKind
 from app.models.claim import Claim
 from app.models.identity import Organization, User
 from app.models.process import (
-    NodeClaimLink, ProcessEdge, ProcessLane, ProcessModel, ProcessNode, ProcessVersion,
+    EdgeClaimLink, NodeClaimLink, ProcessEdge, ProcessLane, ProcessModel, ProcessNode, ProcessVersion,
 )
 from app.models.project import Project
 from app.schemas.process_map import NodeUpdate
@@ -206,3 +207,46 @@ def test_update_node_writes_description_preserving_other_properties(db):
     )
     assert result.properties["description"] == "Clerk logs the order into SAP."
     assert result.properties["_lineage_id"] == str(n1.id)
+
+
+def test_apply_proposed_step_creates_ai_proposed_node_and_links(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    lane_id = n1.lane_id
+
+    result = pm_api.apply_proposed_step(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=pm_api.AiProposedStepRequest(
+            source_node_id=n1.id, name="Verify budget", type="task",
+            lane_id=lane_id, x=400.0, relative_y=20.0,
+            edge_label="if over $10k", cited_claim_ids=[claim.id, uuid4()],
+        ),
+        db=db,
+    )
+
+    new_node = db.get(ProcessNode, result.node.id)
+    assert new_node.properties["ai_proposed"] is True
+    assert new_node.properties["_lineage_id"] == str(new_node.id)
+    edge = db.scalars(select(ProcessEdge).where(ProcessEdge.target_node_id == new_node.id)).one()
+    assert edge.source_node_id == n1.id
+    links = list(db.scalars(select(NodeClaimLink).where(NodeClaimLink.node_id == new_node.id)).all())
+    assert len(links) == 1  # only the real claim; bogus uuid ignored
+    assert links[0].claim_id == claim.id
+    assert links[0].link_kind == "ai_proposed"
+
+
+def test_deleting_proposed_node_cascades_edge(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    result = pm_api.apply_proposed_step(
+        project=project, model_id=version.model_id, version_id=version.id,
+        payload=pm_api.AiProposedStepRequest(
+            source_node_id=n1.id, name="X", type="task", lane_id=n1.lane_id,
+            x=400.0, relative_y=0.0, edge_label=None, cited_claim_ids=[],
+        ),
+        db=db,
+    )
+    new_id = result.node.id
+    pm_api.delete_node(project=project, node_id=new_id, db=db)
+    assert db.get(ProcessNode, new_id) is None
+    assert db.scalars(select(ProcessEdge).where(ProcessEdge.target_node_id == new_id)).first() is None
