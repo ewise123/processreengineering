@@ -58,7 +58,8 @@ from app.schemas.process_map import (
     ProcessVersionRead,
 )
 from app.services.legacy_bpmn import build_bpmn_xml, validate_xml
-from app.services.map_chat import ChatTurn as MapChatTurn, build_map_context, chat as run_map_chat
+from app.services.map_chat import ChatTurn as MapChatTurn, chat as run_map_chat
+from app.services.map_context import assemble_map_context
 from app.services.process_generation import generate_structure_from_claims
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
@@ -1102,9 +1103,7 @@ def chat_with_map(
     if version is None or version.model_id != model.id:
         raise HTTPException(status_code=404, detail="Process version not found")
 
-    from app.services.map_context import assemble_map_context
-
-    selected_id = payload.selected_node_id or None
+    selected_id = payload.selected_node_id
     ctx = assemble_map_context(db, version, selected_node_id=selected_id)
     # The chat also lets an edge be the selection; preserve that label.
     if selected_id is None and payload.selected_edge_id:
@@ -1114,13 +1113,11 @@ def chat_with_map(
             tgt = ctx.node_ref_by_id.get(edge.target_node_id, "?")
             label = f" '{edge.label}'" if edge.label else ""
             # Re-render with the edge selection label prepended.
-            ctx_text = f"Currently selected: edge {src}->{tgt}{label}\n\n{ctx.text}"
+            map_context_text = f"Currently selected: edge {src}->{tgt}{label}\n\n{ctx.text}"
         else:
-            ctx_text = ctx.text
+            map_context_text = ctx.text
     else:
-        ctx_text = ctx.text
-
-    map_context_text = ctx_text
+        map_context_text = ctx.text
 
     history = [
         MapChatTurn(role=t.role, content=t.content) for t in payload.history

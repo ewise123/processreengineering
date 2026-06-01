@@ -96,7 +96,13 @@ def assemble_map_context(
     project_id = pm.project_id if pm else None
 
     project_claims = (
-        list(db.scalars(select(Claim).where(Claim.project_id == project_id)).all())
+        list(
+            db.scalars(
+                select(Claim)
+                .where(Claim.project_id == project_id)
+                .order_by(Claim.created_at, Claim.id)
+            ).all()
+        )
         if project_id
         else []
     )
