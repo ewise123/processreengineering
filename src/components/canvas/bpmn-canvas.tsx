@@ -437,17 +437,23 @@ function BpmnCanvas({
         record({
           description: "Add AI-proposed step",
           do: async () => {
-            const again = await api.applyProposedStep(projectId, modelId, versionId, stepBody);
-            liveNode = { ...newNode, id: again.node.id };
-            liveEdge = {
-              id: again.edge.id,
-              from: again.edge.source_node_id,
-              to: again.edge.target_node_id,
-              label: again.edge.label,
-            };
-            setNodes((curr) => [...curr, liveNode]);
-            setEdges((curr) => [...curr, liveEdge]);
-            selectOnly(liveNode.id);
+            try {
+              const again = await api.applyProposedStep(projectId, modelId, versionId, stepBody);
+              liveNode = { ...newNode, id: again.node.id };
+              liveEdge = {
+                id: again.edge.id,
+                from: again.edge.source_node_id,
+                to: again.edge.target_node_id,
+                label: again.edge.label,
+              };
+              setNodes((curr) => [...curr, liveNode]);
+              setEdges((curr) => [...curr, liveEdge]);
+              selectOnly(liveNode.id);
+            } catch (err) {
+              console.error("Failed to redo AI-proposed step", err);
+              toast.error("Couldn't redo the suggested step — please try again.");
+              throw err;
+            }
           },
           undo: () => deleteNodeImpl(liveNode.id),
         });
