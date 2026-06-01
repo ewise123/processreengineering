@@ -7,6 +7,8 @@ import type { AiEditAction, AiEditResponse, SuggestedStep, UUID } from "@/lib/ty
 
 export interface AiEditEntry {
   loading: boolean;
+  /** The action currently in flight. Only meaningful while loading is true. */
+  loadingAction: AiEditAction | null;
   result: AiEditResponse | null;
   error: string | null;
   /** For suggest_next: steps not yet accepted/rejected. null outside suggest_next flow. */
@@ -15,6 +17,7 @@ export interface AiEditEntry {
 
 const EMPTY: AiEditEntry = {
   loading: false,
+  loadingAction: null,
   result: null,
   error: null,
   pendingSteps: null,
@@ -50,6 +53,7 @@ export function AiEditCacheProvider({ children }: { children: ReactNode }) {
     async ({ projectId, modelId, versionId, nodeId, action }: RunActionArgs) => {
       patch(nodeId, {
         loading: true,
+        loadingAction: action,
         result: null,
         error: null,
         pendingSteps: null,
@@ -58,11 +62,16 @@ export function AiEditCacheProvider({ children }: { children: ReactNode }) {
         const res = await api.aiEditNode(projectId, modelId, versionId, nodeId, action);
         patch(nodeId, {
           loading: false,
+          loadingAction: null,
           result: res,
           pendingSteps: res.suggest_next ? res.suggest_next.steps : null,
         });
       } catch (e) {
-        patch(nodeId, { loading: false, error: e instanceof Error ? e.message : String(e) });
+        patch(nodeId, {
+          loading: false,
+          loadingAction: null,
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
     },
     [patch]

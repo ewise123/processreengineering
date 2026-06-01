@@ -11,6 +11,13 @@ import type {
   UUID,
 } from "@/lib/types";
 
+const LOADING_LABELS: Record<AiEditAction, string> = {
+  relabel: "Relabeling step…",
+  describe: "Writing description…",
+  validate: "Checking for gaps…",
+  suggest_next: "Suggesting next steps…",
+};
+
 const ACTIONS: { action: AiEditAction; label: string }[] = [
   { action: "relabel", label: "Relabel step" },
   { action: "describe", label: "Describe step" },
@@ -74,7 +81,7 @@ export function AiEditPanel({
       )}
 
       {entry.loading && (
-        <p className="mt-2 text-[11px] text-slate-500">Asking Claude…</p>
+        <LoadingSkeleton action={entry.loadingAction} />
       )}
       {entry.error && (
         <p className="mt-2 text-[11px] text-rose-600">{entry.error}</p>
@@ -93,6 +100,49 @@ export function AiEditPanel({
           onDismiss={clear}
         />
       )}
+    </div>
+  );
+}
+
+function ShimmerCard() {
+  return (
+    <div className="relative overflow-hidden rounded-md border border-slate-200 bg-slate-50/60 p-2">
+      {/* Title bar */}
+      <div aria-hidden className="h-2.5 w-3/4 rounded bg-slate-200" />
+      {/* Rationale bar */}
+      <div aria-hidden className="mt-1.5 h-2 w-1/2 rounded bg-slate-200" />
+      {/* Chip row */}
+      <div aria-hidden className="mt-2 flex gap-1">
+        <div aria-hidden className="h-3 w-10 rounded bg-slate-200" />
+        <div aria-hidden className="h-3 w-10 rounded bg-slate-200" />
+        <div aria-hidden className="h-3 w-10 rounded bg-slate-200" />
+      </div>
+      {/* Sweeping shimmer overlay — starts off-screen left, sweeps to right */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-violet-200/60 to-transparent animate-[ai-shimmer_1.6s_ease-in-out_infinite] motion-reduce:hidden"
+      />
+    </div>
+  );
+}
+
+function LoadingSkeleton({ action }: { action: AiEditAction | null }) {
+  const label = action ? LOADING_LABELS[action] : "Asking Claude…";
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label={label}
+      className="mt-2 space-y-2"
+    >
+      {/* Label row */}
+      <div className="flex items-center gap-1">
+        <Sparkles aria-hidden size={11} className="text-violet-600 animate-pulse motion-reduce:animate-none" />
+        <span aria-hidden className="text-[11px] text-slate-500">{label}</span>
+      </div>
+      {/* Two skeleton proposal cards */}
+      <ShimmerCard />
+      <ShimmerCard />
     </div>
   );
 }
