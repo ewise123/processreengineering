@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowLeft } from "lucide-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -17,7 +18,6 @@ import {
 } from "@/components/ui/dialog";
 import { AiEditCacheProvider } from "@/components/canvas/ai-edit-cache";
 import { BpmnCanvas, type BpmnCanvasHandle, type CanvasSelection } from "@/components/canvas/bpmn-canvas";
-import { DocumentViewer } from "@/components/canvas/document-viewer";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { RightPanel } from "@/components/canvas/right-panel";
 import { buildCanvasState } from "@/components/canvas/layout";
@@ -25,6 +25,14 @@ import { reviewByNodeMap } from "@/components/canvas/review-summary";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
 import type { IssueSeverity, NodeReviewUpdate, ReviewDecision, UUID, ViewerTarget } from "@/lib/types";
+
+// react-pdf / pdfjs reference browser-only globals at module eval, which crash
+// server-side rendering. Load the viewer client-only so the page route never
+// imports pdfjs on the server.
+const DocumentViewer = dynamic(
+  () => import("@/components/canvas/document-viewer").then((m) => m.DocumentViewer),
+  { ssr: false },
+);
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
   idle: "Saved",
