@@ -39,20 +39,44 @@ export function AiEditPanel({
   const [loading, setLoading] = useState<AiEditAction | null>(null);
   const [result, setResult] = useState<AiEditResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Tracks the subset of suggest_next steps the user hasn't acted on yet.
+  // null means we're not in a suggest_next flow; an empty array means all steps
+  // have been resolved (triggers result clear).
+  const [pendingSteps, setPendingSteps] = useState<SuggestedStep[] | null>(null);
 
   async function run(action: AiEditAction) {
     setMenuOpen(false);
     setResult(null);
+    setPendingSteps(null);
     setError(null);
     setLoading(action);
     try {
       const res = await api.aiEditNode(projectId, modelId, versionId, nodeId, action);
       setResult(res);
+      if (res.suggest_next) {
+        setPendingSteps(res.suggest_next.steps);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoading(null);
     }
+  }
+
+  function resolveStep(step: SuggestedStep, accept: boolean) {
+    if (accept) {
+      onAddStep(step);
+    }
+    setPendingSteps((prev) => {
+      if (prev === null) return null;
+      const next = prev.filter((s) => s !== step);
+      if (next.length === 0) {
+        // All steps resolved — schedule result clear outside this updater.
+        // Use setTimeout(0) to avoid calling setResult inside a setState call.
+        setTimeout(() => setResult(null), 0);
+      }
+      return next;
+    });
   }
 
   return (
@@ -92,9 +116,10 @@ export function AiEditPanel({
       {result && (
         <ProposalCards
           result={result}
+          pendingSteps={pendingSteps}
           onRelabel={(name) => { onRelabel(name); setResult(null); }}
           onDescribe={(d) => { onDescribe(d); setResult(null); }}
-          onAddStep={(s) => { onAddStep(s); setResult(null); }}
+          onResolveStep={resolveStep}
           onDismiss={() => setResult(null)}
         />
       )}
@@ -161,15 +186,18 @@ function AcceptReject({ onAccept, onReject }: { onAccept: () => void; onReject: 
 
 function ProposalCards({
   result,
+  pendingSteps,
   onRelabel,
   onDescribe,
-  onAddStep,
+  onResolveStep,
   onDismiss,
 }: {
   result: AiEditResponse;
+  pendingSteps: SuggestedStep[] | null;
   onRelabel: (name: string) => void;
   onDescribe: (description: string) => void;
-  onAddStep: (step: SuggestedStep) => void;
+  /** Called for suggest_next cards. accept=true → apply; accept=false → discard. */
+  onResolveStep: (step: SuggestedStep, accept: boolean) => void;
   onDismiss: () => void;
 }) {
   if (result.relabel) {
@@ -212,7 +240,11 @@ function ProposalCards({
     );
   }
   if (result.suggest_next) {
-    const steps = result.suggest_next.steps;
+    // Use pendingSteps (managed by AiEditPanel) so accepting/rejecting a card
+    // removes only that card; the last removal closes the panel entirely.
+    // Fall back to result.suggest_next.steps only if pendingSteps hasn't been
+    // wired up yet (should never happen in practice).
+    const steps = pendingSteps ?? result.suggest_next.steps;
     if (steps.length === 0) {
       return (
         <p className="mt-2 text-[11px] text-slate-500">
@@ -229,7 +261,10 @@ function ProposalCards({
             rationale={s.rationale}
             citedIds={s.cited_claim_ids}
           >
-            <AcceptReject onAccept={() => onAddStep(s)} onReject={onDismiss} />
+            <AcceptReject
+              onAccept={() => onResolveStep(s, true)}
+              onReject={() => onResolveStep(s, false)}
+            />
           </Card>
         ))}
       </div>
