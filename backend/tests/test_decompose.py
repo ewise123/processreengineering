@@ -65,3 +65,26 @@ def test_resolve_refs_scoped_drops_out_of_scope(db):
     ref_to_id = {"C1": claims["c2"].id, "C2": claims["c4"].id}  # C2 -> detached claim
     kept = pm_api._resolve_refs_scoped(["C1", "C2"], ref_to_id, scope)
     assert kept == [claims["c2"].id]  # C2 dropped: c4 not in node+neighbor scope
+
+
+def test_decompose_schemas_roundtrip_and_validate():
+    from app.schemas.version_ai_edit import (
+        AiEditAction, AiEditResponse, DecomposeProposal, DecomposeRequest, SubStep,
+    )
+    assert AiEditAction("decompose") == AiEditAction.DECOMPOSE
+    step = SubStep(proposed_name="Check budget", proposed_type="task", role="Finance",
+                   edge_label="if > $10k", rationale="r", cited_claim_ids=[])
+    proposal = DecomposeProposal(sub_steps=[step])
+    resp = AiEditResponse(action=AiEditAction.DECOMPOSE, decompose=proposal)
+    wire = resp.model_dump(by_alias=True)
+    assert wire["action"] == "decompose"
+    assert wire["decompose"]["sub_steps"][0]["role"] == "Finance"
+    # apply request reuses SubStep
+    req = DecomposeRequest(sub_steps=[step])
+    assert req.sub_steps[0].proposed_type == "task"
+
+
+def test_substep_rejects_unknown_type():
+    from app.schemas.version_ai_edit import SubStep
+    with pytest.raises(ValueError):
+        SubStep(proposed_name="X", proposed_type="not_a_type", role="R", rationale="r")
