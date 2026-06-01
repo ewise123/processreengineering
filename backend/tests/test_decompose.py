@@ -88,3 +88,37 @@ def test_substep_rejects_unknown_type():
     from app.schemas.version_ai_edit import SubStep
     with pytest.raises(ValueError):
         SubStep(proposed_name="X", proposed_type="not_a_type", role="R", rationale="r")
+
+
+class _FakeToolClient:
+    """Returns a single tool_use block with the given name + input."""
+    def __init__(self, tool_name, payload):
+        self._tool_name = tool_name
+        self._payload = payload
+
+    class _Messages:
+        def __init__(self, outer): self._outer = outer
+        def create(self, **kwargs):
+            block = SimpleNamespace(type="tool_use", name=self._outer._tool_name,
+                                    input=self._outer._payload)
+            return SimpleNamespace(content=[block])
+
+    @property
+    def messages(self): return _FakeToolClient._Messages(self)
+
+
+def test_propose_decompose_parses_sub_steps():
+    fake = _FakeToolClient(
+        "propose_decompose",
+        {"sub_steps": [
+            {"proposed_name": "Open ticket", "proposed_type": "task", "role": "Support",
+             "edge_label": None, "rationale": "C1 mentions ticketing.", "cited_claim_refs": ["C1"]},
+            {"proposed_name": "Triage", "proposed_type": "task", "role": "Support",
+             "edge_label": "after open", "rationale": "C2.", "cited_claim_refs": ["C2"]},
+        ]},
+    )
+    with patch.object(map_ai_edit, "_get_client", return_value=fake):
+        out = map_ai_edit.propose_decompose(map_context_text="...", selected_label="N1")
+    assert len(out["sub_steps"]) == 2
+    assert out["sub_steps"][0]["role"] == "Support"
+    assert out["sub_steps"][1]["cited_claim_refs"] == ["C2"]
