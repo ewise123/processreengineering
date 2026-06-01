@@ -285,3 +285,42 @@ def test_remove_sub_process_404_when_no_child(db):
             node_id=n2.id, db=db,
         )
     assert exc.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Task 8: get-model + ancestry endpoints
+# ---------------------------------------------------------------------------
+
+def test_get_process_map_returns_level_and_latest_version(db):
+    project, version, n2, claims = _seed_neighbors(db)
+    out = pm_api.get_process_map(project=project, model_id=version.model_id, db=db)
+    assert out.level == "L2"
+    assert out.latest_version_id == version.id
+    assert out.latest_version_number == 1
+
+
+def test_ancestry_returns_root_to_leaf_chain(db):
+    project, version, n2, claims = _seed_neighbors(db)
+    res = pm_api.apply_decompose(
+        project=project, model_id=version.model_id, version_id=version.id,
+        node_id=n2.id, payload=_decompose_payload(), db=db,
+    )
+    cv = db.get(ProcessVersion, res.child_version_id)
+    child_node = db.scalars(select(ProcessNode).where(ProcessNode.version_id == cv.id)).first()
+    res2 = pm_api.apply_decompose(
+        project=project, model_id=res.child_model_id, version_id=cv.id,
+        node_id=child_node.id, payload=_decompose_payload(), db=db,
+    )
+    chain = pm_api.get_map_ancestry(project=project, model_id=res2.child_model_id, db=db)
+    levels = [c.level for c in chain]
+    assert levels == ["L2", "L3", "L4"]                  # root first
+    assert chain[0].model_id == version.model_id
+    assert chain[-1].model_id == res2.child_model_id
+    # crumb label for the L3 map is the parent step it was decomposed from ("n2")
+    assert chain[1].label == "n2"
+
+
+def test_ancestry_single_for_root_map(db):
+    project, version, n2, claims = _seed_neighbors(db)
+    chain = pm_api.get_map_ancestry(project=project, model_id=version.model_id, db=db)
+    assert len(chain) == 1 and chain[0].model_id == version.model_id

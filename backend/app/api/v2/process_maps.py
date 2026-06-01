@@ -485,6 +485,75 @@ def list_process_maps(
     ]
 
 
+def _latest_version_row(db: Session, model_id: UUID):
+    """(version_id, version_number) of a model's highest version, or (None, None)."""
+    row = db.execute(
+        select(ProcessVersion.id, ProcessVersion.version_number)
+        .where(ProcessVersion.model_id == model_id)
+        .order_by(ProcessVersion.version_number.desc())
+        .limit(1)
+    ).first()
+    return (row[0], row[1]) if row else (None, None)
+
+
+@router.get("/process-maps/{model_id}", response_model=ProcessModelRead)
+def get_process_map(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessModelRead:
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id or model.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    lv_id, lv_num = _latest_version_row(db, model.id)
+    return ProcessModelRead.model_validate(model).model_copy(
+        update={"latest_version_id": lv_id, "latest_version_number": lv_num}
+    )
+
+
+@router.get("/process-maps/{model_id}/ancestry", response_model=list[AncestryCrumb])
+def get_map_ancestry(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[AncestryCrumb]:
+    """Root-to-leaf chain of maps for the breadcrumb. Each crumb's label is the
+    parent step it was decomposed from (resolved live via the reverse lookup),
+    falling back to the model's own name; deep-link = that map's latest version."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+
+    # Walk up to the root (guard against cycles).
+    chain: list[ProcessModel] = []
+    cur: ProcessModel | None = model
+    guard = 0
+    while cur is not None and guard < 16:
+        chain.append(cur)
+        guard += 1
+        cur = db.get(ProcessModel, cur.parent_model_id) if cur.parent_model_id else None
+    chain.reverse()  # root first
+
+    crumbs: list[AncestryCrumb] = []
+    for i, m in enumerate(chain):
+        lv_id, _ = _latest_version_row(db, m.id)
+        label = m.name
+        # For non-root maps, prefer the live name of the parent step that points here.
+        if i > 0:
+            parent = chain[i - 1]
+            p_lv_id, _ = _latest_version_row(db, parent.id)
+            if p_lv_id is not None:
+                p_nodes = db.scalars(
+                    select(ProcessNode).where(ProcessNode.version_id == p_lv_id)
+                ).all()
+                for n in p_nodes:
+                    if (n.properties or {}).get("child_model_id") == str(m.id):
+                        label = n.name
+                        break
+        crumbs.append(AncestryCrumb(model_id=m.id, version_id=lv_id, level=m.level, label=label))
+    return crumbs
+
+
 def _check_node_in_project(
     node: ProcessNode, project_id: UUID, db: Session
 ) -> None:
