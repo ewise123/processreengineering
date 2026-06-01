@@ -158,3 +158,82 @@ def test_propose_decompose_endpoint_422_at_l4(db):
             )
     assert exc.value.status_code == 422
     assert "level" in exc.value.detail.lower() or "L4" in exc.value.detail
+
+
+# ---------------------------------------------------------------------------
+# Task 6: apply_decompose endpoint tests
+# ---------------------------------------------------------------------------
+
+def _decompose_payload(claim_id=None):
+    from app.schemas.version_ai_edit import DecomposeRequest, SubStep
+    cited = [claim_id] if claim_id else []
+    return DecomposeRequest(sub_steps=[
+        SubStep(proposed_name="Open ticket", proposed_type="task", role="Support",
+                edge_label=None, rationale="r", cited_claim_ids=cited),
+        SubStep(proposed_name="Triage", proposed_type="task", role="Triage Team",
+                edge_label="after open", rationale="r", cited_claim_ids=[]),
+    ])
+
+
+def test_apply_decompose_creates_child_model_version_and_links(db):
+    project, version, n2, claims = _seed_neighbors(db)
+    result = pm_api.apply_decompose(
+        project=project, model_id=version.model_id, version_id=version.id,
+        node_id=n2.id, payload=_decompose_payload(claims["c2"].id), db=db,
+    )
+    child = db.get(ProcessModel, result.child_model_id)
+    assert child.parent_model_id == version.model_id
+    assert child.level == "L3"                       # parent L2 -> L3
+    assert child.name == "n2"                          # parent step label
+    cv = db.get(ProcessVersion, result.child_version_id)
+    assert cv.model_id == child.id and cv.version_number == 1
+    nodes = list(db.scalars(select(ProcessNode).where(ProcessNode.version_id == cv.id)).all())
+    assert len(nodes) == 2 and all(n.properties["ai_proposed"] is True for n in nodes)
+    assert all(n.properties["_lineage_id"] == str(n.id) for n in nodes)
+    lanes = list(db.scalars(select(ProcessLane).where(ProcessLane.version_id == cv.id)).all())
+    assert len(lanes) == 2
+    edges = list(db.scalars(select(ProcessEdge).where(ProcessEdge.version_id == cv.id)).all())
+    assert len(edges) == 1
+    links = list(db.scalars(select(NodeClaimLink).where(NodeClaimLink.node_id.in_([n.id for n in nodes]))).all())
+    assert len(links) == 1 and links[0].link_kind == "ai_proposed"
+    db.refresh(n2)
+    assert n2.properties["child_model_id"] == str(child.id)
+
+
+def test_re_decompose_appends_new_child_version(db):
+    project, version, n2, claims = _seed_neighbors(db)
+    first = pm_api.apply_decompose(
+        project=project, model_id=version.model_id, version_id=version.id,
+        node_id=n2.id, payload=_decompose_payload(), db=db,
+    )
+    second = pm_api.apply_decompose(
+        project=project, model_id=version.model_id, version_id=version.id,
+        node_id=n2.id, payload=_decompose_payload(), db=db,
+    )
+    assert first.child_model_id == second.child_model_id    # same child model
+    v1 = db.get(ProcessVersion, first.child_version_id)
+    v2 = db.get(ProcessVersion, second.child_version_id)
+    assert v2.version_number == 2 and v2.parent_version_id == v1.id
+
+
+def test_apply_decompose_ignores_foreign_claim_ids(db):
+    project, version, n2, claims = _seed_neighbors(db)
+    result = pm_api.apply_decompose(
+        project=project, model_id=version.model_id, version_id=version.id,
+        node_id=n2.id, payload=_decompose_payload(uuid4()), db=db,  # bogus claim id
+    )
+    cv = db.get(ProcessVersion, result.child_version_id)
+    nodes = list(db.scalars(select(ProcessNode).where(ProcessNode.version_id == cv.id)).all())
+    links = list(db.scalars(select(NodeClaimLink).where(NodeClaimLink.node_id.in_([n.id for n in nodes]))).all())
+    assert links == []   # foreign id silently dropped
+
+
+def test_apply_decompose_422_at_l4(db):
+    project, version, n2, claims = _seed_neighbors(db)
+    model = db.get(ProcessModel, version.model_id); model.level = "L4"; db.commit()
+    with pytest.raises(HTTPException) as exc:
+        pm_api.apply_decompose(
+            project=project, model_id=version.model_id, version_id=version.id,
+            node_id=n2.id, payload=_decompose_payload(), db=db,
+        )
+    assert exc.value.status_code == 422
