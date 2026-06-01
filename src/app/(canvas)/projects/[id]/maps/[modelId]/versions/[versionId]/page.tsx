@@ -158,12 +158,15 @@ export default function CanvasPage() {
           sub_steps: subSteps,
         });
         toast.success("Sub-process created.");
+        queryClient.invalidateQueries({
+          queryKey: ["graph", params.id, params.modelId, params.versionId],
+        });
         router.push(`/projects/${params.id}/maps/${res.child_model_id}/versions/${res.child_version_id}`);
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Decompose failed.");
       }
     },
-    [router, params.id, params.modelId, params.versionId]
+    [router, queryClient, params.id, params.modelId, params.versionId]
   );
 
   const handleRemoveChild = useCallback(
@@ -171,6 +174,7 @@ export default function CanvasPage() {
       try {
         await api.removeSubProcess(params.id, params.modelId, params.versionId, sourceId);
         toast.success("Sub-process removed.");
+        canvasRef.current?.clearChildModelId(sourceId);
         queryClient.invalidateQueries({
           queryKey: ["graph", params.id, params.modelId, params.versionId],
         });

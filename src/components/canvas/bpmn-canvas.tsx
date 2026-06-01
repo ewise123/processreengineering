@@ -155,6 +155,9 @@ export interface BpmnCanvasHandle {
   /** Select a node (drives Properties panel + chat context) from outside
    * the canvas, e.g. clicking a node link in the Issues tab. */
   selectNode: (id: UUID) => void;
+  /** Clear a node's child-sub-process link locally (drops the "+" marker)
+   * after the sub-process is removed via the API. */
+  clearChildModelId: (id: UUID) => void;
   /** Delete every selected node and edge (node deletes are non-undoable). */
   deleteSelection: () => Promise<void>;
   /** Copy the current selection to the in-memory clipboard. */
@@ -469,6 +472,12 @@ function BpmnCanvas({
     [projectId, modelId, versionId, record, deleteNodeImpl, selectOnly]
   );
 
+  const clearChildModelId = useCallback((id: UUID) => {
+    setNodes((curr) =>
+      curr.map((n) => (n.id === id ? { ...n, childModelId: null } : n))
+    );
+  }, []);
+
   const deleteEdgeImpl = useCallback(
     async (id: UUID) => {
       const edge = edgesRef.current.find((e) => e.id === id);
@@ -622,11 +631,12 @@ function BpmnCanvas({
         setSelectedIds(new Set([id]));
         focusNodeInViewport(id);
       },
+      clearChildModelId,
       deleteSelection: deleteSelectionImpl,
       copySelection: copySelectionImpl,
       moveSelectionToLane: moveSelectionToLaneImpl,
     }),
-    [deleteNodeImpl, updateNodeImpl, addProposedStep, focusNodeInViewport, deleteSelectionImpl]
+    [deleteNodeImpl, updateNodeImpl, addProposedStep, focusNodeInViewport, clearChildModelId, deleteSelectionImpl]
   );
 
   // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
