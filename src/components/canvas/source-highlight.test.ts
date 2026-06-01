@@ -45,4 +45,16 @@ describe("isQuoteFragment", () => {
     expect(isQuoteFragment(" ", quote)).toBe(false);
     expect(isQuoteFragment("a", quote)).toBe(false);
   });
+  it("rejects coincidental mid-word substrings", () => {
+    expect(isQuoteFragment("in", quote)).toBe(false); // within
+    expect(isQuoteFragment("com", quote)).toBe(false); // complete
+    expect(isQuoteFragment("ess", quote)).toBe(false); // business
+    expect(isQuoteFragment("th", quote)).toBe(false); // the
+    expect(isQuoteFragment("us", quote)).toBe(false); // must
+  });
+  it("matches whole words on boundaries", () => {
+    expect(isQuoteFragment("two", quote)).toBe(true);
+    expect(isQuoteFragment("days", quote)).toBe(true);
+    expect(isQuoteFragment("approval", quote)).toBe(true);
+  });
 });

@@ -25,12 +25,24 @@ export function targetPageFromRef(
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-/** True when a text-layer item is part of the quote. Used per-item in
- *  react-pdf's customTextRenderer to decide whether to wrap it in <mark>.
- *  Requires a non-trivial fragment (>1 char) to avoid highlighting stray
- *  letters/spaces. */
+const WORD_CHAR = /[a-z0-9]/;
+
+/** True when a text-layer item is part of the quote, matched on WORD
+ *  BOUNDARIES. Used per-item in react-pdf's customTextRenderer to decide
+ *  whether to wrap it in <mark>. Requires a non-trivial fragment (>1 char) and
+ *  rejects coincidental mid-word substrings (e.g. "in" inside "within") so the
+ *  viewer never highlights — or scrolls to — a false positive. */
 export function isQuoteFragment(itemText: string, quote: string): boolean {
   const frag = normalizeForMatch(itemText);
   if (frag.length < 2) return false;
-  return normalizeForMatch(quote).includes(frag);
+  const q = normalizeForMatch(quote);
+  let from = 0;
+  for (;;) {
+    const i = q.indexOf(frag, from);
+    if (i < 0) return false;
+    const before = i === 0 ? "" : q[i - 1];
+    const after = i + frag.length >= q.length ? "" : q[i + frag.length];
+    if (!WORD_CHAR.test(before) && !WORD_CHAR.test(after)) return true;
+    from = i + 1;
+  }
 }
