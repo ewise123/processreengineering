@@ -1,5 +1,9 @@
 import type {
   AcceptDetectionRunResult,
+  AiEditAction,
+  AiEditResponse,
+  AiProposedStepRequest,
+  AiProposedStepResult,
   ChatRequest,
   ChatResponse,
   Claim,
@@ -295,6 +299,27 @@ export const api = {
   ) =>
     request<ChatResponse>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/chat`,
+      { method: "POST", json: body }
+    ),
+  aiEditNode: (
+    projectId: UUID,
+    modelId: UUID,
+    versionId: UUID,
+    nodeId: UUID,
+    action: AiEditAction
+  ) =>
+    request<AiEditResponse>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/nodes/${nodeId}/ai-edit`,
+      { method: "POST", json: { action } }
+    ),
+  applyProposedStep: (
+    projectId: UUID,
+    modelId: UUID,
+    versionId: UUID,
+    body: AiProposedStepRequest
+  ) =>
+    request<AiProposedStepResult>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/ai-proposed-step`,
       { method: "POST", json: body }
     ),
 

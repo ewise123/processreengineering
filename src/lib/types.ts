@@ -225,6 +225,7 @@ export interface NodeUpdate {
   lane_id?: UUID;
   x?: number;
   relative_y?: number;
+  description?: string;
 }
 
 export interface NodeCreate {
@@ -445,4 +446,65 @@ export interface AcceptDetectionRunResult {
 
 export interface DetectProcessesRequest {
   scope_input_ids?: UUID[] | null;
+}
+
+export type AiEditAction = "relabel" | "describe" | "validate" | "suggest_next";
+
+export interface RelabelProposal {
+  proposed_name: string;
+  unchanged: boolean;
+  rationale: string;
+  cited_claim_ids: UUID[];
+}
+
+export interface DescribeProposal {
+  proposed_description: string;
+  rationale: string;
+  cited_claim_ids: UUID[];
+}
+
+export interface ValidateGap {
+  summary: string;
+  severity: "low" | "medium" | "high";
+  cited_claim_ids: UUID[];
+}
+
+export interface ValidateProposal {
+  gaps: ValidateGap[];
+}
+
+export interface SuggestedStep {
+  proposed_name: string;
+  proposed_type: string;
+  edge_label: string | null;
+  rationale: string;
+  cited_claim_ids: UUID[];
+}
+
+export interface SuggestNextProposal {
+  steps: SuggestedStep[];
+}
+
+export interface AiEditResponse {
+  action: AiEditAction;
+  relabel?: RelabelProposal | null;
+  describe?: DescribeProposal | null;
+  validate?: ValidateProposal | null;
+  suggest_next?: SuggestNextProposal | null;
+}
+
+export interface AiProposedStepRequest {
+  source_node_id: UUID;
+  name: string;
+  type: string;
+  lane_id: UUID;
+  x: number;
+  relative_y: number;
+  edge_label?: string | null;
+  cited_claim_ids: UUID[];
+}
+
+export interface AiProposedStepResult {
+  node: ProcessNode;
+  edge: ProcessEdge;
 }
