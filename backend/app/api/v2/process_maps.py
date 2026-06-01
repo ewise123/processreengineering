@@ -1223,19 +1223,20 @@ def ai_edit_node(
                 for g in raw.get("gaps", [])
             ]
             return AiEditResponse(action=payload.action, validate_=ValidateProposal(gaps=gaps))
-        # SUGGEST_NEXT
-        raw = propose_next_steps(map_context_text=ctx.text, selected_label=ctx.selected_label)
-        steps = [
-            SuggestedStep(
-                proposed_name=s.get("proposed_name", ""),
-                proposed_type=s.get("proposed_type", "task"),
-                edge_label=s.get("edge_label"),
-                rationale=s.get("rationale", ""),
-                cited_claim_ids=_resolve_refs(s.get("cited_claim_refs"), ctx.claim_ref_to_id),
-            )
-            for s in raw.get("steps", [])
-            if s.get("proposed_name")
-        ]
-        return AiEditResponse(action=payload.action, suggest_next=SuggestNextProposal(steps=steps))
-    except RuntimeError as exc:  # missing API key, etc.
+        if payload.action == AiEditAction.SUGGEST_NEXT:
+            raw = propose_next_steps(map_context_text=ctx.text, selected_label=ctx.selected_label)
+            steps = [
+                SuggestedStep(
+                    proposed_name=s.get("proposed_name", ""),
+                    proposed_type=s.get("proposed_type", "task"),
+                    edge_label=s.get("edge_label"),
+                    rationale=s.get("rationale", ""),
+                    cited_claim_ids=_resolve_refs(s.get("cited_claim_refs"), ctx.claim_ref_to_id),
+                )
+                for s in raw.get("steps", [])
+                if s.get("proposed_name")
+            ]
+            return AiEditResponse(action=payload.action, suggest_next=SuggestNextProposal(steps=steps))
+        raise HTTPException(status_code=422, detail=f"Unsupported action: {payload.action}")
+    except (RuntimeError, ValueError) as exc:  # missing API key, bad proposal, etc.
         raise HTTPException(status_code=502, detail=str(exc)) from exc

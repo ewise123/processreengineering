@@ -1,7 +1,21 @@
 """Tests for the per-node AI-edit feature: schemas, service, endpoints."""
-import pytest
+from types import SimpleNamespace
+from unittest.mock import patch
+from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
+
+from app.api.v2 import process_maps as pm_api
+from app.enums import ClaimLinkKind
+from app.models.claim import Claim
+from app.models.identity import Organization, User
+from app.models.process import (
+    NodeClaimLink, ProcessEdge, ProcessLane, ProcessModel, ProcessNode, ProcessVersion,
+)
+from app.models.project import Project
 from app.schemas.version_ai_edit import AiEditAction, AiEditRequest
+from app.services import map_ai_edit
 
 
 def test_ai_edit_request_accepts_known_actions():
@@ -40,12 +54,6 @@ def test_validate_gap_severity_rejects_invalid():
     from app.schemas.version_ai_edit import ValidateGap
     with pytest.raises(ValueError):
         ValidateGap(summary="x", severity="critical")
-
-
-from types import SimpleNamespace
-from unittest.mock import patch
-
-from app.services import map_ai_edit
 
 
 class _FakeBlock:
@@ -124,19 +132,6 @@ def test_service_raises_without_key(monkeypatch):
 # ---------------------------------------------------------------------------
 # Task 4: propose endpoint + citation hygiene
 # ---------------------------------------------------------------------------
-from uuid import uuid4
-
-from fastapi import HTTPException
-
-from app.api.v2 import process_maps as pm_api
-from app.enums import ClaimLinkKind
-from app.models.claim import Claim
-from app.models.identity import Organization, User
-from app.models.process import (
-    NodeClaimLink, ProcessEdge, ProcessLane, ProcessModel, ProcessNode, ProcessVersion,
-)
-from app.models.project import Project
-
 
 def _seed_version_for_endpoint(db):
     org = Organization(name="O")
@@ -183,3 +178,14 @@ def test_propose_endpoint_404_for_foreign_node(db):
             node_id=uuid4(), payload=pm_api.AiEditRequest(action="relabel"), db=db,
         )
     assert exc.value.status_code == 404
+
+
+def test_propose_relabel_empty_service_dict_falls_back_to_node_name(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    with patch.object(pm_api, "propose_relabel", return_value={}):
+        resp = pm_api.ai_edit_node(
+            project=project, model_id=version.model_id, version_id=version.id,
+            node_id=n1.id, payload=pm_api.AiEditRequest(action="relabel"), db=db,
+        )
+    assert resp.relabel.proposed_name == n1.name  # falls back, no 500
+    assert resp.relabel.cited_claim_ids == []
