@@ -46,3 +46,24 @@ export function isQuoteFragment(itemText: string, quote: string): boolean {
     from = i + 1;
   }
 }
+
+/** Locate a citation quote inside a document's full text, tolerant of
+ *  whitespace runs and curly-vs-straight quote/dash differences. Returns the
+ *  [start, end) range in the ORIGINAL text (so the exact original run is
+ *  highlighted), or null if not found. Used by the text fast-path viewer, where
+ *  the whole document text is contiguous (unlike the PDF per-item path). */
+export function findQuoteInText(
+  text: string,
+  quote: string,
+): { start: number; end: number } | null {
+  const q = quote.trim();
+  if (q.length < 2) return null;
+  const pattern = q
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&") // escape regex metachars FIRST
+    .replace(/["“”„‟]/g, '["“”„‟]') // any double-quote variant
+    .replace(/['‘’‚‛]/g, "['‘’‚‛]") // any single-quote variant
+    .replace(/[-–—]/g, "[-–—]") // any dash variant
+    .replace(/\s+/g, "\\s+"); // whitespace-tolerant
+  const m = new RegExp(pattern, "i").exec(text);
+  return m ? { start: m.index, end: m.index + m[0].length } : null;
+}

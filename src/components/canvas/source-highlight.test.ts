@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  findQuoteInText,
   isQuoteFragment,
   normalizeForMatch,
   targetPageFromRef,
@@ -56,5 +57,34 @@ describe("isQuoteFragment", () => {
     expect(isQuoteFragment("two", quote)).toBe(true);
     expect(isQuoteFragment("days", quote)).toBe(true);
     expect(isQuoteFragment("approval", quote)).toBe(true);
+  });
+});
+
+describe("findQuoteInText", () => {
+  const text =
+    "Intro line.\nThe approval must complete\nwithin two business days, per policy.";
+
+  it("locates an exact quote and returns original indices", () => {
+    const r = findQuoteInText(text, "two business days")!;
+    expect(r).not.toBeNull();
+    expect(text.slice(r.start, r.end)).toBe("two business days");
+  });
+  it("is whitespace-tolerant across newlines", () => {
+    const r = findQuoteInText(text, "must complete within two")!;
+    expect(r).not.toBeNull();
+    expect(text.slice(r.start, r.end)).toBe("must complete\nwithin two");
+  });
+  it("is case-insensitive", () => {
+    const r = findQuoteInText(text, "THE APPROVAL")!;
+    expect(text.slice(r.start, r.end).toLowerCase()).toBe("the approval");
+  });
+  it("tolerates curly vs straight quotes", () => {
+    expect(findQuoteInText('He said "yes" today', "He said “yes” today")).not.toBeNull();
+  });
+  it("returns null when not found", () => {
+    expect(findQuoteInText(text, "rejected immediately")).toBeNull();
+  });
+  it("returns null for trivial quotes", () => {
+    expect(findQuoteInText(text, "a")).toBeNull();
   });
 });

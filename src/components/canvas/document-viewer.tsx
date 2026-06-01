@@ -9,9 +9,12 @@ import "./pdf-worker";
 import { api } from "@/lib/api";
 import type { UUID, ViewerTarget } from "@/lib/types";
 import {
+  findQuoteInText,
   isQuoteFragment,
   targetPageFromRef,
 } from "@/components/canvas/source-highlight";
+
+type Mode = "loading" | "text" | "pdf";
 
 export function DocumentViewer({
   projectId,
@@ -26,16 +29,50 @@ export function DocumentViewer({
   onToggleExpanded: () => void;
   onClose: () => void;
 }) {
+  // Mode: text fast-path (.txt/.md, no LibreOffice) vs PDF (everything else).
+  const [mode, setMode] = useState<Mode>("loading");
+  const [text, setText] = useState("");
   const [numPages, setNumPages] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [pinned, setPinned] = useState(true); // whether we found/scrolled a match
+  const [pinned, setPinned] = useState(true); // PDF mode: found/scrolled a match
   const scrollRef = useRef<HTMLDivElement>(null);
+  const markRef = useRef<HTMLElement>(null);
   const fileUrl = api.inputPdfUrl(projectId, target.inputId);
 
-  // Highlight quote fragments in each rendered text item.
-  // CustomTextRenderer receives { str, dir, transform, width, height, fontName,
-  // hasEOL, pageIndex, pageNumber, itemIndex } — we only need str.
-  // The type is not re-exported from react-pdf, so we derive it from PageProps.
+  // Decide the render mode. Probe the text endpoint; 200 → text, else → PDF.
+  // (The component is remounted per document via `key`, so `mode` already
+  // starts at "loading" on mount — no need to reset it here.)
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getInputText(projectId, target.inputId)
+      .then((r) => {
+        if (!cancelled) {
+          setText(r.text);
+          setMode("text");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setMode("pdf");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, target.inputId]);
+
+  // Text mode: locate the quote in the full document text (reliable substring
+  // match), highlight the exact original run, and scroll to it.
+  const textMatch =
+    mode === "text" && target.quote ? findQuoteInText(text, target.quote) : null;
+
+  useEffect(() => {
+    if (mode === "text" && markRef.current) {
+      markRef.current.scrollIntoView({ block: "center" });
+    }
+  }, [mode, text]);
+
+  // PDF mode: highlight quote fragments per text-layer item.
+  // CustomTextRenderer's type isn't re-exported, so derive it from PageProps.
   const textRenderer: NonNullable<PageProps["customTextRenderer"]> | undefined =
     target.quote
       ? ({ str }) =>
@@ -44,10 +81,10 @@ export function DocumentViewer({
             : str
       : undefined;
 
-  // After pages render, scroll the first highlighted run into view. If none,
-  // fall back to the cited page (or top) and flag the approximate state.
+  // PDF mode: after pages render, scroll the first highlighted run into view;
+  // else fall back to the cited page and flag the approximate state.
   useEffect(() => {
-    if (!numPages) return;
+    if (mode !== "pdf" || !numPages) return;
     const id = window.setTimeout(() => {
       const root = scrollRef.current;
       if (!root) return;
@@ -66,7 +103,11 @@ export function DocumentViewer({
       }
     }, 300);
     return () => window.clearTimeout(id);
-  }, [numPages, target]);
+  }, [mode, numPages, target]);
+
+  const showUnpinnedNotice =
+    !!target.quote &&
+    ((mode === "text" && !textMatch) || (mode === "pdf" && !pinned));
 
   return (
     <div
@@ -101,7 +142,7 @@ export function DocumentViewer({
         </button>
       </div>
 
-      {!pinned && target.quote && (
+      {showUnpinnedNotice && (
         <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-[10px] text-amber-700">
           Couldn&apos;t pin the exact location — showing the document. Quote:
           <span className="italic"> &ldquo;{target.quote}&rdquo;</span>
@@ -110,40 +151,63 @@ export function DocumentViewer({
 
       {/* Body */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-slate-100 p-2">
-        {error ? (
-          <div className="space-y-2 p-3">
-            <p className="text-[11px] text-rose-600">
-              Couldn&apos;t render this document in its original format.
-            </p>
-            {target.quote && (
-              <p className="rounded-md border border-slate-200 bg-white p-2 text-[11px] italic text-slate-600">
-                &ldquo;{target.quote}&rdquo;
-              </p>
-            )}
+        {mode === "loading" && (
+          <div className="p-4 text-[11px] italic text-slate-400">
+            Preparing document…
           </div>
-        ) : (
-          <Document
-            file={fileUrl}
-            onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-            onLoadError={(e) => setError(e.message)}
-            loading={
-              <div className="p-4 text-[11px] italic text-slate-400">
-                Preparing document…
-              </div>
-            }
-          >
-            {Array.from({ length: numPages }, (_, i) => (
-              <Page
-                key={i}
-                pageNumber={i + 1}
-                width={expanded ? 690 : 330}
-                customTextRenderer={textRenderer}
-                renderAnnotationLayer={false}
-                className="mb-2 bg-white shadow-sm"
-              />
-            ))}
-          </Document>
         )}
+
+        {mode === "text" && (
+          <pre className="whitespace-pre-wrap break-words rounded-md bg-white p-3 font-sans text-[12px] leading-relaxed text-slate-800 shadow-sm">
+            {textMatch ? (
+              <>
+                {text.slice(0, textMatch.start)}
+                <mark ref={markRef} className="bg-amber-200 text-inherit">
+                  {text.slice(textMatch.start, textMatch.end)}
+                </mark>
+                {text.slice(textMatch.end)}
+              </>
+            ) : (
+              text
+            )}
+          </pre>
+        )}
+
+        {mode === "pdf" &&
+          (error ? (
+            <div className="space-y-2 p-3">
+              <p className="text-[11px] text-rose-600">
+                Couldn&apos;t render this document in its original format.
+              </p>
+              {target.quote && (
+                <p className="rounded-md border border-slate-200 bg-white p-2 text-[11px] italic text-slate-600">
+                  &ldquo;{target.quote}&rdquo;
+                </p>
+              )}
+            </div>
+          ) : (
+            <Document
+              file={fileUrl}
+              onLoadSuccess={({ numPages }) => setNumPages(numPages)}
+              onLoadError={(e) => setError(e.message)}
+              loading={
+                <div className="p-4 text-[11px] italic text-slate-400">
+                  Preparing document…
+                </div>
+              }
+            >
+              {Array.from({ length: numPages }, (_, i) => (
+                <Page
+                  key={i}
+                  pageNumber={i + 1}
+                  width={expanded ? 690 : 330}
+                  customTextRenderer={textRenderer}
+                  renderAnnotationLayer={false}
+                  className="mb-2 bg-white shadow-sm"
+                />
+              ))}
+            </Document>
+          ))}
       </div>
     </div>
   );

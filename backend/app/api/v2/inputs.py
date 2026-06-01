@@ -28,6 +28,7 @@ from app.services.chunking import chunk_sections
 from app.services.parsing import parse_file
 from app.services.render_pdf import (
     UnsupportedRenderFormat,
+    is_text_format,
     rendered_pdf_path,
 )
 from app.services.storage import resolve_path, save_upload
@@ -207,3 +208,26 @@ def get_input_pdf(
         media_type="application/pdf",
         filename=f"{inp.name}.pdf" if not inp.name.lower().endswith(".pdf") else inp.name,
     )
+
+
+@router.get("/{input_id}/text")
+def get_input_text(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    input_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    """Serve a plain-text source verbatim (the text fast-path — no LibreOffice).
+
+    415 for non-text formats; the frontend then falls back to the PDF viewer.
+    """
+    inp = db.get(Input, input_id)
+    if inp is None or inp.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Input not found")
+    if not inp.file_path:
+        raise HTTPException(status_code=422, detail="Input has no file_path")
+    if not is_text_format(inp):
+        raise HTTPException(status_code=415, detail="Not a text document")
+    path = resolve_path(inp.file_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Source file not found on disk")
+    return {"text": path.read_text(encoding="utf-8", errors="replace")}

@@ -11,9 +11,20 @@ from app.services.storage import resolve_path  # re-exported so tests can monkey
 # Formats LibreOffice can convert to PDF (besides native PDF pass-through).
 CONVERTIBLE_SUFFIXES = {".docx", ".pptx", ".xlsx", ".xlsm", ".txt", ".md"}
 
+# Plain-text formats served verbatim via the text fast-path (no LibreOffice).
+TEXT_SUFFIXES = {".txt", ".md"}
+
 
 class UnsupportedRenderFormat(Exception):
     """Raised when an input cannot be rendered as a PDF."""
+
+
+def is_text_format(inp: Input) -> bool:
+    """True when the input is plain text — rendered directly (no LibreOffice)."""
+    suffix = Path(inp.name or "").suffix.lower()
+    if suffix in TEXT_SUFFIXES:
+        return True
+    return bool(inp.mime_type and inp.mime_type.startswith("text/"))
 
 
 def is_native_pdf(inp: Input) -> bool:

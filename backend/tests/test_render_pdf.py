@@ -193,7 +193,7 @@ def test_convert_subprocess_failure_raises_unsupported(tmp_path, monkeypatch):
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
-from app.api.v2.inputs import get_input_pdf
+from app.api.v2.inputs import get_input_pdf, get_input_text
 
 
 def test_endpoint_returns_file_response_for_pdf(db, tmp_path, monkeypatch):
@@ -229,3 +229,39 @@ def test_endpoint_415_for_unsupported(db, tmp_path, monkeypatch):
     with pytest.raises(HTTPException) as ei:
         get_input_pdf(project=proj, input_id=inp.id, db=db)
     assert ei.value.status_code == 415
+
+
+def test_is_text_format():
+    assert render_pdf.is_text_format(_inp("a.txt", None)) is True
+    assert render_pdf.is_text_format(_inp("a.md", None)) is True
+    assert render_pdf.is_text_format(_inp("a.log", "text/plain")) is True
+    assert render_pdf.is_text_format(_inp("a.pdf", "application/pdf")) is False
+    assert render_pdf.is_text_format(_inp("a.docx", None)) is False
+
+
+def test_text_endpoint_returns_content(db, tmp_path, monkeypatch):
+    src = tmp_path / "t.txt"
+    src.write_text("hello\nworld", encoding="utf-8")
+    inp = _seed_input(db, name="t.txt", mime="text/plain")
+    proj = db.get(Project, inp.project_id)
+    monkeypatch.setattr("app.api.v2.inputs.resolve_path", lambda rel: src)
+    out = get_input_text(project=proj, input_id=inp.id, db=db)
+    assert out == {"text": "hello\nworld"}
+
+
+def test_text_endpoint_415_for_pdf(db, tmp_path):
+    inp = _seed_input(db, name="a.pdf", mime="application/pdf")
+    proj = db.get(Project, inp.project_id)
+    with pytest.raises(HTTPException) as ei:
+        get_input_text(project=proj, input_id=inp.id, db=db)
+    assert ei.value.status_code == 415
+
+
+def test_text_endpoint_404_for_cross_project(db, tmp_path):
+    inp = _seed_input(db, name="t.txt", mime="text/plain")
+    other = Project(name="o", org_id=db.get(Project, inp.project_id).org_id, status="active")
+    db.add(other)
+    db.flush()
+    with pytest.raises(HTTPException) as ei:
+        get_input_text(project=other, input_id=inp.id, db=db)
+    assert ei.value.status_code == 404
