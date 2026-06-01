@@ -1182,6 +1182,31 @@ def _resolve_refs(refs, claim_ref_to_id):
     return out
 
 
+def _neighbor_claim_ids(db: Session, version_id: UUID, node_id: UUID) -> set[UUID]:
+    """Claim ids attached to the node plus every node one edge hop away — the
+    grounding scope for decompose (tighter than project-wide)."""
+    edge_rows = db.execute(
+        select(ProcessEdge.source_node_id, ProcessEdge.target_node_id).where(
+            ProcessEdge.version_id == version_id
+        )
+    ).all()
+    node_ids: set[UUID] = {node_id}
+    for src, tgt in edge_rows:
+        if src == node_id:
+            node_ids.add(tgt)
+        if tgt == node_id:
+            node_ids.add(src)
+    claim_ids = db.scalars(
+        select(NodeClaimLink.claim_id).where(NodeClaimLink.node_id.in_(node_ids))
+    ).all()
+    return set(claim_ids)
+
+
+def _resolve_refs_scoped(refs, claim_ref_to_id, scope: set[UUID]):
+    """Like _resolve_refs but additionally drops any resolved id not in `scope`."""
+    return [cid for cid in _resolve_refs(refs, claim_ref_to_id) if cid in scope]
+
+
 @router.post(
     "/process-maps/{model_id}/versions/{version_id}/nodes/{node_id}/ai-edit",
     response_model=AiEditResponse,
