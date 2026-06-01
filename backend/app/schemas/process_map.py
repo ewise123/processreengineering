@@ -206,6 +206,11 @@ class ProcessEdgeRead(BaseModel):
     bend_y: float | None = None
 
 
+class AiProposedStepResult(BaseModel):
+    node: ProcessNodeRead
+    edge: ProcessEdgeRead
+
+
 class ProcessVersionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID

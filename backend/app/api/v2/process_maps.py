@@ -3,7 +3,6 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -34,6 +33,7 @@ from app.models.workflow import Review
 from app.models.claim import Claim, ClaimCitation, ClaimConflict
 from app.models.input import Chunk, DocumentSection, Input
 from app.schemas.process_map import (
+    AiProposedStepResult,
     ChatRequest,
     ChatResponse,
     CitationDetail,
@@ -1246,11 +1246,6 @@ def ai_edit_node(
         raise HTTPException(status_code=422, detail=f"Unsupported action: {payload.action}")
     except (RuntimeError, ValueError) as exc:  # missing API key, bad proposal, etc.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
-class AiProposedStepResult(BaseModel):
-    node: ProcessNodeRead
-    edge: ProcessEdgeRead
 
 
 @router.post(

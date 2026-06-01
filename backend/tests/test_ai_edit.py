@@ -12,7 +12,7 @@ from app.enums import ClaimLinkKind
 from app.models.claim import Claim
 from app.models.identity import Organization, User
 from app.models.process import (
-    EdgeClaimLink, NodeClaimLink, ProcessEdge, ProcessLane, ProcessModel, ProcessNode, ProcessVersion,
+    NodeClaimLink, ProcessEdge, ProcessLane, ProcessModel, ProcessNode, ProcessVersion,
 )
 from app.models.project import Project
 from app.schemas.process_map import NodeUpdate
@@ -234,6 +234,22 @@ def test_apply_proposed_step_creates_ai_proposed_node_and_links(db):
     assert len(links) == 1  # only the real claim; bogus uuid ignored
     assert links[0].claim_id == claim.id
     assert links[0].link_kind == "ai_proposed"
+
+
+def test_apply_proposed_step_dedups_repeated_claim_ids(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    result = pm_api.apply_proposed_step(
+        project=project, model_id=version.model_id, version_id=version.id,
+        payload=pm_api.AiProposedStepRequest(
+            source_node_id=n1.id, name="Y", type="task", lane_id=n1.lane_id,
+            x=10.0, relative_y=0.0, edge_label=None,
+            cited_claim_ids=[claim.id, claim.id],  # same id twice
+        ),
+        db=db,
+    )
+    from sqlalchemy import select as _sel
+    links = list(db.scalars(_sel(NodeClaimLink).where(NodeClaimLink.node_id == result.node.id)).all())
+    assert len(links) == 1  # no IntegrityError, single link
 
 
 def test_deleting_proposed_node_cascades_edge(db):
