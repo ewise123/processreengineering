@@ -6,7 +6,6 @@ import { api } from "@/lib/api";
 import type { AiEditAction, AiEditResponse, SuggestedStep, UUID } from "@/lib/types";
 
 export interface AiEditEntry {
-  activeAction: AiEditAction | null;
   loading: boolean;
   result: AiEditResponse | null;
   error: string | null;
@@ -15,7 +14,6 @@ export interface AiEditEntry {
 }
 
 const EMPTY: AiEditEntry = {
-  activeAction: null,
   loading: false,
   result: null,
   error: null,
@@ -51,7 +49,6 @@ export function AiEditCacheProvider({ children }: { children: ReactNode }) {
   const runAction = useCallback(
     async ({ projectId, modelId, versionId, nodeId, action }: RunActionArgs) => {
       patch(nodeId, {
-        activeAction: action,
         loading: true,
         result: null,
         error: null,
@@ -65,7 +62,7 @@ export function AiEditCacheProvider({ children }: { children: ReactNode }) {
           pendingSteps: res.suggest_next ? res.suggest_next.steps : null,
         });
       } catch (e) {
-        patch(nodeId, { loading: false, error: (e as Error).message });
+        patch(nodeId, { loading: false, error: e instanceof Error ? e.message : String(e) });
       }
     },
     [patch]
