@@ -1441,7 +1441,10 @@ def apply_decompose(
     existing_id = (node.properties or {}).get("child_model_id")
     child: ProcessModel | None = None
     if existing_id:
-        candidate = db.get(ProcessModel, UUID(existing_id))
+        try:
+            candidate = db.get(ProcessModel, UUID(str(existing_id)))
+        except (ValueError, TypeError):
+            candidate = None
         if candidate is not None and candidate.deleted_at is None and candidate.project_id == project.id:
             child = candidate
     if child is None:
@@ -1538,3 +1541,44 @@ def apply_decompose(
 
     db.commit()
     return DecomposeResult(child_model_id=child.id, child_version_id=child_version.id)
+
+
+@router.delete(
+    "/process-maps/{model_id}/versions/{version_id}/nodes/{node_id}/decompose",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_sub_process(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    node_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Reverse a decompose: soft-delete the child model (it leaves the maps
+    list) and clear the parent node's child_model_id link."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+    node = db.get(ProcessNode, node_id)
+    if node is None or node.version_id != version.id:
+        raise HTTPException(status_code=404, detail="Node not found in this version")
+
+    child_id = (node.properties or {}).get("child_model_id")
+    if not child_id:
+        raise HTTPException(status_code=404, detail="Step has no sub-process to remove")
+
+    try:
+        child = db.get(ProcessModel, UUID(str(child_id)))
+    except (ValueError, TypeError):
+        child = None
+    if child is not None and child.deleted_at is None and child.project_id == project.id:
+        child.deleted_at = func.now()
+
+    props = {**(node.properties or {})}
+    props.pop("child_model_id", None)
+    node.properties = props
+    flag_modified(node, "properties")
+    db.commit()

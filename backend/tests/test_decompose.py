@@ -237,3 +237,51 @@ def test_apply_decompose_422_at_l4(db):
             node_id=n2.id, payload=_decompose_payload(), db=db,
         )
     assert exc.value.status_code == 422
+
+
+def test_apply_decompose_recovers_from_corrupt_child_model_id(db):
+    project, version, n2, claims = _seed_neighbors(db)
+    # Simulate a corrupt stored link; apply should not 500 — it creates a fresh child.
+    n2.properties = {**(n2.properties or {}), "child_model_id": "not-a-uuid"}
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(n2, "properties")
+    db.commit()
+    result = pm_api.apply_decompose(
+        project=project, model_id=version.model_id, version_id=version.id,
+        node_id=n2.id, payload=_decompose_payload(), db=db,
+    )
+    child = db.get(ProcessModel, result.child_model_id)
+    assert child is not None and child.parent_model_id == version.model_id
+    db.refresh(n2)
+    assert n2.properties["child_model_id"] == str(child.id)  # link repaired
+
+
+# ---------------------------------------------------------------------------
+# Task 7: remove_sub_process endpoint tests
+# ---------------------------------------------------------------------------
+
+def test_remove_sub_process_soft_deletes_child_and_clears_link(db):
+    project, version, n2, claims = _seed_neighbors(db)
+    result = pm_api.apply_decompose(
+        project=project, model_id=version.model_id, version_id=version.id,
+        node_id=n2.id, payload=_decompose_payload(), db=db,
+    )
+    child_id = result.child_model_id
+    pm_api.remove_sub_process(
+        project=project, model_id=version.model_id, version_id=version.id,
+        node_id=n2.id, db=db,
+    )
+    db.refresh(n2)
+    assert "child_model_id" not in n2.properties
+    child = db.get(ProcessModel, child_id)
+    assert child.deleted_at is not None   # soft-deleted (drops out of the maps list)
+
+
+def test_remove_sub_process_404_when_no_child(db):
+    project, version, n2, claims = _seed_neighbors(db)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.remove_sub_process(
+            project=project, model_id=version.model_id, version_id=version.id,
+            node_id=n2.id, db=db,
+        )
+    assert exc.value.status_code == 404
