@@ -64,19 +64,10 @@ export function AiEditPanel({
   }
 
   function resolveStep(step: SuggestedStep, accept: boolean) {
-    if (accept) {
-      onAddStep(step);
-    }
-    setPendingSteps((prev) => {
-      if (prev === null) return null;
-      const next = prev.filter((s) => s !== step);
-      if (next.length === 0) {
-        // All steps resolved — schedule result clear outside this updater.
-        // Use setTimeout(0) to avoid calling setResult inside a setState call.
-        setTimeout(() => setResult(null), 0);
-      }
-      return next;
-    });
+    if (accept) onAddStep(step);
+    const remaining = (pendingSteps ?? []).filter((s) => s !== step);
+    setPendingSteps(remaining);
+    if (remaining.length === 0) setResult(null);
   }
 
   return (
