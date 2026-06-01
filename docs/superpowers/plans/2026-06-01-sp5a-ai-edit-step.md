@@ -2231,3 +2231,31 @@ git commit -m "$(printf 'docs(sp5a): record AI-edit execution outcome\n\nCo-Auth
 - **Risk — chat refactor (Task 1):** the extraction preserves the edge-selection label path; chat has no unit test, so Step 6 imports the module and runs the full suite to catch regressions.
 - **Risk — `addProposedStep` undo/redo:** undo calls `deleteNodeImpl` (API + local removal + edge cascade), matching the backend cascade test (Task 6). Because undo deletes the backend rows, redo must re-create them: the callback re-POSTs through the apply endpoint and refreshes the captured `liveNode`/`liveEdge` ids so a subsequent undo targets the live rows, not the deleted ones. This is genuinely replayable (re-POST on redo is intentional for an AI insertion).
 - **Edge styling precedence:** proposed styling applies only when the edge is not selected/in a drag-preview, so it never masks interaction states.
+
+---
+
+## Execution outcome (2026-06-01)
+
+Executed via `superpowers:subagent-driven-development` — fresh implementer + spec-compliance + code-quality review per task, then a final holistic review (Opus) over the whole feature. Branch `sp5a-ai-edit-step` (off `sp4-version-control`).
+
+### Gates (final, clean tree at the tip)
+- Backend `pytest`: **95 passed** (baseline 76 + new `test_ai_edit.py` 17 + `test_map_context.py` 2).
+- `npx tsc --noEmit`: **clean**.
+- Frontend `npm test` (Vitest): **36 passed** (added `ai-edit.test.ts`, `layout.test.ts`).
+
+### Live smoke (real `ANTHROPIC_API_KEY`, real dev DB, project Test2 → "Project Closeout, Punch List & Warranty" L2)
+All exercised against the hot-reloaded local stack and **cleaned up** (no residue):
+- **relabel / describe / validate / suggest_next** propose calls each returned grounded, claim-cited structured proposals (e.g. validate surfaced 6 gaps; suggest_next returned 3 steps incl. a `gateway_exclusive`).
+- **apply-proposed-step**: created a node with `properties.ai_proposed = True` + `_lineage_id`, an edge source→new node, and exactly 3 `ai_proposed` `NodeClaimLink`s (matching the 3 cited claims). Deleting the node cascaded the edge + links; node/edge counts restored exactly (29/32). Dev DB left untouched.
+
+### Notable decisions & deviations from the plan
+- **No DOM component test for `AiEditPanel` (Task 12).** The project's Vitest is `environment: "node"`, `include: ["src/**/*.test.ts"]`, with no `@testing-library/react`/jsdom, and **no** existing canvas component has a component test — the established convention is pure-logic `.test.ts` + tsc + live smoke. Rather than bolt a DOM test stack onto the repo (unsanctioned scope, would be the only such test), `AiEditPanel` is a thin presentational component verified by tsc and the live smoke. The plan's `.test.tsx` was intentionally not created.
+- **Task 1 model-field corrections:** the plan's seed used `organization_id`; the real fields are `org_id` (User/Project). Fixed in tests.
+- **Claim-citation scope:** hygiene scopes citable refs to the **project's** claims (not only claims already attached to a node in this version) so a suggested next step can cite a real-but-unattached claim; the apply endpoint re-filters to project-scoped claims as a second guard. The design doc wording was corrected to match (it previously said "within this version").
+- **Multi-step suggest_next UX (final-review fix):** accepting/rejecting one suggested step now removes only that card and leaves siblings pending, instead of clearing the whole result set.
+- **Hardening from review:** propose endpoint catches `(RuntimeError, ValueError)` → 502 (a malformed/empty Anthropic response can't 500); explicit action dispatch with a 422 fallback; `addProposedStep` redo guarded against a failed re-POST; AI text fields length-bounded and `proposed_type`/`type` constrained to the `NodeType` set in the schemas.
+
+### Deferred follow-ups (not blocking SP-5a)
+- Claim chips in the proposal cards show truncated UUID prefixes; showing claim subject/kind (the existing citation style) would need the propose response to carry claim summaries. Acceptable for the first cut.
+- `MAX_TOKENS = 1200` could truncate a very long `suggest_next`; truncation degrades to fewer/empty proposals (graceful), never a 500.
+- **SP-5b** (separate brainstorm → spec → plan → stacked PR): decompose-to-next-level (child `ProcessModel` + cross-level navigation), deliberately out of scope here.

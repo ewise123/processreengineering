@@ -66,7 +66,7 @@ This is **SP-5a** — the AI-edit framework plus four **node-local** actions. Th
 
 - Body: `{action: "relabel" | "describe" | "validate" | "suggest_next"}`.
 - Validates project → model → version → node ownership (404 chain mirrors `chat_with_map`).
-- Builds the same grounding context the chat endpoint builds (lanes/nodes/edges/claims with citation quotes + a selected-node label), calls the matching service function, then **resolves cited claim refs**: the model cites short refs (C1, C2…); the endpoint maps them back to real claim UUIDs **and drops any ref that is not a claim attached within this version**. The model cannot fabricate provenance — only real, in-scope claim ids survive into the response.
+- Builds the same grounding context the chat endpoint builds (lanes/nodes/edges/claims with citation quotes + a selected-node label), calls the matching service function, then **resolves cited claim refs**: the model cites short refs (C1, C2…); the endpoint maps them back to real claim UUIDs **and drops any ref that is not among the project's claims presented in the grounding context**. (Scope is the project's claims, not only those already attached to a node in this version — a suggested next step must be able to cite a real project claim that no node carries yet. The apply endpoint re-filters to project-scoped claims as a second guard.) The model cannot fabricate provenance — only real, in-scope claim ids survive into the response.
 - Returns the typed proposals (per `VersionAiEdit*` schemas below), each proposal carrying its surviving cited claim UUIDs.
 - 502 when `ANTHROPIC_API_KEY` is unset (same contract as chat).
 - No mutation. This endpoint only proposes.
