@@ -43,6 +43,8 @@ from app.schemas.process_map import (
     EdgeUpdate,
     LaneCreate,
     LaneUpdate,
+    NodeClaimLinkRequest,
+    NodeClaimLinkResult,
     NodeCitationsRead,
     NodeCreate,
     NodeIssueDetail,
@@ -873,6 +875,90 @@ def get_node_citations(
             for c in claims
         ],
     )
+
+
+@router.post(
+    "/nodes/{node_id}/claims",
+    response_model=NodeClaimLinkResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def attach_node_claims(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    node_id: UUID,
+    payload: NodeClaimLinkRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> NodeClaimLinkResult:
+    """Attach a batch of claims to a node as evidence. Idempotent on the
+    (node_id, claim_id) unique constraint — re-attaching an existing link is a
+    no-op counted in already_linked_count."""
+    node = db.get(ProcessNode, node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    _check_node_in_project(node, project.id, db)
+
+    # Every claim id must belong to this project.
+    requested_ids = list(dict.fromkeys(payload.claim_ids))  # de-dup, keep order
+    found = {
+        c.id
+        for c in db.scalars(
+            select(Claim).where(
+                Claim.id.in_(requested_ids), Claim.project_id == project.id
+            )
+        ).all()
+    }
+    missing = [cid for cid in requested_ids if cid not in found]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail="One or more claim_ids do not belong to this project",
+        )
+
+    existing = set(
+        db.scalars(
+            select(NodeClaimLink.claim_id).where(
+                NodeClaimLink.node_id == node_id,
+                NodeClaimLink.claim_id.in_(requested_ids),
+            )
+        ).all()
+    )
+    added = 0
+    for cid in requested_ids:
+        if cid in existing:
+            continue
+        db.add(
+            NodeClaimLink(node_id=node_id, claim_id=cid, link_kind=payload.link_kind)
+        )
+        added += 1
+    db.commit()
+    return NodeClaimLinkResult(
+        node_id=node_id,
+        linked_claim_ids=requested_ids,
+        added_count=added,
+        already_linked_count=len(requested_ids) - added,
+    )
+
+
+@router.delete(
+    "/nodes/{node_id}/claims/{claim_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def detach_node_claim(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    node_id: UUID,
+    claim_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    node = db.get(ProcessNode, node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    _check_node_in_project(node, project.id, db)
+    db.execute(
+        delete(NodeClaimLink).where(
+            NodeClaimLink.node_id == node_id,
+            NodeClaimLink.claim_id == claim_id,
+        )
+    )
+    db.commit()
 
 
 @router.get("/nodes/{node_id}/issues", response_model=NodeIssuesDetailRead)

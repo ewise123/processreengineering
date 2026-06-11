@@ -243,3 +243,17 @@ class ProcessModelRead(BaseModel):
     latest_version_number: int | None = None
     latest_source_segment_id: UUID | None = None
     latest_source_run_status: str | None = None
+
+
+class NodeClaimLinkRequest(BaseModel):
+    """Body for POST /nodes/{id}/claims — attach a batch of claims as evidence."""
+
+    claim_ids: list[UUID] = Field(min_length=1)
+    link_kind: str = Field(default="evidence", max_length=20)
+
+
+class NodeClaimLinkResult(BaseModel):
+    node_id: UUID
+    linked_claim_ids: list[UUID]
+    added_count: int
+    already_linked_count: int
