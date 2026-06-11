@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -14,9 +14,14 @@ from app.models.input import Chunk, DocumentSection, Input
 from app.models.project import Project
 from app.schemas.claim import (
     ClaimConflictRead,
+    ClaimCreate,
     ClaimExtractionResult,
+    ClaimImpact,
+    ClaimImpactMap,
     ClaimRead,
+    ClaimUpdate,
     ConflictDetectionResult,
+    ConflictResolve,
 )
 from app.schemas.common import Page
 from app.services.claims_extraction import extract_claims_from_text
@@ -143,6 +148,30 @@ def list_claims(
         limit=limit,
         offset=offset,
     )
+
+
+@router.post(
+    "/claims", response_model=ClaimRead, status_code=status.HTTP_201_CREATED
+)
+def create_claim(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    payload: ClaimCreate,
+    db: Annotated[Session, Depends(get_db)],
+) -> Claim:
+    """Create a manual claim. No citation required; source is 'manual' so the
+    extraction wipe never deletes it."""
+    claim = Claim(
+        project_id=project.id,
+        kind=payload.kind,
+        subject=payload.subject,
+        normalized=payload.normalized,
+        confidence=None,
+        source="manual",
+    )
+    db.add(claim)
+    db.commit()
+    db.refresh(claim)
+    return claim
 
 
 @router.post("/detect-conflicts", response_model=ConflictDetectionResult)
