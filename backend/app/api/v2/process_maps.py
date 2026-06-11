@@ -124,8 +124,8 @@ def _create_model_and_version(
     bpmn_xml: str | None = None,
     notes: str | None = None,
     source_segment_id: UUID | None = None,
-    default_lane_name: str = "Process Team",
-) -> tuple[ProcessModel, ProcessVersion, ProcessLane]:
+    default_lane_name: str | None = "Process Team",
+) -> tuple[ProcessModel, ProcessVersion, ProcessLane | None]:
     """Find-or-create the (project, level, name) ProcessModel, create the next
     ProcessVersion (lineage stamped from the prior top version), and one default
     lane. Shared by AI generation and blank-map creation.
@@ -179,9 +179,11 @@ def _create_model_and_version(
     db.add(version)
     db.flush()
 
-    lane = ProcessLane(version_id=version.id, name=default_lane_name, order_index=0)
-    db.add(lane)
-    db.flush()
+    lane: ProcessLane | None = None
+    if default_lane_name is not None:
+        lane = ProcessLane(version_id=version.id, name=default_lane_name, order_index=0)
+        db.add(lane)
+        db.flush()
     return model, version, lane
 
 
@@ -268,7 +270,7 @@ def generate_process_map(
 
     # 4-5. Find-or-create ProcessModel + next ProcessVersion (shared helper).
     canonical_level = _normalize_level(payload.level)
-    model, version, _default_lane = _create_model_and_version(
+    model, version, _ = _create_model_and_version(
         db,
         project=project,
         name=structure.process_name,
@@ -277,10 +279,8 @@ def generate_process_map(
         bpmn_xml=bpmn_xml,
         notes=f"Generated from {len(claims)} claim(s).",
         source_segment_id=payload.segment_id,
+        default_lane_name=None,  # AI path builds one lane per role
     )
-    # The AI path builds one lane per role; drop the helper's placeholder lane.
-    db.delete(_default_lane)
-    db.flush()
 
     # 6. Persist lanes (one per unique role in document order)
     role_order: list[str] = []
