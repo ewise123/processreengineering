@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.enums import NodeType
+from app.enums import ClaimLinkKind, NodeType
 
 _NODE_TYPE_PATTERN = rf"^({'|'.join(t.value for t in NodeType)})$"
 
@@ -249,7 +249,7 @@ class NodeClaimLinkRequest(BaseModel):
     """Body for POST /nodes/{id}/claims — attach a batch of claims as evidence."""
 
     claim_ids: list[UUID] = Field(min_length=1)
-    link_kind: str = Field(default="evidence", max_length=20)
+    link_kind: str = Field(default=ClaimLinkKind.EVIDENCE.value, max_length=20)
 
 
 class NodeClaimLinkResult(BaseModel):

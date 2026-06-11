@@ -108,6 +108,7 @@ class ClaimLinkKind(StrEnum):
     PARTIAL = "partial"
     INFERRED = "inferred"
     AI_PROPOSED = "ai_proposed"
+    EVIDENCE = "evidence"
 
 
 class ConflictKind(StrEnum):

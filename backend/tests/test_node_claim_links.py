@@ -124,3 +124,19 @@ def test_attach_rejects_claim_from_other_project(client, db):
         json={"claim_ids": [str(foreign.id)]},
     )
     assert resp.status_code == 422, resp.text
+
+
+def test_attach_defaults_link_kind_to_evidence(client, db):
+    proj, node, c1, _c2 = _seed_node_and_claims(db)
+    resp = client.post(
+        f"/api/v2/projects/{proj.id}/nodes/{node.id}/claims",
+        json={"claim_ids": [str(c1.id)]},  # link_kind omitted
+    )
+    assert resp.status_code == 201, resp.text
+    db.expire_all()
+    link = (
+        db.query(NodeClaimLink)
+        .filter(NodeClaimLink.node_id == node.id, NodeClaimLink.claim_id == c1.id)
+        .one()
+    )
+    assert link.link_kind == "evidence"
