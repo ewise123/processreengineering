@@ -162,6 +162,7 @@ function ResolutionControls({
   return (
     <div className="flex flex-col gap-1.5">
       <input
+        aria-label="Resolution notes"
         value={notes}
         onChange={(e) => setNotes(e.target.value)}
         placeholder="Resolution notes (optional)"

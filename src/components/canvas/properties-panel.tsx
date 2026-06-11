@@ -695,6 +695,14 @@ function AttachClaimDialog({
     },
   });
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const kinds = Array.from(
     new Set((data?.items ?? []).map((c) => c.kind))
   ).sort();
