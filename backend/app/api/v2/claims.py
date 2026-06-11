@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.enums import ConflictStatus, InputStatus
 from app.models.claim import Claim, ClaimCitation, ClaimConflict
 from app.models.input import Chunk, DocumentSection, Input
+from app.models.process import NodeClaimLink, ProcessModel, ProcessNode, ProcessVersion
 from app.models.project import Project
 from app.schemas.claim import (
     ClaimConflictRead,
@@ -172,6 +173,81 @@ def create_claim(
     db.commit()
     db.refresh(claim)
     return claim
+
+
+def _get_project_claim_or_404(claim_id: UUID, project: Project, db: Session) -> Claim:
+    claim = db.get(Claim, claim_id)
+    if claim is None or claim.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    return claim
+
+
+@router.patch("/claims/{claim_id}", response_model=ClaimRead)
+def update_claim(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    claim_id: UUID,
+    payload: ClaimUpdate,
+    db: Annotated[Session, Depends(get_db)],
+) -> Claim:
+    claim = _get_project_claim_or_404(claim_id, project, db)
+    if payload.kind is not None:
+        claim.kind = payload.kind
+    if payload.subject is not None:
+        claim.subject = payload.subject
+    if payload.normalized is not None:
+        claim.normalized = payload.normalized
+    db.commit()
+    db.refresh(claim)
+    return claim
+
+
+@router.get("/claims/{claim_id}/impact", response_model=ClaimImpact)
+def get_claim_impact(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    claim_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> ClaimImpact:
+    """Which process maps would have node evidence emptied if this claim were
+    deleted. Drives the frontend delete-confirm dialog."""
+    claim = _get_project_claim_or_404(claim_id, project, db)
+    rows = list(
+        db.execute(
+            select(ProcessModel.id, ProcessModel.name)
+            .join(ProcessVersion, ProcessVersion.model_id == ProcessModel.id)
+            .join(ProcessNode, ProcessNode.version_id == ProcessVersion.id)
+            .join(NodeClaimLink, NodeClaimLink.node_id == ProcessNode.id)
+            .where(
+                NodeClaimLink.claim_id == claim.id,
+                ProcessModel.project_id == project.id,
+                ProcessModel.deleted_at.is_(None),
+            )
+            .distinct()
+        ).all()
+    )
+    link_count = (
+        db.scalar(
+            select(func.count(NodeClaimLink.id)).where(
+                NodeClaimLink.claim_id == claim.id
+            )
+        )
+        or 0
+    )
+    return ClaimImpact(
+        claim_id=claim.id,
+        node_link_count=link_count,
+        maps=[ClaimImpactMap(model_id=r[0], name=r[1]) for r in rows],
+    )
+
+
+@router.delete("/claims/{claim_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_claim(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    claim_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    claim = _get_project_claim_or_404(claim_id, project, db)
+    db.delete(claim)
+    db.commit()
 
 
 @router.post("/detect-conflicts", response_model=ConflictDetectionResult)
