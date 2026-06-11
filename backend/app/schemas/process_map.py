@@ -257,3 +257,20 @@ class NodeClaimLinkResult(BaseModel):
     linked_claim_ids: list[UUID]
     added_count: int
     already_linked_count: int
+
+
+class BlankMapRequest(BaseModel):
+    """Body for POST /process-maps — create an empty editable map."""
+
+    name: str = Field(min_length=1, max_length=300)
+    level: str = Field(pattern=r"^(1|2|3|4|L1|L2|L3|L4)$")
+
+
+class BlankMapResult(BaseModel):
+    model_id: UUID
+    version_id: UUID
+    name: str
+    level: str
+    lane_id: UUID
+    start_node_id: UUID
+    end_node_id: UUID

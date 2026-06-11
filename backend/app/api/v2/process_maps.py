@@ -34,6 +34,8 @@ from app.models.claim import Claim, ClaimCitation, ClaimConflict
 from app.models.input import Chunk, DocumentSection, Input
 from app.schemas.process_map import (
     AiProposedStepResult,
+    BlankMapRequest,
+    BlankMapResult,
     ChatRequest,
     ChatResponse,
     CitationDetail,
@@ -449,6 +451,61 @@ def generate_process_map(
         edge_count=sum(len(v) for v in edges_by_source.values()),
         node_link_count=node_link_count,
         bpmn_xml_size=len(bpmn_xml),
+    )
+
+
+@router.post(
+    "/process-maps",
+    response_model=BlankMapResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_blank_map(
+    payload: BlankMapRequest,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> BlankMapResult:
+    """Create an empty, fully editable map: model + version + one default lane +
+    Start and End nodes. No AI, no claims required."""
+    model, version, lane = _create_model_and_version(
+        db,
+        project=project,
+        name=payload.name,
+        level=payload.level,
+        created_by=user.id,
+        notes="Created as a blank map.",
+    )
+    start = ProcessNode(
+        version_id=version.id,
+        lane_id=lane.id,
+        type=NodeType.EVENT_START.value,
+        name="Start",
+        position={"col": 0},
+        properties={"col": 0, "external_id": "Start_1"},
+    )
+    end = ProcessNode(
+        version_id=version.id,
+        lane_id=lane.id,
+        type=NodeType.EVENT_END.value,
+        name="End",
+        position={"col": 1},
+        properties={"col": 1, "external_id": "End_1"},
+    )
+    db.add(start)
+    db.add(end)
+    db.flush()
+    for node in (start, end):
+        node.properties = {**(node.properties or {}), LINEAGE_KEY: str(node.id)}
+    db.flush()
+    db.commit()
+    return BlankMapResult(
+        model_id=model.id,
+        version_id=version.id,
+        name=model.name,
+        level=model.level,
+        lane_id=lane.id,
+        start_node_id=start.id,
+        end_node_id=end.id,
     )
 
 
