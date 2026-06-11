@@ -14,7 +14,7 @@ class ProcessMapGenerateRequest(BaseModel):
     focus: str | None = Field(default=None, max_length=300)
     map_type: str | None = Field(default=None, pattern=r"^(current_state|future_state)?$")
     scope_input_ids: list[UUID] | None = None
-    segment_id: UUID | None = None
+    process_id: UUID | None = None
 
 
 class ProcessMapGenerateResult(BaseModel):
@@ -27,6 +27,10 @@ class ProcessMapGenerateResult(BaseModel):
     edge_count: int
     node_link_count: int
     bpmn_xml_size: int
+
+
+class ProcessMapAttachRequest(BaseModel):
+    process_id: UUID | None = None  # null detaches
 
 
 class ProcessLaneRead(BaseModel):
@@ -242,8 +246,9 @@ class ProcessModelRead(BaseModel):
     updated_at: datetime
     latest_version_id: UUID | None = None
     latest_version_number: int | None = None
-    latest_source_segment_id: UUID | None = None
-    latest_source_run_status: str | None = None
+    process_id: UUID | None = None
+    process_name: str | None = None
+    unreconciled_claim_count: int = 0
 
 
 class NodeClaimLinkRequest(BaseModel):

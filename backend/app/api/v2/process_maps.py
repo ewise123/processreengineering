@@ -56,6 +56,7 @@ from app.schemas.process_map import (
     ProcessEdgeRead,
     ProcessGraphRead,
     ProcessLaneRead,
+    ProcessMapAttachRequest,
     ProcessMapGenerateRequest,
     ProcessMapGenerateResult,
     ProcessModelRead,
@@ -125,7 +126,6 @@ def _create_model_and_version(
     created_by: UUID,
     bpmn_xml: str | None = None,
     notes: str | None = None,
-    source_segment_id: UUID | None = None,
     default_lane_name: str | None = "Process Team",
 ) -> tuple[ProcessModel, ProcessVersion, ProcessLane | None]:
     """Find-or-create the (project, level, name) ProcessModel, create the next
@@ -176,7 +176,6 @@ def _create_model_and_version(
         bpmn_xml=bpmn_xml,
         notes=notes,
         created_by=created_by,
-        source_segment_id=source_segment_id,
     )
     db.add(version)
     db.flush()
@@ -202,32 +201,19 @@ def generate_process_map(
 ) -> ProcessMapGenerateResult:
     # 1. Load claims (optionally scoped to a detection segment or input ids)
     claim_query = select(Claim).where(Claim.project_id == project.id)
-    if payload.segment_id is not None:
-        from app.enums import DetectionRunStatus
-        from app.models.process_detection import (
-            ClaimSegmentMembership,
-            DetectionRun,
-            ProcessSegment,
-        )
+    if payload.process_id is not None:
+        from app.models.process_inventory import Process, ProcessClaimLink
 
-        segment = db.get(ProcessSegment, payload.segment_id)
-        if segment is None or segment.project_id != project.id:
-            raise HTTPException(
-                status_code=404, detail="Detection segment not found"
-            )
-        run = db.get(DetectionRun, segment.detection_run_id)
-        if run is None or run.status != DetectionRunStatus.ACCEPTED.value:
-            raise HTTPException(
-                status_code=409,
-                detail="Segment belongs to a detection run that is not accepted.",
-            )
-        claim_query = (
-            claim_query.join(
-                ClaimSegmentMembership,
-                ClaimSegmentMembership.claim_id == Claim.id,
-            )
-            .where(ClaimSegmentMembership.segment_id == payload.segment_id)
-        )
+        process = db.get(Process, payload.process_id)
+        if (
+            process is None
+            or process.project_id != project.id
+            or process.deleted_at is not None
+        ):
+            raise HTTPException(status_code=404, detail="Process not found")
+        claim_query = claim_query.join(
+            ProcessClaimLink, ProcessClaimLink.claim_id == Claim.id
+        ).where(ProcessClaimLink.process_id == payload.process_id)
     elif payload.scope_input_ids:
         from app.models.claim import ClaimCitation
 
@@ -280,9 +266,10 @@ def generate_process_map(
         created_by=user.id,
         bpmn_xml=bpmn_xml,
         notes=f"Generated from {len(claims)} claim(s).",
-        source_segment_id=payload.segment_id,
         default_lane_name=None,  # AI path builds one lane per role
     )
+    if payload.process_id is not None:
+        model.process_id = payload.process_id
 
     # 6. Persist lanes (one per unique role in document order)
     role_order: list[str] = []
@@ -527,42 +514,100 @@ def list_process_maps(
     if not models:
         return []
 
-    # One row per model: the highest version_number row, via DISTINCT ON.
-    model_ids = [m.id for m in models]
-    from app.models.process_detection import DetectionRun, ProcessSegment
+    from app.models.process_inventory import Process, ProcessClaimLink
 
-    rows = db.execute(
-        select(
-            ProcessVersion.model_id,
-            ProcessVersion.id,
-            ProcessVersion.version_number,
-            ProcessVersion.source_segment_id,
-            DetectionRun.status,
-        )
-        .outerjoin(ProcessSegment, ProcessSegment.id == ProcessVersion.source_segment_id)
-        .outerjoin(DetectionRun, DetectionRun.id == ProcessSegment.detection_run_id)
+    model_ids = [m.id for m in models]
+
+    # Latest version per model (highest version_number) via DISTINCT ON.
+    latest_rows = db.execute(
+        select(ProcessVersion.model_id, ProcessVersion.id, ProcessVersion.version_number)
         .where(ProcessVersion.model_id.in_(model_ids))
-        .order_by(
-            ProcessVersion.model_id,
-            ProcessVersion.version_number.desc(),
-        )
+        .order_by(ProcessVersion.model_id, ProcessVersion.version_number.desc())
         .distinct(ProcessVersion.model_id)
     ).all()
-    latest_by_model: dict = {
-        row[0]: (row[1], row[2], row[3], row[4]) for row in rows
-    }
+    latest_by_model: dict = {row[0]: (row[1], row[2]) for row in latest_rows}
+
+    # Process name per model (process_id may be NULL for unlinked maps).
+    proc_ids = [m.process_id for m in models if m.process_id is not None]
+    proc_name_by_id: dict = {}
+    if proc_ids:
+        proc_name_by_id = {
+            r[0]: r[1]
+            for r in db.execute(
+                select(Process.id, Process.name).where(Process.id.in_(proc_ids))
+            ).all()
+        }
+
+    # Unreconciled claim count per model: claims linked to the model's process
+    # but NOT cited by any node in the model's LATEST version. Computed per
+    # model because the "latest version" differs per model.
+    def _unreconciled(model: ProcessModel) -> int:
+        if model.process_id is None:
+            return 0
+        latest = latest_by_model.get(model.id)
+        if latest is None:
+            # Process has links but no version yet — all linked claims are unreconciled.
+            return db.scalar(
+                select(func.count(ProcessClaimLink.id)).where(
+                    ProcessClaimLink.process_id == model.process_id
+                )
+            ) or 0
+        version_id = latest[0]
+        cited_subq = (
+            select(NodeClaimLink.claim_id)
+            .join(ProcessNode, ProcessNode.id == NodeClaimLink.node_id)
+            .where(ProcessNode.version_id == version_id)
+        )
+        return db.scalar(
+            select(func.count(ProcessClaimLink.id))
+            .where(
+                ProcessClaimLink.process_id == model.process_id,
+                ProcessClaimLink.claim_id.notin_(cited_subq),
+            )
+        ) or 0
 
     return [
         ProcessModelRead.model_validate(m).model_copy(
             update={
-                "latest_version_id": latest_by_model.get(m.id, (None, None, None, None))[0],
-                "latest_version_number": latest_by_model.get(m.id, (None, None, None, None))[1],
-                "latest_source_segment_id": latest_by_model.get(m.id, (None, None, None, None))[2],
-                "latest_source_run_status": latest_by_model.get(m.id, (None, None, None, None))[3],
+                "latest_version_id": latest_by_model.get(m.id, (None, None))[0],
+                "latest_version_number": latest_by_model.get(m.id, (None, None))[1],
+                "process_id": m.process_id,
+                "process_name": proc_name_by_id.get(m.process_id),
+                "unreconciled_claim_count": int(_unreconciled(m)),
             }
         )
         for m in models
     ]
+
+
+@router.patch("/process-maps/{model_id}", response_model=ProcessModelRead)
+def attach_process_to_map(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    payload: ProcessMapAttachRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessModelRead:
+    """Attach (or detach, with process_id=null) a process to an existing map.
+    Used to re-home migrated 'unlinked maps' onto a process."""
+    from app.models.process_inventory import Process
+
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id or model.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Process map not found")
+    if payload.process_id is not None:
+        proc = db.get(Process, payload.process_id)
+        if proc is None or proc.project_id != project.id or proc.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Process not found")
+    model.process_id = payload.process_id
+    db.commit()
+    db.refresh(model)
+    proc_name = None
+    if model.process_id is not None:
+        proc = db.get(Process, model.process_id)
+        proc_name = proc.name if proc else None
+    return ProcessModelRead.model_validate(model).model_copy(
+        update={"process_id": model.process_id, "process_name": proc_name}
+    )
 
 
 def _check_node_in_project(
