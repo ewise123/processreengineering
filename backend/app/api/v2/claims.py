@@ -364,7 +364,8 @@ def resolve_conflict(
     if claim_a is None or claim_a.project_id != project.id:
         raise HTTPException(status_code=404, detail="Conflict not found")
     conflict.resolution_status = payload.resolution_status
-    conflict.resolution_notes = payload.resolution_notes
+    if "resolution_notes" in payload.model_fields_set:
+        conflict.resolution_notes = payload.resolution_notes
     db.commit()
     db.refresh(conflict)
     return conflict

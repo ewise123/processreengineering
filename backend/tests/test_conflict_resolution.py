@@ -75,3 +75,35 @@ def test_resolve_conflict_cross_project_404(client, db):
         json={"resolution_status": "dismissed"},
     )
     assert resp.status_code == 404, resp.text
+
+
+def test_resolve_conflict_omitting_notes_preserves_existing(client, db):
+    proj, conflict = _seed_conflict(db)
+    # First, a user sets a note via a full PATCH.
+    r1 = client.patch(
+        f"/api/v2/projects/{proj.id}/conflicts/{conflict.id}",
+        json={"resolution_status": "resolved", "resolution_notes": "Keep this note"},
+    )
+    assert r1.status_code == 200, r1.text
+    # Later, a status-only PATCH (e.g. from the canvas) must NOT wipe the note.
+    r2 = client.patch(
+        f"/api/v2/projects/{proj.id}/conflicts/{conflict.id}",
+        json={"resolution_status": "dismissed"},
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["resolution_status"] == "dismissed"
+    assert r2.json()["resolution_notes"] == "Keep this note"  # preserved
+
+
+def test_resolve_conflict_explicit_null_clears_notes(client, db):
+    proj, conflict = _seed_conflict(db)
+    client.patch(
+        f"/api/v2/projects/{proj.id}/conflicts/{conflict.id}",
+        json={"resolution_status": "resolved", "resolution_notes": "temp"},
+    )
+    r = client.patch(
+        f"/api/v2/projects/{proj.id}/conflicts/{conflict.id}",
+        json={"resolution_status": "resolved", "resolution_notes": None},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["resolution_notes"] is None  # explicit null still clears

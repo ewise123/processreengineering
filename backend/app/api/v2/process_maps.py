@@ -1138,6 +1138,7 @@ def get_node_issues(
             NodeIssueDetail(
                 conflict_id=c.id,
                 kind=c.kind,
+                detection_reason=c.detection_reason,
                 resolution_status=c.resolution_status,
                 detected_by=c.detected_by,
                 resolution_notes=c.resolution_notes,

@@ -152,6 +152,7 @@ class NodeIssueDetail(BaseModel):
 
     conflict_id: UUID
     kind: str
+    detection_reason: str | None
     resolution_status: str
     detected_by: str
     resolution_notes: str | None
