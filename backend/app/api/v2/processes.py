@@ -2,21 +2,29 @@
 inbox. Replaces the deleted process_detection router."""
 from datetime import datetime, timezone
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.v2.deps import get_current_user, get_project_or_404
 from app.db.session import get_db
-from app.enums import AssignedBy, ProcessStatus
+from app.enums import (
+    AssignedBy,
+    ProcessStatus,
+    SuggestionKind,
+    SuggestionOutcome,
+    SuggestionStatus,
+)
 from app.models.claim import Claim
 from app.models.identity import User
 from app.models.process import ProcessModel
-from app.models.process_inventory import Process, ProcessClaimLink
+from app.models.process_inventory import Process, ProcessClaimLink, ProcessSuggestion
 from app.models.project import Project
 from app.schemas.process import (
+    AcceptSuggestionResult,
+    BatchAcceptResult,
     BulkAssignResult,
     BulkUnassignResult,
     ClaimIdList,
@@ -24,6 +32,14 @@ from app.schemas.process import (
     ProcessCreate,
     ProcessRead,
     ProcessUpdate,
+    SuggestBatchResult,
+    SuggestionRead,
+    SuggestProcessesRequest,
+)
+from app.services.process_detection import (
+    detect_segments_from_claims,
+    _chunk_ref_for_claim,
+    _load_claims_for_detection,
 )
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["processes"])
@@ -211,3 +227,280 @@ def list_unassigned_claims(
         .order_by(Claim.kind, Claim.created_at)
     ).all()
     return [ClaimRef(id=r[0], kind=r[1], subject=r[2], source=r[3]) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Suggest processes — runs the pure clustering, writes process_discovery rows.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/suggest-processes",
+    response_model=SuggestBatchResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def suggest_processes(
+    payload: SuggestProcessesRequest,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> SuggestBatchResult:
+    claims = _load_claims_for_detection(db, project.id, payload.scope_input_ids)
+    if not claims:
+        raise HTTPException(
+            status_code=422,
+            detail="No claims found for this project (scope). Run extract-claims first.",
+        )
+
+    chunk_ref_cache: dict = {}
+    claim_dicts = [
+        {
+            "kind": c.kind,
+            "subject": c.subject,
+            "chunk_ref": _chunk_ref_for_claim(db, c.id, chunk_ref_cache),
+        }
+        for c in claims
+    ]
+    try:
+        result = detect_segments_from_claims(claim_dicts)
+    except RuntimeError as exc:
+        # LLM failure: nothing written, surface as 503 (suggestions only persist
+        # after a successful parse).
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if not result.segments:
+        raise HTTPException(
+            status_code=422,
+            detail="The model could not identify any distinct processes in the supplied claims.",
+        )
+
+    by_index = dict(enumerate(claims))
+    batch_id = uuid4()
+    count = 0
+    for det in result.segments:
+        seg_claim_ids = [
+            str(by_index[i].id) for i in det.claim_refs if i in by_index
+        ]
+        db.add(
+            ProcessSuggestion(
+                batch_id=batch_id,
+                project_id=project.id,
+                kind=SuggestionKind.PROCESS_DISCOVERY.value,
+                process_id=None,
+                op="create_process",
+                payload={
+                    "name": det.name,
+                    "description": det.description,
+                    "claim_ids": seg_claim_ids,
+                },
+                rationale=result.reasoning_summary,
+                confidence=det.confidence,
+                status=SuggestionStatus.PENDING.value,
+                model_used=result.model_used,
+                prompt_tokens=result.prompt_tokens,
+                output_tokens=result.output_tokens,
+            )
+        )
+        count += 1
+    db.commit()
+    return SuggestBatchResult(batch_id=batch_id, suggestion_count=count)
+
+
+@router.get("/process-suggestions", response_model=list[SuggestionRead])
+def list_suggestions(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+    status_: Annotated[str | None, Query(alias="status")] = None,
+    kind: Annotated[str | None, Query()] = None,
+) -> list[ProcessSuggestion]:
+    q = select(ProcessSuggestion).where(ProcessSuggestion.project_id == project.id)
+    if status_ is not None:
+        q = q.where(ProcessSuggestion.status == status_)
+    if kind is not None:
+        q = q.where(ProcessSuggestion.kind == kind)
+    q = q.order_by(ProcessSuggestion.created_at)
+    return list(db.scalars(q).all())
+
+
+def _get_suggestion(db: Session, project_id: UUID, suggestion_id: UUID) -> ProcessSuggestion:
+    sug = db.get(ProcessSuggestion, suggestion_id)
+    if sug is None or sug.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    return sug
+
+
+def _link_claims(
+    db: Session, process: Process, claim_ids: list[str], project_id: UUID
+) -> int:
+    """Idempotently link the given claim ids (that belong to project) to the
+    process. Returns the number of new links written."""
+    if not claim_ids:
+        return 0
+    valid = set(
+        db.scalars(
+            select(Claim.id).where(
+                Claim.id.in_(claim_ids), Claim.project_id == project_id
+            )
+        ).all()
+    )
+    existing = set(
+        db.scalars(
+            select(ProcessClaimLink.claim_id).where(
+                ProcessClaimLink.process_id == process.id,
+                ProcessClaimLink.claim_id.in_(valid),
+            )
+        ).all()
+    )
+    linked = 0
+    for cid in valid - existing:
+        db.add(
+            ProcessClaimLink(
+                process_id=process.id,
+                claim_id=cid,
+                assigned_by=AssignedBy.AI_ACCEPTED.value,
+            )
+        )
+        linked += 1
+    return linked
+
+
+def apply_suggestion(
+    db: Session, project: Project, sug: ProcessSuggestion
+) -> AcceptSuggestionResult:
+    """Dispatch one accepted suggestion to its mutation. Phase 2 (sp7b)
+    handles only the two discovery ops; reconcile ops (add_step, recite_node,
+    flag_stale_node, relabel_node) are added by sp7c — they raise 422 here.
+
+    Returns the result; the caller is responsible for stamping status/outcome
+    and committing. A deleted target → graceful TARGET_GONE no-op (no raise),
+    mirroring apply_proposed_step silently dropping unknown claim ids.
+    """
+    op = sug.op
+    payload = sug.payload or {}
+
+    if op == "create_process":
+        proc = Process(
+            project_id=project.id,
+            name=str(payload.get("name", "")).strip() or "Untitled process",
+            description=str(payload.get("description", "")),
+            status=ProcessStatus.ACTIVE.value,
+        )
+        max_index = db.scalar(
+            select(func.coalesce(func.max(Process.order_index), -1)).where(
+                Process.project_id == project.id, Process.deleted_at.is_(None)
+            )
+        )
+        proc.order_index = (max_index if max_index is not None else -1) + 1
+        db.add(proc)
+        db.flush()
+        linked = _link_claims(db, proc, payload.get("claim_ids", []), project.id)
+        return AcceptSuggestionResult(
+            suggestion_id=sug.id,
+            status=SuggestionStatus.ACCEPTED.value,
+            outcome=SuggestionOutcome.APPLIED.value,
+            process_id=proc.id,
+            linked=linked,
+        )
+
+    if op == "assign_claims":
+        target_id = payload.get("process_id") or sug.process_id
+        proc = db.get(Process, target_id) if target_id else None
+        if proc is None or proc.project_id != project.id or proc.deleted_at is not None:
+            # Target process vanished — graceful no-op.
+            return AcceptSuggestionResult(
+                suggestion_id=sug.id,
+                status=SuggestionStatus.ACCEPTED.value,
+                outcome=SuggestionOutcome.TARGET_GONE.value,
+            )
+        linked = _link_claims(db, proc, payload.get("claim_ids", []), project.id)
+        return AcceptSuggestionResult(
+            suggestion_id=sug.id,
+            status=SuggestionStatus.ACCEPTED.value,
+            outcome=SuggestionOutcome.APPLIED.value,
+            process_id=proc.id,
+            linked=linked,
+        )
+
+    # Reconcile ops are not implemented in Phase 2; sp7c extends this dispatcher.
+    raise HTTPException(
+        status_code=422,
+        detail=f"Suggestion op '{op}' is not supported in this phase.",
+    )
+
+
+@router.post(
+    "/process-suggestions/{suggestion_id}/accept",
+    response_model=AcceptSuggestionResult,
+)
+def accept_suggestion(
+    suggestion_id: UUID,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AcceptSuggestionResult:
+    sug = _get_suggestion(db, project.id, suggestion_id)
+    if sug.status != SuggestionStatus.PENDING.value:
+        raise HTTPException(status_code=409, detail="Suggestion is not pending.")
+    # apply_suggestion raises 422 for unknown ops BEFORE we touch status, so a
+    # bad op leaves the row pending (asserted in the test).
+    result = apply_suggestion(db, project, sug)
+    sug.status = result.status
+    sug.outcome = result.outcome
+    sug.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+    return result
+
+
+@router.post(
+    "/process-suggestions/{suggestion_id}/reject",
+    response_model=AcceptSuggestionResult,
+)
+def reject_suggestion(
+    suggestion_id: UUID,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> AcceptSuggestionResult:
+    sug = _get_suggestion(db, project.id, suggestion_id)
+    if sug.status != SuggestionStatus.PENDING.value:
+        raise HTTPException(status_code=409, detail="Suggestion is not pending.")
+    sug.status = SuggestionStatus.REJECTED.value
+    sug.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+    return AcceptSuggestionResult(
+        suggestion_id=sug.id, status=sug.status, outcome=""
+    )
+
+
+@router.post(
+    "/process-suggestion-batches/{batch_id}/accept",
+    response_model=BatchAcceptResult,
+)
+def accept_batch(
+    batch_id: UUID,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> BatchAcceptResult:
+    pending = list(
+        db.scalars(
+            select(ProcessSuggestion)
+            .where(
+                ProcessSuggestion.project_id == project.id,
+                ProcessSuggestion.batch_id == batch_id,
+                ProcessSuggestion.status == SuggestionStatus.PENDING.value,
+            )
+            .order_by(ProcessSuggestion.created_at)
+        ).all()
+    )
+    accepted = 0
+    skipped = 0
+    for sug in pending:
+        try:
+            result = apply_suggestion(db, project, sug)
+        except HTTPException:
+            # Unsupported op in this phase — skip, leave pending.
+            skipped += 1
+            continue
+        sug.status = result.status
+        sug.outcome = result.outcome
+        sug.resolved_at = datetime.now(timezone.utc)
+        accepted += 1
+    db.commit()
+    return BatchAcceptResult(batch_id=batch_id, accepted=accepted, skipped=skipped)
