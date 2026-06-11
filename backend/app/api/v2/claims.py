@@ -345,3 +345,26 @@ def list_conflicts(
         limit=limit,
         offset=offset,
     )
+
+
+@router.patch(
+    "/conflicts/{conflict_id}", response_model=ClaimConflictRead
+)
+def resolve_conflict(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    conflict_id: UUID,
+    payload: ConflictResolve,
+    db: Annotated[Session, Depends(get_db)],
+) -> ClaimConflict:
+    conflict = db.get(ClaimConflict, conflict_id)
+    if conflict is None:
+        raise HTTPException(status_code=404, detail="Conflict not found")
+    # Project scope: claim_a must belong to this project.
+    claim_a = db.get(Claim, conflict.claim_a_id)
+    if claim_a is None or claim_a.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Conflict not found")
+    conflict.resolution_status = payload.resolution_status
+    conflict.resolution_notes = payload.resolution_notes
+    db.commit()
+    db.refresh(conflict)
+    return conflict
