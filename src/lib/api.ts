@@ -4,12 +4,18 @@ import type {
   AiEditResponse,
   AiProposedStepRequest,
   AiProposedStepResult,
+  BlankMapRequest,
+  BlankMapResult,
   ChatRequest,
   ChatResponse,
   Claim,
   ClaimConflict,
+  ClaimCreate,
   ClaimExtractionResult,
+  ClaimImpact,
+  ClaimUpdate,
   ConflictDetectionResult,
+  ConflictResolve,
   DetectProcessesRequest,
   DetectionRunDetail,
   DetectionRunListRow,
@@ -21,6 +27,8 @@ import type {
   LaneCreate,
   LaneUpdate,
   NodeCitations,
+  NodeClaimLinkRequest,
+  NodeClaimLinkResult,
   NodeCreate,
   NodeIssue,
   NodeIssuesDetail,
@@ -165,6 +173,24 @@ export const api = {
     const suffix = qs.toString() ? `?${qs}` : "";
     return request<Page<Claim>>(`/api/v2/projects/${projectId}/claims${suffix}`);
   },
+  createClaim: (projectId: UUID, body: ClaimCreate) =>
+    request<Claim>(`/api/v2/projects/${projectId}/claims`, {
+      method: "POST",
+      json: body,
+    }),
+  updateClaim: (projectId: UUID, claimId: UUID, body: ClaimUpdate) =>
+    request<Claim>(`/api/v2/projects/${projectId}/claims/${claimId}`, {
+      method: "PATCH",
+      json: body,
+    }),
+  deleteClaim: (projectId: UUID, claimId: UUID) =>
+    request<void>(`/api/v2/projects/${projectId}/claims/${claimId}`, {
+      method: "DELETE",
+    }),
+  getClaimImpact: (projectId: UUID, claimId: UUID) =>
+    request<ClaimImpact>(
+      `/api/v2/projects/${projectId}/claims/${claimId}/impact`
+    ),
   detectConflicts: (projectId: UUID) =>
     request<ConflictDetectionResult>(
       `/api/v2/projects/${projectId}/detect-conflicts`,
@@ -183,6 +209,11 @@ export const api = {
       `/api/v2/projects/${projectId}/conflicts${suffix}`
     );
   },
+  resolveConflict: (projectId: UUID, conflictId: UUID, body: ConflictResolve) =>
+    request<ClaimConflict>(
+      `/api/v2/projects/${projectId}/conflicts/${conflictId}`,
+      { method: "PATCH", json: body }
+    ),
 
   // Process maps
   listProcessMaps: (projectId: UUID) =>
@@ -192,6 +223,11 @@ export const api = {
       `/api/v2/projects/${projectId}/generate-process-map`,
       { method: "POST", json: payload }
     ),
+  createBlankMap: (projectId: UUID, body: BlankMapRequest) =>
+    request<BlankMapResult>(`/api/v2/projects/${projectId}/process-maps`, {
+      method: "POST",
+      json: body,
+    }),
   getProcessGraph: (projectId: UUID, modelId: UUID, versionId: UUID) =>
     request<ProcessGraph>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}`
@@ -297,6 +333,20 @@ export const api = {
   getNodeCitations: (projectId: UUID, nodeId: UUID) =>
     request<NodeCitations>(
       `/api/v2/projects/${projectId}/nodes/${nodeId}/citations`
+    ),
+  attachNodeClaims: (
+    projectId: UUID,
+    nodeId: UUID,
+    body: NodeClaimLinkRequest
+  ) =>
+    request<NodeClaimLinkResult>(
+      `/api/v2/projects/${projectId}/nodes/${nodeId}/claims`,
+      { method: "POST", json: body }
+    ),
+  detachNodeClaim: (projectId: UUID, nodeId: UUID, claimId: UUID) =>
+    request<void>(
+      `/api/v2/projects/${projectId}/nodes/${nodeId}/claims/${claimId}`,
+      { method: "DELETE" }
     ),
   getNodeIssues: (projectId: UUID, nodeId: UUID) =>
     request<NodeIssuesDetail>(

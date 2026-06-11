@@ -71,6 +71,7 @@ export interface Claim {
   subject: string;
   normalized: Record<string, unknown>;
   confidence: number | null;
+  source: string;
   created_at: string;
   updated_at: string;
 }
@@ -83,6 +84,7 @@ export interface ClaimConflict {
   detected_by: string;
   resolution_status: string;
   resolution_notes: string | null;
+  detection_reason: string | null;
   created_at: string;
 }
 
@@ -517,4 +519,59 @@ export interface ViewerTarget {
   inputName: string;
   sectionRef: Record<string, unknown> | null;
   quote: string | null;
+}
+
+export interface ClaimCreate {
+  kind: string;
+  subject: string;
+  normalized?: Record<string, unknown>;
+}
+
+export interface ClaimUpdate {
+  kind?: string;
+  subject?: string;
+  normalized?: Record<string, unknown>;
+}
+
+export interface ClaimImpactMap {
+  model_id: UUID;
+  name: string;
+}
+
+export interface ClaimImpact {
+  claim_id: UUID;
+  node_link_count: number;
+  maps: ClaimImpactMap[];
+}
+
+export interface ConflictResolve {
+  resolution_status: string;
+  resolution_notes?: string | null;
+}
+
+export interface NodeClaimLinkRequest {
+  claim_ids: UUID[];
+  link_kind?: string;
+}
+
+export interface NodeClaimLinkResult {
+  node_id: UUID;
+  linked_claim_ids: UUID[];
+  added_count: number;
+  already_linked_count: number;
+}
+
+export interface BlankMapRequest {
+  name: string;
+  level: string;
+}
+
+export interface BlankMapResult {
+  model_id: UUID;
+  version_id: UUID;
+  name: string;
+  level: string;
+  lane_id: UUID;
+  start_node_id: UUID;
+  end_node_id: UUID;
 }
