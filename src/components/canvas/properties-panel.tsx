@@ -7,7 +7,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
 import type {
@@ -106,6 +106,17 @@ export function PropertiesPanel({
   useEffect(() => {
     setDescriptionDraft(selected.description ?? "");
   }, [selected.id, selected.description]);
+
+  const qc = useQueryClient();
+  const [attachOpen, setAttachOpen] = useState(false);
+  const detach = useMutation({
+    mutationFn: (claimId: UUID) =>
+      api.detachNodeClaim(projectId, selected.id, claimId),
+    onSuccess: () =>
+      qc.invalidateQueries({
+        queryKey: ["node-citations", projectId, selected.id],
+      }),
+  });
 
   const handleDelete = async () => {
     if (!onDelete || deleting) return;
@@ -317,7 +328,16 @@ export function PropertiesPanel({
               {!issuesLoading && issues.length > 0 && (
                 <ul className="space-y-1.5">
                   {issues.map((iss) => (
-                    <IssueCard key={iss.conflict_id} issue={iss} />
+                    <IssueCard
+                      key={iss.conflict_id}
+                      issue={iss}
+                      projectId={projectId}
+                      onResolved={() => {
+                        qc.invalidateQueries({
+                          queryKey: ["node-issues", projectId, selected.id],
+                        });
+                      }}
+                    />
                   ))}
                 </ul>
               )}
@@ -348,7 +368,14 @@ export function PropertiesPanel({
           </span>
         </button>
         {provenanceExpanded && (
-          <div className="mt-1.5">
+          <div className="mt-1.5 space-y-2">
+            <button
+              type="button"
+              onClick={() => setAttachOpen(true)}
+              className="w-full rounded-md border border-dashed border-slate-300 px-2 py-1 text-[10.5px] font-semibold text-slate-500 hover:border-violet-300 hover:text-violet-700"
+            >
+              + Attach claim
+            </button>
             {isLoading && (
               <div className="text-[11px] italic text-slate-400">Loading…</div>
             )}
@@ -357,18 +384,34 @@ export function PropertiesPanel({
                 No source citations for this node.
               </div>
             )}
-            <ul className="space-y-1.5">
-              {claims.flatMap((claim) =>
-                claim.citations.map((cit) => (
-                  <CitationCard
-                    key={cit.citation_id}
-                    kind={claim.kind}
-                    citation={cit}
-                    onOpenSource={onOpenSource}
-                  />
-                ))
-              )}
-            </ul>
+            {claims.map((claim) => (
+              <div key={claim.id} className="space-y-1">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="truncate text-[10.5px] font-medium text-slate-600">
+                    {claim.subject}
+                  </span>
+                  <button
+                    type="button"
+                    title="Detach this claim from the node"
+                    disabled={detach.isPending}
+                    onClick={() => detach.mutate(claim.id)}
+                    className="rounded px-1 text-[11px] text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+                  >
+                    ×
+                  </button>
+                </div>
+                <ul className="space-y-1.5">
+                  {claim.citations.map((cit) => (
+                    <CitationCard
+                      key={cit.citation_id}
+                      kind={claim.kind}
+                      citation={cit}
+                      onOpenSource={onOpenSource}
+                    />
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -439,6 +482,19 @@ export function PropertiesPanel({
       </div>
 
       </div>{/* end scrollable body */}
+      {attachOpen && (
+        <AttachClaimDialog
+          projectId={projectId}
+          nodeId={selected.id}
+          linkedClaimIds={new Set(claims.map((c) => c.id))}
+          onClose={() => setAttachOpen(false)}
+          onAttached={() =>
+            qc.invalidateQueries({
+              queryKey: ["node-citations", projectId, selected.id],
+            })
+          }
+        />
+      )}
     </div>
   );
 }
@@ -519,9 +575,24 @@ const CONFLICT_KIND_LABEL: Record<string, string> = {
   missing_path: "Missing path",
 };
 
-function IssueCard({ issue }: { issue: NodeIssueDetail }) {
+function IssueCard({
+  issue,
+  projectId,
+  onResolved,
+}: {
+  issue: NodeIssueDetail;
+  projectId: UUID;
+  onResolved: () => void;
+}) {
   const kindLabel =
     CONFLICT_KIND_LABEL[issue.kind] ?? issue.kind.replace(/_/g, " ");
+  const resolve = useMutation({
+    mutationFn: (status: string) =>
+      api.resolveConflict(projectId, issue.conflict_id, {
+        resolution_status: status,
+      }),
+    onSuccess: onResolved,
+  });
   return (
     <li className="rounded-md border border-rose-200 bg-white px-2 py-1.5">
       <div className="flex items-center justify-between gap-2">
@@ -544,6 +615,24 @@ function IssueCard({ issue }: { issue: NodeIssueDetail }) {
           {issue.resolution_notes}
         </div>
       )}
+      <div className="mt-1.5 flex gap-1">
+        <button
+          type="button"
+          disabled={resolve.isPending}
+          onClick={() => resolve.mutate("resolved")}
+          className="flex-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+        >
+          Resolve
+        </button>
+        <button
+          type="button"
+          disabled={resolve.isPending}
+          onClick={() => resolve.mutate("dismissed")}
+          className="flex-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+        >
+          Dismiss
+        </button>
+      </div>
     </li>
   );
 }
@@ -570,6 +659,143 @@ function ClaimLine({
       </div>
       <div className="mt-0.5 text-[10.5px] leading-snug text-slate-700">
         {claim.subject}
+      </div>
+    </div>
+  );
+}
+
+function AttachClaimDialog({
+  projectId,
+  nodeId,
+  linkedClaimIds,
+  onClose,
+  onAttached,
+}: {
+  projectId: UUID;
+  nodeId: UUID;
+  linkedClaimIds: Set<UUID>;
+  onClose: () => void;
+  onAttached: () => void;
+}) {
+  const [kindFilter, setKindFilter] = useState<string>("all");
+  const [selected, setSelected] = useState<Set<UUID>>(new Set());
+  const { data, isLoading } = useQuery({
+    queryKey: ["attach-claims", projectId],
+    queryFn: () => api.listClaims(projectId, { limit: 500 }),
+  });
+  const attach = useMutation({
+    mutationFn: () =>
+      api.attachNodeClaims(projectId, nodeId, {
+        claim_ids: Array.from(selected),
+        link_kind: "evidence",
+      }),
+    onSuccess: () => {
+      onAttached();
+      onClose();
+    },
+  });
+
+  const kinds = Array.from(
+    new Set((data?.items ?? []).map((c) => c.kind))
+  ).sort();
+  const visible = (data?.items ?? []).filter(
+    (c) => !linkedClaimIds.has(c.id) && (kindFilter === "all" || c.kind === kindFilter)
+  );
+
+  const toggle = (cid: UUID) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(cid)) next.delete(cid);
+      else next.add(cid);
+      return next;
+    });
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[70vh] w-[420px] flex-col rounded-lg border border-slate-200 bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
+          <span className="text-sm font-semibold text-slate-800">
+            Attach claims to this node
+          </span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-700"
+          >
+            ×
+          </button>
+        </div>
+        <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2">
+          <label className="text-[11px] text-slate-500">Kind</label>
+          <select
+            value={kindFilter}
+            onChange={(e) => setKindFilter(e.target.value)}
+            className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+          >
+            <option value="all">All</option>
+            {kinds.map((k) => (
+              <option key={k} value={k}>
+                {k.replace(/_/g, " ")}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
+          {isLoading && (
+            <div className="text-[11px] italic text-slate-400">Loading…</div>
+          )}
+          {!isLoading && visible.length === 0 && (
+            <div className="py-6 text-center text-[11px] text-slate-400">
+              No unlinked claims for this filter.
+            </div>
+          )}
+          <ul className="space-y-1">
+            {visible.map((c) => (
+              <li key={c.id}>
+                <label className="flex cursor-pointer items-start gap-2 rounded-md border border-slate-200 px-2 py-1.5 hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(c.id)}
+                    onChange={() => toggle(c.id)}
+                    className="mt-0.5"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[10px] uppercase tracking-wide text-slate-400">
+                      {c.kind.replace(/_/g, " ")}
+                    </span>
+                    <span className="block text-[11.5px] leading-snug text-slate-700">
+                      {c.subject}
+                    </span>
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-100 px-3 py-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-slate-200 px-3 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={selected.size === 0 || attach.isPending}
+            onClick={() => attach.mutate()}
+            className="rounded-md bg-violet-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+          >
+            {attach.isPending ? "Attaching…" : `Attach ${selected.size || ""}`}
+          </button>
+        </div>
       </div>
     </div>
   );
