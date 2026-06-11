@@ -67,7 +67,14 @@ def extract_input_claims(
         ).all()
     )
     if prior_claim_ids:
-        db.execute(delete(Claim).where(Claim.id.in_(prior_claim_ids)))
+        # Only wipe claims this extractor produced — manual claims that happen
+        # to cite the same chunk must survive a re-extraction.
+        db.execute(
+            delete(Claim).where(
+                Claim.id.in_(prior_claim_ids),
+                Claim.source == "extracted",
+            )
+        )
     inp.status = InputStatus.EXTRACTING.value
     inp.chunks_total = len(chunks)
     inp.chunks_processed = 0
@@ -303,7 +310,7 @@ def run_conflict_detection(
                 kind=d.kind,
                 detected_by="ai",
                 resolution_status=ConflictStatus.DETECTED.value,
-                resolution_notes=d.reason,
+                detection_reason=d.reason,
             )
         )
         new_count += 1

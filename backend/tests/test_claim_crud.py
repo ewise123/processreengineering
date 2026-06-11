@@ -172,3 +172,78 @@ def test_delete_claim_cascades_links(client, db):
         db.query(NodeClaimLink).filter(NodeClaimLink.node_id == node.id).count()
     )
     assert remaining == 0  # FK cascade dropped the link
+
+
+from app.api.v2.claims import extract_input_claims, run_conflict_detection
+from app.models.claim import ClaimCitation, ClaimConflict
+
+
+def _seed_input_with_chunk(db, proj) -> tuple[Input, Chunk]:
+    user = db.query(User).filter(User.email == "dev@local").first()
+    inp = Input(
+        project_id=proj.id, type="interview_transcript", name="i.txt",
+        file_path="i.txt", file_size=10, mime_type="text/plain",
+        status="parsed", uploaded_by=user.id,
+    )
+    db.add(inp)
+    db.flush()
+    sec = DocumentSection(input_id=inp.id, kind="page", order_index=0, ref={}, text="x")
+    db.add(sec)
+    db.flush()
+    ch = Chunk(section_id=sec.id, char_start=0, char_end=5, text="a", tokens=1)
+    db.add(ch)
+    db.commit()
+    return inp, ch
+
+
+def test_extraction_wipe_keeps_manual_claims(client, db, monkeypatch):
+    """A manual claim that happens to be cited on a chunk of the re-extracted
+    input must survive; only extracted claims for that input are wiped."""
+    import app.api.v2.claims as claims_mod
+
+    proj = _seed_project(db)
+    inp, ch = _seed_input_with_chunk(db, proj)
+
+    extracted = _seed_claim(db, proj, subject="extracted one", source="extracted")
+    manual = _seed_claim(db, proj, subject="manual one", source="manual")
+    db.add(ClaimCitation(claim_id=extracted.id, chunk_id=ch.id, quote="a"))
+    db.add(ClaimCitation(claim_id=manual.id, chunk_id=ch.id, quote="a"))
+    db.commit()
+
+    # Stub the LLM extractor so re-extraction adds nothing new.
+    monkeypatch.setattr(claims_mod, "extract_claims_from_text", lambda text: [])
+
+    resp = client.post(
+        f"/api/v2/projects/{proj.id}/inputs/{inp.id}/extract-claims"
+    )
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    assert db.get(Claim, extracted.id) is None  # extracted wiped
+    assert db.get(Claim, manual.id) is not None  # manual preserved
+
+
+def test_conflict_detection_writes_detection_reason_not_notes(client, db, monkeypatch):
+    import app.api.v2.claims as claims_mod
+    from app.services.conflict_detection import DetectedConflict
+
+    proj = _seed_project(db)
+    a = _seed_claim(db, proj, kind="threshold", subject="limit is 500")
+    b = _seed_claim(db, proj, kind="threshold", subject="limit is 1000")
+    monkeypatch.setattr(
+        claims_mod,
+        "detect_conflicts",
+        lambda summaries: [
+            DetectedConflict(
+                claim_a_index=0,
+                claim_b_index=1,
+                kind="threshold_mismatch",
+                reason="500 vs 1000",
+            )
+        ],
+    )
+    resp = client.post(f"/api/v2/projects/{proj.id}/detect-conflicts")
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    conflict = db.query(ClaimConflict).one()
+    assert conflict.detection_reason == "500 vs 1000"
+    assert conflict.resolution_notes is None  # user notes column stays free
