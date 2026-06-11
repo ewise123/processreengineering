@@ -183,8 +183,32 @@ class JobStatus(StrEnum):
     FAILED = "failed"
 
 
-class DetectionRunStatus(StrEnum):
-    DRAFT = "draft"
-    ACCEPTED = "accepted"
+class ProcessStatus(StrEnum):
+    ACTIVE = "active"
     ARCHIVED = "archived"
-    SUPERSEDED = "superseded"
+
+
+class AssignedBy(StrEnum):
+    USER = "user"
+    AI_ACCEPTED = "ai_accepted"
+    INHERITED = "inherited"
+
+
+class SuggestionKind(StrEnum):
+    PROCESS_DISCOVERY = "process_discovery"
+    MAP_RECONCILE = "map_reconcile"
+
+
+class SuggestionStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
+class SuggestionOutcome(StrEnum):
+    """Resolution detail for an accepted suggestion. APPLIED is the normal
+    path; TARGET_GONE is the graceful no-op when the suggestion's target
+    process/claim was deleted before accept."""
+
+    APPLIED = "applied"
+    TARGET_GONE = "target_gone"
