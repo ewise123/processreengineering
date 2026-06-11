@@ -114,6 +114,77 @@ def _level_for_prompt(level: str) -> str:
     return level.lstrip("Ll") or "2"
 
 
+def _create_model_and_version(
+    db: Session,
+    *,
+    project: Project,
+    name: str,
+    level: str,
+    created_by: UUID,
+    bpmn_xml: str | None = None,
+    notes: str | None = None,
+    source_segment_id: UUID | None = None,
+    default_lane_name: str = "Process Team",
+) -> tuple[ProcessModel, ProcessVersion, ProcessLane]:
+    """Find-or-create the (project, level, name) ProcessModel, create the next
+    ProcessVersion (lineage stamped from the prior top version), and one default
+    lane. Shared by AI generation and blank-map creation.
+
+    The caller is responsible for db.flush()/db.commit() and for adding nodes."""
+    canonical_level = _normalize_level(level)
+    model = db.scalars(
+        select(ProcessModel)
+        .where(
+            ProcessModel.project_id == project.id,
+            ProcessModel.level == canonical_level,
+            ProcessModel.name == name,
+            ProcessModel.deleted_at.is_(None),
+        )
+        .limit(1)
+    ).first()
+    if model is None:
+        model = ProcessModel(
+            project_id=project.id, name=name, level=canonical_level
+        )
+        db.add(model)
+        db.flush()
+
+    last_version_num = (
+        db.scalar(
+            select(func.coalesce(func.max(ProcessVersion.version_number), 0)).where(
+                ProcessVersion.model_id == model.id
+            )
+        )
+        or 0
+    )
+    parent_version = db.scalars(
+        select(ProcessVersion)
+        .where(
+            ProcessVersion.model_id == model.id,
+            ProcessVersion.version_number == last_version_num,
+        )
+        .limit(1)
+    ).first()
+
+    version = ProcessVersion(
+        model_id=model.id,
+        version_number=last_version_num + 1,
+        parent_version_id=parent_version.id if parent_version else None,
+        status=ProcessVersionStatus.DRAFT.value,
+        bpmn_xml=bpmn_xml,
+        notes=notes,
+        created_by=created_by,
+        source_segment_id=source_segment_id,
+    )
+    db.add(version)
+    db.flush()
+
+    lane = ProcessLane(version_id=version.id, name=default_lane_name, order_index=0)
+    db.add(lane)
+    db.flush()
+    return model, version, lane
+
+
 @router.post(
     "/generate-process-map",
     response_model=ProcessMapGenerateResult,
@@ -195,51 +266,20 @@ def generate_process_map(
     if not valid:
         raise HTTPException(status_code=500, detail=f"Generated BPMN XML failed validation: {err}")
 
-    # 4. Find-or-create ProcessModel for (project, level, name)
+    # 4-5. Find-or-create ProcessModel + next ProcessVersion (shared helper).
     canonical_level = _normalize_level(payload.level)
-    model = db.scalars(
-        select(ProcessModel)
-        .where(
-            ProcessModel.project_id == project.id,
-            ProcessModel.level == canonical_level,
-            ProcessModel.name == structure.process_name,
-            ProcessModel.deleted_at.is_(None),
-        )
-        .limit(1)
-    ).first()
-    if model is None:
-        model = ProcessModel(
-            project_id=project.id,
-            name=structure.process_name,
-            level=canonical_level,
-        )
-        db.add(model)
-        db.flush()
-
-    # 5. Compute next version_number for this model
-    last_version_num = db.scalar(
-        select(func.coalesce(func.max(ProcessVersion.version_number), 0)).where(
-            ProcessVersion.model_id == model.id
-        )
-    ) or 0
-
-    parent_version = db.scalars(
-        select(ProcessVersion)
-        .where(ProcessVersion.model_id == model.id, ProcessVersion.version_number == last_version_num)
-        .limit(1)
-    ).first()
-
-    version = ProcessVersion(
-        model_id=model.id,
-        version_number=last_version_num + 1,
-        parent_version_id=parent_version.id if parent_version else None,
-        status=ProcessVersionStatus.DRAFT.value,
+    model, version, _default_lane = _create_model_and_version(
+        db,
+        project=project,
+        name=structure.process_name,
+        level=canonical_level,
+        created_by=user.id,
         bpmn_xml=bpmn_xml,
         notes=f"Generated from {len(claims)} claim(s).",
-        created_by=user.id,
         source_segment_id=payload.segment_id,
     )
-    db.add(version)
+    # The AI path builds one lane per role; drop the helper's placeholder lane.
+    db.delete(_default_lane)
     db.flush()
 
     # 6. Persist lanes (one per unique role in document order)
