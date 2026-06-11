@@ -215,14 +215,21 @@ function AddClaimDialog({
       toast.success("Claim added.");
       onSaved();
       setOpen(false);
-      setSubject("");
-      setKind(CLAIM_KINDS[0]);
     },
     onError: (e: Error) => toast.error(`Add failed: ${e.message}`),
   });
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) {
+          setSubject("");
+          setKind(CLAIM_KINDS[0]);
+        }
+      }}
+    >
       <DialogTrigger asChild>
         <Button>Add claim</Button>
       </DialogTrigger>
@@ -309,6 +316,9 @@ function EditClaimDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Edit claim</DialogTitle>
+          <DialogDescription>
+            Update the kind and subject of this claim.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
@@ -417,7 +427,7 @@ function DeleteClaimDialog({
           <Button
             variant="destructive"
             onClick={() => del.mutate()}
-            disabled={del.isPending}
+            disabled={del.isPending || isLoading}
           >
             {del.isPending ? "Deleting…" : "Delete claim"}
           </Button>
