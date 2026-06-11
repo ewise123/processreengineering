@@ -26,6 +26,12 @@ class ProcessModel(IdMixin, TimestampMixin, SoftDeleteMixin, Base):
         ForeignKey("process_models.id", ondelete="SET NULL"),
         nullable=True,
     )
+    process_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("processes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
 
 class ProcessVersion(IdMixin, TimestampMixin, Base):
@@ -61,11 +67,6 @@ class ProcessVersion(IdMixin, TimestampMixin, Base):
     created_by: Mapped[UUID | None] = mapped_column(
         PgUUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    source_segment_id: Mapped[UUID | None] = mapped_column(
-        PgUUID(as_uuid=True),
-        ForeignKey("process_segments.id", ondelete="SET NULL"),
         nullable=True,
     )
 

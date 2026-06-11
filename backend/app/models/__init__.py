@@ -11,10 +11,10 @@ from app.models.process import (
     ProcessNode,
     ProcessVersion,
 )
-from app.models.process_detection import (
-    ClaimSegmentMembership,
-    DetectionRun,
-    ProcessSegment,
+from app.models.process_inventory import (
+    Process,
+    ProcessClaimLink,
+    ProcessSuggestion,
 )
 from app.models.analysis import Analysis, Output
 from app.models.workflow import Review, ReviewComment
@@ -39,9 +39,9 @@ __all__ = [
     "ProcessEdge",
     "NodeClaimLink",
     "EdgeClaimLink",
-    "DetectionRun",
-    "ProcessSegment",
-    "ClaimSegmentMembership",
+    "Process",
+    "ProcessClaimLink",
+    "ProcessSuggestion",
     "Analysis",
     "Output",
     "Review",
