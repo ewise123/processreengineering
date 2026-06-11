@@ -325,6 +325,7 @@ export interface NodeIssueDetail {
   resolution_status: string;
   detected_by: string;
   resolution_notes: string | null;
+  detection_reason: string | null;
   this_claim: ClaimSummary;
   other_claim: ClaimSummary;
 }

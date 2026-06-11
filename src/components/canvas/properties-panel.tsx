@@ -112,10 +112,14 @@ export function PropertiesPanel({
   const detach = useMutation({
     mutationFn: (claimId: UUID) =>
       api.detachNodeClaim(projectId, selected.id, claimId),
-    onSuccess: () =>
+    onSuccess: () => {
       qc.invalidateQueries({
         queryKey: ["node-citations", projectId, selected.id],
-      }),
+      });
+      qc.invalidateQueries({
+        queryKey: ["node-issues", projectId, selected.id],
+      });
+    },
   });
 
   const handleDelete = async () => {
@@ -488,11 +492,14 @@ export function PropertiesPanel({
           nodeId={selected.id}
           linkedClaimIds={new Set(claims.map((c) => c.id))}
           onClose={() => setAttachOpen(false)}
-          onAttached={() =>
+          onAttached={() => {
             qc.invalidateQueries({
               queryKey: ["node-citations", projectId, selected.id],
-            })
-          }
+            });
+            qc.invalidateQueries({
+              queryKey: ["node-issues", projectId, selected.id],
+            });
+          }}
         />
       )}
     </div>
@@ -610,9 +617,9 @@ function IssueCard({
         </div>
         <ClaimLine label="Other claim" claim={issue.other_claim} />
       </div>
-      {issue.resolution_notes && (
+      {issue.detection_reason && (
         <div className="mt-1.5 rounded border-l-2 border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10.5px] italic text-slate-600">
-          {issue.resolution_notes}
+          {issue.detection_reason}
         </div>
       )}
       <div className="mt-1.5 flex gap-1">
