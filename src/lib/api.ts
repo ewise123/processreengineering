@@ -1,9 +1,10 @@
 import type {
-  AcceptDetectionRunResult,
+  AcceptSuggestionResult,
   AiEditAction,
   AiEditResponse,
   AiProposedStepRequest,
   AiProposedStepResult,
+  BatchAcceptResult,
   BlankMapRequest,
   BlankMapResult,
   ChatRequest,
@@ -16,9 +17,6 @@ import type {
   ClaimUpdate,
   ConflictDetectionResult,
   ConflictResolve,
-  DetectProcessesRequest,
-  DetectionRunDetail,
-  DetectionRunListRow,
   EmbedResult,
   InputParseResult,
   InputRow,
@@ -35,6 +33,7 @@ import type {
   NodeReview,
   NodeReviewUpdate,
   NodeUpdate,
+  Process,
   ProcessEdge,
   Page,
   ProcessGraph,
@@ -43,12 +42,14 @@ import type {
   ProcessMapGenerateResult,
   ProcessModel,
   ProcessNode,
-  ProcessSegment,
+  ProcessSuggestion,
   ProcessVersion,
   Project,
   ProjectCreate,
   ProjectUpdate,
   ReviewState,
+  SuggestBatchResult,
+  TriageClaim,
   UUID,
   VersionDiff,
   VersionSummary,
@@ -384,69 +385,78 @@ export const api = {
       { method: "POST", json: body }
     ),
 
-  // Process detection
-  detectProcesses: (projectId: UUID, body: DetectProcessesRequest = {}) =>
-    request<DetectionRunDetail>(
-      `/api/v2/projects/${projectId}/detect-processes`,
-      { method: "POST", json: body }
-    ),
-  listDetectionRuns: (projectId: UUID) =>
-    request<DetectionRunListRow[]>(
-      `/api/v2/projects/${projectId}/detection-runs`
-    ),
-  getDetectionRun: (projectId: UUID, runId: UUID) =>
-    request<DetectionRunDetail>(
-      `/api/v2/projects/${projectId}/detection-runs/${runId}`
-    ),
-  updateSegment: (
+  // Process inventory
+  listProcesses: (projectId: UUID) =>
+    request<Process[]>(`/api/v2/projects/${projectId}/processes`),
+  createProcess: (projectId: UUID, body: { name: string; description?: string }) =>
+    request<Process>(`/api/v2/projects/${projectId}/processes`, {
+      method: "POST",
+      json: body,
+    }),
+  updateProcess: (
     projectId: UUID,
-    segmentId: UUID,
-    body: { name?: string | null; description?: string | null }
+    processId: UUID,
+    body: { name?: string; description?: string; order_index?: number; status?: string }
   ) =>
-    request<ProcessSegment>(
-      `/api/v2/projects/${projectId}/segments/${segmentId}`,
-      { method: "PATCH", json: body }
+    request<Process>(`/api/v2/projects/${projectId}/processes/${processId}`, {
+      method: "PATCH",
+      json: body,
+    }),
+  deleteProcess: (projectId: UUID, processId: UUID) =>
+    request<void>(`/api/v2/projects/${projectId}/processes/${processId}`, {
+      method: "DELETE",
+    }),
+  assignClaims: (projectId: UUID, processId: UUID, claimIds: UUID[]) =>
+    request<{ process_id: UUID; linked: number; already_linked: number }>(
+      `/api/v2/projects/${projectId}/processes/${processId}/claims`,
+      { method: "POST", json: { claim_ids: claimIds } }
     ),
-  createSegment: (
+  unassignClaims: (projectId: UUID, processId: UUID, claimIds: UUID[]) =>
+    request<{ process_id: UUID; removed: number }>(
+      `/api/v2/projects/${projectId}/processes/${processId}/claims`,
+      { method: "DELETE", json: { claim_ids: claimIds } }
+    ),
+  listUnassignedClaims: (projectId: UUID) =>
+    request<TriageClaim[]>(`/api/v2/projects/${projectId}/claims/unassigned`),
+
+  // AI suggestions
+  suggestProcesses: (projectId: UUID, body: { scope_input_ids?: UUID[] | null } = {}) =>
+    request<SuggestBatchResult>(`/api/v2/projects/${projectId}/suggest-processes`, {
+      method: "POST",
+      json: body,
+    }),
+  listSuggestions: (
     projectId: UUID,
-    runId: UUID,
-    body: { name: string }
-  ) =>
-    request<ProcessSegment>(
-      `/api/v2/projects/${projectId}/detection-runs/${runId}/segments`,
-      { method: "POST", json: body }
-    ),
-  mergeSegment: (
-    projectId: UUID,
-    segmentId: UUID,
-    body: { into_segment_id: UUID }
-  ) =>
-    request<ProcessSegment>(
-      `/api/v2/projects/${projectId}/segments/${segmentId}/merge`,
-      { method: "POST", json: body }
-    ),
-  deleteSegment: (projectId: UUID, segmentId: UUID) =>
-    request<void>(
-      `/api/v2/projects/${projectId}/segments/${segmentId}`,
-      { method: "DELETE" }
-    ),
-  moveClaimToSegment: (
-    projectId: UUID,
-    segmentId: UUID,
-    body: { claim_id: UUID }
-  ) =>
-    request<ProcessSegment>(
-      `/api/v2/projects/${projectId}/segments/${segmentId}/claims`,
-      { method: "POST", json: body }
-    ),
-  acceptDetectionRun: (projectId: UUID, runId: UUID) =>
-    request<AcceptDetectionRunResult>(
-      `/api/v2/projects/${projectId}/detection-runs/${runId}/accept`,
+    params: { status?: string; kind?: string } = {}
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set("status", params.status);
+    if (params.kind) qs.set("kind", params.kind);
+    const suffix = qs.toString() ? `?${qs}` : "";
+    return request<ProcessSuggestion[]>(
+      `/api/v2/projects/${projectId}/process-suggestions${suffix}`
+    );
+  },
+  acceptSuggestion: (projectId: UUID, suggestionId: UUID) =>
+    request<AcceptSuggestionResult>(
+      `/api/v2/projects/${projectId}/process-suggestions/${suggestionId}/accept`,
       { method: "POST" }
     ),
-  discardDetectionRun: (projectId: UUID, runId: UUID) =>
-    request<void>(
-      `/api/v2/projects/${projectId}/detection-runs/${runId}`,
-      { method: "DELETE" }
+  rejectSuggestion: (projectId: UUID, suggestionId: UUID) =>
+    request<AcceptSuggestionResult>(
+      `/api/v2/projects/${projectId}/process-suggestions/${suggestionId}/reject`,
+      { method: "POST" }
+    ),
+  acceptSuggestionBatch: (projectId: UUID, batchId: UUID) =>
+    request<BatchAcceptResult>(
+      `/api/v2/projects/${projectId}/process-suggestion-batches/${batchId}/accept`,
+      { method: "POST" }
+    ),
+
+  // Map ↔ process wiring
+  attachMapToProcess: (projectId: UUID, modelId: UUID, processId: UUID | null) =>
+    request<ProcessModel>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}`,
+      { method: "PATCH", json: { process_id: processId } }
     ),
 };

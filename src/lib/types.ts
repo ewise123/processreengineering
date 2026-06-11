@@ -110,13 +110,9 @@ export interface ProcessModel {
   updated_at: string;
   latest_version_id: UUID | null;
   latest_version_number: number | null;
-  latest_source_segment_id?: UUID | null;
-  latest_source_run_status?:
-    | "draft"
-    | "accepted"
-    | "archived"
-    | "superseded"
-    | null;
+  process_id?: UUID | null;
+  process_name?: string | null;
+  unreconciled_claim_count?: number;
 }
 
 export interface ProcessVersion {
@@ -357,7 +353,7 @@ export interface ProcessMapGenerateRequest {
   focus?: string | null;
   map_type?: string | null;
   scope_input_ids?: UUID[] | null;
-  segment_id?: UUID | null;
+  process_id?: UUID | null;
 }
 
 export interface ProcessMapGenerateResult {
@@ -370,6 +366,62 @@ export interface ProcessMapGenerateResult {
   edge_count: number;
   node_link_count: number;
   bpmn_xml_size: number;
+}
+
+export interface Process {
+  id: UUID;
+  project_id: UUID;
+  name: string;
+  description: string;
+  order_index: number;
+  status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+  claim_count: number;
+  map_count: number;
+}
+
+export interface TriageClaim {
+  id: UUID;
+  kind: string;
+  subject: string;
+  source: string;
+}
+
+export interface ProcessSuggestion {
+  id: UUID;
+  batch_id: UUID;
+  project_id: UUID;
+  kind: "process_discovery" | "map_reconcile";
+  process_id: UUID | null;
+  version_id: UUID | null;
+  op: string;
+  payload: Record<string, unknown>;
+  rationale: string;
+  confidence: number | null;
+  status: "pending" | "accepted" | "rejected";
+  outcome: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface SuggestBatchResult {
+  batch_id: UUID;
+  suggestion_count: number;
+}
+
+export interface AcceptSuggestionResult {
+  suggestion_id: UUID;
+  status: string;
+  outcome: string;
+  process_id?: UUID | null;
+  linked?: number;
+}
+
+export interface BatchAcceptResult {
+  batch_id: UUID;
+  accepted: number;
+  skipped: number;
 }
 
 export const INPUT_TYPES = [
@@ -409,47 +461,6 @@ export const CLAIM_KINDS = [
   "system",
   "gateway_condition",
 ] as const;
-
-export interface ProcessSegment {
-  id: UUID;
-  detection_run_id: UUID;
-  name: string;
-  description: string;
-  order_index: number;
-  claim_count: number;
-  confidence: number | null;
-  is_unassigned: boolean;
-  claims: Array<{ id: UUID; kind: string; subject: string }>;
-}
-
-export interface DetectionRunDetail {
-  id: UUID;
-  project_id: UUID;
-  status: "draft" | "accepted" | "archived" | "superseded";
-  claim_count_at_run: number;
-  model_used: string | null;
-  reasoning_summary: string | null;
-  created_at: string;
-  segments: ProcessSegment[];
-  unassigned_segment: ProcessSegment;
-}
-
-export interface DetectionRunListRow {
-  id: UUID;
-  status: "draft" | "accepted" | "archived" | "superseded";
-  claim_count_at_run: number;
-  segment_count: number;
-  created_at: string;
-}
-
-export interface AcceptDetectionRunResult {
-  run_id: UUID;
-  accepted_segment_count: number;
-}
-
-export interface DetectProcessesRequest {
-  scope_input_ids?: UUID[] | null;
-}
 
 export type AiEditAction = "relabel" | "describe" | "validate" | "suggest_next";
 
