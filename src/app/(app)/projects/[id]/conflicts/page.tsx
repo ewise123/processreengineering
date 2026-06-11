@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -14,6 +15,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { api } from "@/lib/api";
+import type { ClaimConflict } from "@/lib/types";
 
 export default function ConflictsPage() {
   const { id } = useParams<{ id: string }>();
@@ -41,6 +43,23 @@ export default function ConflictsPage() {
       qc.invalidateQueries({ queryKey: ["claims", id] });
     },
     onError: (e: Error) => toast.error(`Detection failed: ${e.message}`),
+  });
+
+  const resolve = useMutation({
+    mutationFn: (vars: {
+      conflictId: string;
+      resolution_status: string;
+      resolution_notes: string | null;
+    }) =>
+      api.resolveConflict(id, vars.conflictId, {
+        resolution_status: vars.resolution_status,
+        resolution_notes: vars.resolution_notes,
+      }),
+    onSuccess: () => {
+      toast.success("Conflict updated.");
+      qc.invalidateQueries({ queryKey: ["conflicts", id] });
+    },
+    onError: (e: Error) => toast.error(`Update failed: ${e.message}`),
   });
 
   const claimById = new Map(claims?.items.map((c) => [c.id, c]) ?? []);
@@ -71,14 +90,15 @@ export default function ConflictsPage() {
               <TableHead className="w-40">Kind</TableHead>
               <TableHead>Claim A</TableHead>
               <TableHead>Claim B</TableHead>
-              <TableHead>Reason</TableHead>
+              <TableHead>Reason (AI)</TableHead>
               <TableHead className="w-24">Status</TableHead>
+              <TableHead className="w-80">Resolution</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {data.items.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-8">
+                <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-8">
                   No conflicts. Run detection once you have claims.
                 </TableCell>
               </TableRow>
@@ -100,10 +120,23 @@ export default function ConflictsPage() {
                     {b ? b.subject : <span className="text-muted-foreground">{c.claim_b_id.slice(0, 8)}…</span>}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
-                    {c.resolution_notes ?? "—"}
+                    {c.detection_reason ?? "—"}
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline">{c.resolution_status}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    <ResolutionControls
+                      conflict={c}
+                      pending={resolve.isPending}
+                      onSubmit={(resolution_status, resolution_notes) =>
+                        resolve.mutate({
+                          conflictId: c.id,
+                          resolution_status,
+                          resolution_notes,
+                        })
+                      }
+                    />
                   </TableCell>
                 </TableRow>
               );
@@ -111,6 +144,60 @@ export default function ConflictsPage() {
           </TableBody>
         </Table>
       )}
+    </div>
+  );
+}
+
+function ResolutionControls({
+  conflict,
+  pending,
+  onSubmit,
+}: {
+  conflict: ClaimConflict;
+  pending: boolean;
+  onSubmit: (status: string, notes: string | null) => void;
+}) {
+  const [notes, setNotes] = useState(conflict.resolution_notes ?? "");
+  const isOpen = conflict.resolution_status === "detected";
+  return (
+    <div className="flex flex-col gap-1.5">
+      <input
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        placeholder="Resolution notes (optional)"
+        className="w-full rounded-md border border-slate-200 px-2 py-1 text-xs focus:border-slate-500 focus:outline-none"
+      />
+      <div className="flex gap-1">
+        {isOpen ? (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={pending}
+              onClick={() => onSubmit("resolved", notes.trim() || null)}
+            >
+              Resolve
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={pending}
+              onClick={() => onSubmit("dismissed", notes.trim() || null)}
+            >
+              Dismiss
+            </Button>
+          </>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={pending}
+            onClick={() => onSubmit("detected", notes.trim() || null)}
+          >
+            Reopen
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
