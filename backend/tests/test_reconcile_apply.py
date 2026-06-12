@@ -129,3 +129,47 @@ def test_apply_recite_node_skips_foreign_project_claim(db):
         NodeClaimLink.node_id == n1.id)).all()}
     assert foreign.id not in links  # foreign-project claim rejected by ownership check
     assert result.status == "accepted"
+
+
+def test_apply_flag_stale_node(db):
+    project, process, version, lane, n1, claim = _seed_map(db)
+    s = _suggestion(db, project, process, version, "flag_stale_node", {
+        "node_id": str(n1.id), "vanished_claim_ids": [str(claim.id)],
+    })
+    result = proc_api.apply_suggestion(db, project, s); db.commit()
+    db.refresh(n1)
+    assert n1.properties["evidence_stale"] is True
+    assert result.status == "accepted" and result.outcome == "applied"
+
+
+def test_apply_flag_stale_node_preserves_properties(db):
+    project, process, version, lane, n1, claim = _seed_map(db)
+    n1.properties = {"_lineage_id": str(n1.id), "ai_proposed": True}
+    db.commit()
+    s = _suggestion(db, project, process, version, "flag_stale_node",
+                    {"node_id": str(n1.id), "vanished_claim_ids": []})
+    proc_api.apply_suggestion(db, project, s); db.commit()
+    db.refresh(n1)
+    assert n1.properties["evidence_stale"] is True
+    assert n1.properties["_lineage_id"] == str(n1.id)
+    assert n1.properties["ai_proposed"] is True
+
+
+def test_apply_relabel_node(db):
+    project, process, version, lane, n1, claim = _seed_map(db)
+    s = _suggestion(db, project, process, version, "relabel_node", {
+        "node_id": str(n1.id), "proposed_name": "Receive purchase order",
+    })
+    result = proc_api.apply_suggestion(db, project, s); db.commit()
+    db.refresh(n1)
+    assert n1.name == "Receive purchase order"
+    assert result.status == "accepted" and result.outcome == "applied"
+
+
+def test_apply_relabel_node_target_gone(db):
+    project, process, version, lane, n1, claim = _seed_map(db)
+    s = _suggestion(db, project, process, version, "relabel_node", {
+        "node_id": str(uuid4()), "proposed_name": "Nope",
+    })
+    result = proc_api.apply_suggestion(db, project, s); db.commit()
+    assert result.outcome == "target_gone"

@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.v2.deps import get_current_user, get_project_or_404
 from app.db.session import get_db
@@ -375,9 +376,8 @@ def apply_suggestion(
     db: Session, project: Project, sug: ProcessSuggestion
 ) -> AcceptSuggestionResult:
     """Dispatch one accepted suggestion to its mutation. Handles the discovery
-    ops (create_process, assign_claims) plus the sp7c reconcile ops add_step and
-    recite_node; the remaining reconcile ops (flag_stale_node, relabel_node) are
-    added by a later sp7c task — they still raise 422 here.
+    ops (create_process, assign_claims) plus the sp7c reconcile ops add_step,
+    recite_node, flag_stale_node, and relabel_node. Any other op raises 422.
 
     Returns the result; the caller is responsible for stamping status/outcome
     and committing. A deleted target → graceful TARGET_GONE no-op (no raise),
@@ -513,6 +513,52 @@ def apply_suggestion(
             ).first()
             if link is not None:
                 db.delete(link)
+        return AcceptSuggestionResult(
+            suggestion_id=sug.id,
+            status=SuggestionStatus.ACCEPTED.value,
+            outcome=SuggestionOutcome.APPLIED.value,
+            process_id=sug.process_id,
+        )
+
+    if op == "flag_stale_node":
+        version = db.get(ProcessVersion, sug.version_id)
+        node_id = payload.get("node_id")
+        node = db.get(ProcessNode, UUID(node_id)) if node_id else None
+        if node is None or version is None or node.version_id != version.id:
+            return AcceptSuggestionResult(
+                suggestion_id=sug.id,
+                status=SuggestionStatus.ACCEPTED.value,
+                outcome=SuggestionOutcome.TARGET_GONE.value,
+            )
+        new_props = dict(node.properties or {})
+        new_props["evidence_stale"] = True
+        node.properties = new_props
+        flag_modified(node, "properties")
+        return AcceptSuggestionResult(
+            suggestion_id=sug.id,
+            status=SuggestionStatus.ACCEPTED.value,
+            outcome=SuggestionOutcome.APPLIED.value,
+            process_id=sug.process_id,
+        )
+
+    if op == "relabel_node":
+        version = db.get(ProcessVersion, sug.version_id)
+        node_id = payload.get("node_id")
+        node = db.get(ProcessNode, UUID(node_id)) if node_id else None
+        if node is None or version is None or node.version_id != version.id:
+            return AcceptSuggestionResult(
+                suggestion_id=sug.id,
+                status=SuggestionStatus.ACCEPTED.value,
+                outcome=SuggestionOutcome.TARGET_GONE.value,
+            )
+        proposed = (payload.get("proposed_name") or "").strip()
+        if not proposed:
+            return AcceptSuggestionResult(
+                suggestion_id=sug.id,
+                status=SuggestionStatus.ACCEPTED.value,
+                outcome=SuggestionOutcome.TARGET_GONE.value,
+            )
+        node.name = proposed
         return AcceptSuggestionResult(
             suggestion_id=sug.id,
             status=SuggestionStatus.ACCEPTED.value,
