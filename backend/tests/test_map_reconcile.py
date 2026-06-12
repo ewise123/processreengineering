@@ -15,6 +15,7 @@ from app.models.process import (
 )
 from app.models.process_inventory import Process, ProcessClaimLink
 from app.models.project import Project
+from app.schemas.version_reconcile import ReconcileOp, ReconcileSuggestionRead
 from app.services.map_reconcile import compute_claim_delta
 
 
@@ -106,3 +107,27 @@ def test_compute_claim_delta_empty_when_in_sync(db):
     assert delta.new_evidence == []
     assert delta.vanished_evidence == {}
     assert delta.is_empty()
+
+
+def test_reconcile_op_vocabulary():
+    for op in ["add_step", "recite_node", "flag_stale_node", "relabel_node"]:
+        assert ReconcileOp(op).value == op
+
+
+def test_reconcile_op_rejects_unknown():
+    with pytest.raises(ValueError):
+        ReconcileOp("delete_map")
+
+
+def test_reconcile_suggestion_read_shape():
+    sug = ReconcileSuggestionRead(
+        id=uuid4(),
+        batch_id=uuid4(),
+        op=ReconcileOp.RELABEL_NODE,
+        payload={"node_id": str(uuid4()), "proposed_name": "Receive PO"},
+        rationale="C1 says PO, not order.",
+        confidence=0.8,
+        status="pending",
+    )
+    assert sug.op == ReconcileOp.RELABEL_NODE
+    assert sug.payload["proposed_name"] == "Receive PO"
