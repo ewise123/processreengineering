@@ -90,3 +90,15 @@ def test_get_client_raises_without_key(monkeypatch):
     claim_matcher._client = None
     with pytest.raises(RuntimeError):
         claim_matcher._get_client()
+
+
+from app.schemas.process import ClaimMatchCandidate, SuggestClaimsResult
+
+
+def test_suggest_claims_result_shape():
+    r = SuggestClaimsResult(
+        candidates=[ClaimMatchCandidate(claim_id=uuid4(), subject="s", kind="task")]
+    )
+    assert r.candidates[0].in_other_processes is False
+    assert r.candidates[0].rationale == ""
+    assert r.candidates[0].confidence is None

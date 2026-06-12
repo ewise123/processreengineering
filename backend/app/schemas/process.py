@@ -98,3 +98,16 @@ class BatchAcceptResult(BaseModel):
     batch_id: UUID
     accepted: int
     skipped: int
+
+
+class ClaimMatchCandidate(BaseModel):
+    claim_id: UUID
+    subject: str
+    kind: str
+    confidence: float | None = None
+    rationale: str = ""
+    in_other_processes: bool = False
+
+
+class SuggestClaimsResult(BaseModel):
+    candidates: list[ClaimMatchCandidate] = Field(default_factory=list)
