@@ -1,5 +1,6 @@
 """SP-7b: durable Process Inventory, claim curation, and the AI suggestion
 inbox. Replaces the deleted process_detection router."""
+import logging
 from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -37,13 +38,21 @@ from app.schemas.process import (
     BulkAssignResult,
     BulkUnassignResult,
     ClaimIdList,
+    ClaimMatchCandidate,
     ClaimRef,
     ProcessCreate,
     ProcessRead,
     ProcessUpdate,
     SuggestBatchResult,
+    SuggestClaimsResult,
     SuggestionRead,
     SuggestProcessesRequest,
+)
+from app.services import claim_matcher as _claim_matcher_mod
+from app.services.claim_matcher import (
+    propose_claim_matches,
+    render_candidates_block,
+    render_process_block,
 )
 from app.services.process_detection import (
     detect_segments_from_claims,
@@ -52,6 +61,7 @@ from app.services.process_detection import (
 )
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["processes"])
+logger = logging.getLogger(__name__)
 
 
 def _get_process_in_project(db: Session, project_id: UUID, process_id: UUID) -> Process:
@@ -312,6 +322,111 @@ def suggest_processes(
         count += 1
     db.commit()
     return SuggestBatchResult(batch_id=batch_id, suggestion_count=count)
+
+
+def _claim_match_client():
+    """Thin wrapper so the endpoint resolves the Anthropic client lazily and
+    tests can patch it without a real key."""
+    return _claim_matcher_mod._get_client()
+
+
+@router.post(
+    "/processes/{process_id}/suggest-claims", response_model=SuggestClaimsResult
+)
+def suggest_claims_for_process(
+    process_id: UUID,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    db: Annotated[Session, Depends(get_db)],
+) -> SuggestClaimsResult:
+    """Ask Claude which project claims belong to this process. Considers all
+    project claims NOT already linked here; flags candidates linked to another
+    process. Read-only — persists nothing; the chosen claims are applied via the
+    bulk-assign endpoint. Empty candidate pool -> no LLM call. LLM failure -> 503."""
+    proc = _get_process_in_project(db, project.id, process_id)
+
+    linked_here = (
+        select(ProcessClaimLink.claim_id)
+        .where(ProcessClaimLink.process_id == proc.id)
+        .scalar_subquery()
+    )
+    candidates = list(
+        db.scalars(
+            select(Claim)
+            .where(Claim.project_id == project.id, Claim.id.not_in(linked_here))
+            .order_by(Claim.kind, Claim.created_at)
+        ).all()
+    )
+    MAX_CANDIDATES = 200
+    if len(candidates) > MAX_CANDIDATES:
+        logger.info(
+            "suggest-claims: capping %d candidates to %d for process %s",
+            len(candidates), MAX_CANDIDATES, proc.id,
+        )
+        candidates = candidates[:MAX_CANDIDATES]
+
+    if not candidates:
+        return SuggestClaimsResult(candidates=[])
+
+    candidate_ids = [c.id for c in candidates]
+    elsewhere = set(
+        db.scalars(
+            select(ProcessClaimLink.claim_id).where(
+                ProcessClaimLink.claim_id.in_(candidate_ids),
+                ProcessClaimLink.process_id != proc.id,
+            )
+        ).all()
+    )
+    exemplars = [
+        (c.kind, c.subject)
+        for c in db.scalars(
+            select(Claim)
+            .join(ProcessClaimLink, ProcessClaimLink.claim_id == Claim.id)
+            .where(ProcessClaimLink.process_id == proc.id)
+            .limit(30)
+        ).all()
+    ]
+
+    ref_by_id = {c.id: f"C{i + 1}" for i, c in enumerate(candidates)}
+    id_by_ref = {ref: cid for cid, ref in ref_by_id.items()}
+    claim_by_id = {c.id: c for c in candidates}
+
+    process_block = render_process_block(proc.name, proc.description or "", exemplars)
+    candidates_block = render_candidates_block(
+        [(ref_by_id[c.id], c.kind, c.subject, c.id in elsewhere) for c in candidates]
+    )
+
+    try:
+        client = _claim_match_client()  # raises RuntimeError if no key
+        raw = propose_claim_matches(
+            client=client,
+            model=_claim_matcher_mod.CLAIM_MATCH_MODEL,
+            process_block=process_block,
+            candidates_block=candidates_block,
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    out: list[ClaimMatchCandidate] = []
+    seen: set[UUID] = set()
+    for m in raw.get("matches", []):
+        cid = id_by_ref.get(str(m.get("claim_ref", "")).strip().upper())
+        if cid is None or cid in seen:
+            continue
+        seen.add(cid)
+        claim = claim_by_id[cid]
+        conf = m.get("confidence")
+        out.append(
+            ClaimMatchCandidate(
+                claim_id=cid,
+                subject=claim.subject,
+                kind=claim.kind,
+                confidence=conf if isinstance(conf, (int, float)) else None,
+                rationale=m.get("rationale", "") or "",
+                in_other_processes=cid in elsewhere,
+            )
+        )
+    out.sort(key=lambda c: (c.confidence is None, -(c.confidence or 0.0)))
+    return SuggestClaimsResult(candidates=out)
 
 
 @router.get("/process-suggestions", response_model=list[SuggestionRead])
