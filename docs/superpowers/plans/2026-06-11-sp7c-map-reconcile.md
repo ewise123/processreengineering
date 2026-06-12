@@ -1897,3 +1897,31 @@ git commit -m "$(printf 'docs(sp7c): record map-reconcile execution outcome\n\nC
 - **503 vs 502:** the spec's error-handling section says reconcile LLM failures surface as **503** (vs sp5a's 502 for ai-edit); this plan uses 503 to match the spec exactly.
 - **Frontend reuse:** the Refresh tab is a thin caller of the existing `<SuggestionInbox>`; the only testable new logic (`reconcile.ts`) is pure and unit-tested, matching the repo's node-environment Vitest convention (no DOM component tests — same call made in the sp5a outcome).
 - **Risk — sp7b coupling:** the inventory model module path (`app.models.process_inventory`), `ProcessSuggestion` constructor field names, and `<SuggestionInbox>`'s prop contract are assumed from the spec; every task that touches them carries a "grep/read the real thing first and adapt" note so the implementer reconciles against what sp7b actually shipped rather than guessing.
+
+---
+
+## Execution outcome (2026-06-12)
+
+Executed via subagent-driven development (fresh implementer per task + two-stage spec/code-quality review, controller adjudication) on branch `sp6-source-viewer`, committed locally, **not pushed**. 11 commits `b1d8008..26e9c6b`.
+
+### Gates (all green)
+- **Backend** `cd backend && .venv/bin/pytest -q`: **142 passed** (incl. `test_map_reconcile.py` — delta, schemas, `propose_reconcile` faked-client parse/degrade/no-key, endpoint empty-delta-no-LLM / persist+ref-resolution / fabricated-ref drop / recite+flag persist / unknown-op drop / 409 / 503; `test_reconcile_apply.py` — all four ops apply + target-gone + recite idempotency + foreign-project-claim rejection; `test_ai_edit.py` green after the `_create_proposed_step` extraction).
+- **tsc** `npx tsc --noEmit`: clean.
+- **Vitest** `npm test`: **67 passed / 11 files** (incl. `reconcile.test.ts` 5, the `evidence_stale` cases in `layout.test.ts`).
+- Lint advisory only (unchanged baseline). No SP-7c commit included the unrelated working-tree changes (`package.json`/`package-lock.json`/`src/app/layout.tsx`, the `.agents/`/`.codex/`/etc. tool-config dirs).
+
+### Commit map
+`b1d8008` delta · `4a3719a` schemas · `a4c0501` propose_reconcile · `26b6325` extract `_create_proposed_step` · `4abc0fd` reconcile endpoint · `c25e460` apply add_step+recite_node · `442faf3` apply flag_stale_node+relabel_node · `162e810` FE types+client · `c4f803f` `reconcileRow` · `9bf2a76` evidence_stale badge · `26e9c6b` Refresh tab.
+
+### Deviations from the plan text (controller-adjudicated, all validated by the final holistic review)
+1. **Dispatcher contract.** The plan assumed `apply_suggestion(db, suggestion)` self-mutating `status="rejected"` + `payload["outcome"]`. sp7b actually shipped `apply_suggestion(db, project, sug) -> AcceptSuggestionResult` that **returns** a result (the accept/batch endpoints stamp `status`/`outcome`/`resolved_at`). All four reconcile branches return results; **target-gone = `status="accepted"`, `outcome="target_gone"`** (the real `outcome` column, matching the pre-existing `assign_claims` branch), not the plan's `rejected`+payload-key. Tests adapted to the 3-arg/return contract.
+2. **`_create_proposed_step` import** into `processes.py` is module-level (verified no circular import: `process_maps` doesn't import `processes`, and the v2 router loads `process_maps` first).
+3. **Uniform version-scoping.** The plan only version-scoped `recite_node`; all four reconcile branches now guard `node.version_id == version.id` for consistency.
+4. **`recite_node` add-loop enforces `claim.project_id == project.id`** (parity with `_link_claims`/`_create_proposed_step`), with a foreign-project-claim test.
+5. **Refresh tab does NOT reuse `<SuggestionInbox>`.** That component + `groupByBatch` are hardcoded to `ProcessSuggestion` and sort on `created_at` (a field `ReconcileSuggestion` lacks), and reconcile returns a single batch. The tab is a dedicated inline inbox in `right-panel.tsx` that still uses `reconcileRow` and the same `/process-suggestions/{id}/accept|reject` endpoints; `suggestion-inbox.tsx`/`inbox-grouping.ts`/`reconcile.ts` were left untouched, so the Processes page is unaffected. It invalidates the real canvas-graph query key `["graph", projectId, modelId, versionId]` (plan's guessed `["version-graph", …]` was wrong) and surfaces a `target_gone` accept as "No change — target was deleted".
+6. **evidence_stale badge placed bottom-right** (`translate(w-8, h+8)`): both top corners were taken (issueLevel top-right, reviewBadge top-left); the plan's suggested `translate(8,-8)` would have collided with the review badge.
+7. **Plan import note corrected**: `uuid4` was NOT already imported in `process_maps.py` (only `UUID`); added it. `_NODE_REF` (dead) and the `patch` import (until needed) were omitted.
+
+### Follow-ups (non-blocking)
+- `add_step` persists `lane_ref`/`lane_name` in the suggestion payload but the dispatcher derives the lane from the source node and never reads them — harmless dead keys, preserved for a possible future lane-aware accept.
+- Live smoke **deferred**: this WSL environment can't reach the Windows-hosted dev servers, and "Refresh from claims" needs a real `ANTHROPIC_API_KEY`. The empty-delta short-circuit (no key needed), delta computation, ref hygiene, dispatch, and all four apply paths are covered by automated tests; the LLM-failure path is the documented 503. The end-to-end UI smoke (assign a new claim → Refresh → accept add_step → node appears; delete a cited claim → Refresh → accept flag → amber badge; in-sync map → "Map is in sync"; stale target → "No change — target was deleted") remains to run on the Windows dev stack.
