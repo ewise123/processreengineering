@@ -47,21 +47,14 @@ export function GenerateMapForm({ projectId }: { projectId: UUID }) {
   const [level, setLevel] = useState("2");
   const [focus, setFocus] = useState("");
   const [mapType, setMapType] = useState("any");
-  const [segmentId, setSegmentId] = useState<string>("none");
+  const [processId, setProcessId] = useState<string>("none");
 
-  const runsQuery = useQuery({
-    queryKey: ["detection-runs", projectId],
-    queryFn: () => api.listDetectionRuns(projectId),
+  const processesQuery = useQuery({
+    queryKey: ["processes", projectId],
+    queryFn: () => api.listProcesses(projectId),
   });
-  const accepted = runsQuery.data?.find((r) => r.status === "accepted");
-  const acceptedRunDetail = useQuery({
-    queryKey: ["detection-run", projectId, accepted?.id],
-    queryFn: () =>
-      accepted ? api.getDetectionRun(projectId, accepted.id) : Promise.resolve(null),
-    enabled: !!accepted,
-  });
-  const acceptedSegments =
-    acceptedRunDetail.data?.segments.filter((s) => !s.is_unassigned) ?? [];
+  const activeProcesses =
+    processesQuery.data?.filter((p) => p.status === "active") ?? [];
 
   const generate = useMutation({
     mutationFn: () =>
@@ -70,7 +63,7 @@ export function GenerateMapForm({ projectId }: { projectId: UUID }) {
         level,
         focus: focus.trim() || null,
         map_type: mapType === "any" ? null : mapType,
-        segment_id: segmentId === "none" ? null : segmentId,
+        process_id: processId === "none" ? null : processId,
       }),
     onSuccess: (res) => {
       toast.success(
@@ -80,7 +73,7 @@ export function GenerateMapForm({ projectId }: { projectId: UUID }) {
       setOpen(false);
       setName("");
       setFocus("");
-      setSegmentId("none");
+      setProcessId("none");
       router.push(
         `/projects/${projectId}/maps/${res.model_id}/versions/${res.version_id}`
       );
@@ -103,24 +96,24 @@ export function GenerateMapForm({ projectId }: { projectId: UUID }) {
         </DialogHeader>
 
         <div className="space-y-4">
-          {acceptedSegments.length > 0 && (
+          {activeProcesses.length > 0 && (
             <div className="space-y-2">
-              <Label htmlFor="map-segment">From detected process</Label>
-              <Select value={segmentId} onValueChange={setSegmentId}>
-                <SelectTrigger id="map-segment">
+              <Label htmlFor="map-process">From process</Label>
+              <Select value={processId} onValueChange={setProcessId}>
+                <SelectTrigger id="map-process">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">None (use all claims)</SelectItem>
-                  {acceptedSegments.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.name}
+                  {activeProcesses.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name} ({p.claim_count})
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Scopes generation to claims in the chosen detected process.
+                Scopes generation to the claims assigned to the chosen process.
               </p>
             </div>
           )}
