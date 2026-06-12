@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.api.v2.deps import get_current_user, get_project_or_404
 from app.db.session import get_db
+from app.api.v2.process_maps import _create_proposed_step
 from app.enums import (
     AssignedBy,
+    ClaimLinkKind,
     ProcessStatus,
     SuggestionKind,
     SuggestionOutcome,
@@ -19,7 +21,13 @@ from app.enums import (
 )
 from app.models.claim import Claim
 from app.models.identity import User
-from app.models.process import ProcessModel
+from app.models.process import (
+    NodeClaimLink,
+    ProcessLane,
+    ProcessModel,
+    ProcessNode,
+    ProcessVersion,
+)
 from app.models.process_inventory import Process, ProcessClaimLink, ProcessSuggestion
 from app.models.project import Project
 from app.schemas.process import (
@@ -366,9 +374,10 @@ def _link_claims(
 def apply_suggestion(
     db: Session, project: Project, sug: ProcessSuggestion
 ) -> AcceptSuggestionResult:
-    """Dispatch one accepted suggestion to its mutation. Phase 2 (sp7b)
-    handles only the two discovery ops; reconcile ops (add_step, recite_node,
-    flag_stale_node, relabel_node) are added by sp7c — they raise 422 here.
+    """Dispatch one accepted suggestion to its mutation. Handles the discovery
+    ops (create_process, assign_claims) plus the sp7c reconcile ops add_step and
+    recite_node; the remaining reconcile ops (flag_stale_node, relabel_node) are
+    added by a later sp7c task — they still raise 422 here.
 
     Returns the result; the caller is responsible for stamping status/outcome
     and committing. A deleted target → graceful TARGET_GONE no-op (no raise),
@@ -418,6 +427,97 @@ def apply_suggestion(
             outcome=SuggestionOutcome.APPLIED.value,
             process_id=proc.id,
             linked=linked,
+        )
+
+    if op == "add_step":
+        version = db.get(ProcessVersion, sug.version_id)
+        after_id = payload.get("after_node_id")
+        source = db.get(ProcessNode, UUID(after_id)) if after_id else None
+        if version is None or source is None or source.version_id != version.id:
+            return AcceptSuggestionResult(
+                suggestion_id=sug.id,
+                status=SuggestionStatus.ACCEPTED.value,
+                outcome=SuggestionOutcome.TARGET_GONE.value,
+            )
+        # Keep the new step in the source node's lane; fall back to the first lane.
+        lane_id = source.lane_id
+        if lane_id is None:
+            lane = db.scalars(
+                select(ProcessLane)
+                .where(ProcessLane.version_id == version.id)
+                .order_by(ProcessLane.order_index)
+            ).first()
+            if lane is None:
+                return AcceptSuggestionResult(
+                    suggestion_id=sug.id,
+                    status=SuggestionStatus.ACCEPTED.value,
+                    outcome=SuggestionOutcome.TARGET_GONE.value,
+                )
+            lane_id = lane.id
+        cited = [UUID(c) for c in payload.get("cited_claim_ids", [])]
+        new_x = float((source.position or {}).get("x", 0)) + 250.0
+        _create_proposed_step(
+            db,
+            version_id=version.id,
+            source=source,
+            lane_id=lane_id,
+            name=payload.get("name", ""),
+            node_type=payload.get("type", "task"),
+            x=new_x,
+            relative_y=float((source.position or {}).get("relative_y", 0)),
+            edge_label=payload.get("edge_label"),
+            cited_claim_ids=cited,
+            project_id=project.id,
+        )
+        return AcceptSuggestionResult(
+            suggestion_id=sug.id,
+            status=SuggestionStatus.ACCEPTED.value,
+            outcome=SuggestionOutcome.APPLIED.value,
+            process_id=sug.process_id,
+        )
+
+    if op == "recite_node":
+        version = db.get(ProcessVersion, sug.version_id)
+        node_id = payload.get("node_id")
+        node = db.get(ProcessNode, UUID(node_id)) if node_id else None
+        if node is None or version is None or node.version_id != version.id:
+            return AcceptSuggestionResult(
+                suggestion_id=sug.id,
+                status=SuggestionStatus.ACCEPTED.value,
+                outcome=SuggestionOutcome.TARGET_GONE.value,
+            )
+        for cid in payload.get("add_claim_ids", []):
+            claim_uuid = UUID(cid)
+            exists = db.scalars(
+                select(NodeClaimLink).where(
+                    NodeClaimLink.node_id == node.id,
+                    NodeClaimLink.claim_id == claim_uuid,
+                )
+            ).first()
+            if exists is None:
+                claim = db.get(Claim, claim_uuid)
+                if claim is not None and claim.project_id == project.id:
+                    db.add(
+                        NodeClaimLink(
+                            node_id=node.id,
+                            claim_id=claim_uuid,
+                            link_kind=ClaimLinkKind.SUPPORTS.value,
+                        )
+                    )
+        for cid in payload.get("remove_claim_ids", []):
+            link = db.scalars(
+                select(NodeClaimLink).where(
+                    NodeClaimLink.node_id == node.id,
+                    NodeClaimLink.claim_id == UUID(cid),
+                )
+            ).first()
+            if link is not None:
+                db.delete(link)
+        return AcceptSuggestionResult(
+            suggestion_id=sug.id,
+            status=SuggestionStatus.ACCEPTED.value,
+            outcome=SuggestionOutcome.APPLIED.value,
+            process_id=sug.process_id,
         )
 
     # Reconcile ops are not implemented in Phase 2; sp7c extends this dispatcher.

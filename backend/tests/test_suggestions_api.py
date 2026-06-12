@@ -124,15 +124,17 @@ def test_accept_with_deleted_target_is_graceful_no_op(client, db):
 
 def test_accept_unknown_op_kind_is_422(client, db):
     proj, claims = _seed(db)
+    # recite_node became a real op in sp7c; use a genuinely unknown op to keep
+    # exercising the dispatcher's 422 fallthrough.
     sug = ProcessSuggestion(
         batch_id=claims[0].id, project_id=proj.id, kind="map_reconcile",
-        process_id=None, op="recite_node",
+        process_id=None, op="bogus_op",
         payload={"node_id": "x"}, rationale="", status="pending",
     )
     db.add(sug); db.commit()
     r = client.post(f"/api/v2/projects/{proj.id}/process-suggestions/{sug.id}/accept")
     assert r.status_code == 422
-    assert "recite_node" in r.json()["detail"]
+    assert "bogus_op" in r.json()["detail"]
     # Status untouched on failure.
     db.refresh(sug)
     assert sug.status == "pending"
