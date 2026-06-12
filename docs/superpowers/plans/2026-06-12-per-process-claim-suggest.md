@@ -981,3 +981,27 @@ git commit -m "$(printf 'docs(claim-suggest): record execution outcome\n\nCo-Aut
 - **Prompt size.** Candidate block carries `kind` + `subject` only; soft cap of 200 candidates (logged when exceeded — never silently truncated) and 30 exemplars.
 - **Ref hygiene.** The model cites `C#` refs; the endpoint resolves them against the candidate set and drops any it invents (proven by the `C999` test), mirroring `map_reconcile`.
 - **Failure modes.** Empty candidate pool → no LLM call, empty result. Missing key / LLM error → 503, nothing changed.
+
+---
+
+## Execution outcome (2026-06-12)
+
+Executed via subagent-driven development (fresh implementer per task + reviews, controller adjudication) on branch `sp6-source-viewer`, committed locally, **not pushed**. 6 feature commits `de01267..1548771`, plus this outcome commit.
+
+### Gates (all green)
+- **Backend** `cd backend && .venv/bin/pytest -q`: **157 passed** (incl. `test_claim_matcher.py` — renderers; `propose_claim_matches` parse/degrade-on-wrong-tool/degrade-on-non-list/no-key; schema shape; endpoint excludes-already-linked + flags-elsewhere, drops-fabricated-ref, dedups-repeated-ref, tolerates-non-numeric-confidence, empty-pool-no-LLM, 503, 404).
+- **tsc** `npx tsc --noEmit`: clean. **Vitest** `npm test`: **67 passed / 11 files** (reuses `triage-selection.test.ts`; no new pure logic to test).
+- The final holistic review verdict was **READY TO INTEGRATE** — every backend↔frontend seam (field contract, endpoint path, `assignClaims` return shape, invalidation keys) lines up; no orphaned code; no SP commit included the unrelated working-tree files.
+
+### Commit map
+`de01267` renderers · `d95b45a` match_claims forced-tool · `85ad241` schemas · `26a8f8f` suggest-claims endpoint · `602b684` FE types+client · `1548771` Suggest-claims button + deselect dialog.
+
+### Deviations from the plan (controller-adjudicated)
+- **Non-numeric confidence guard (added during review).** The plan built `ClaimMatchCandidate(confidence=m.get("confidence"))` outside the 503 try/except; a model returning a non-numeric confidence (untrusted output) would raise a Pydantic `ValidationError` → unhandled 500. Hardened to `conf if isinstance(conf, (int, float)) else None` (matching the sibling reconcile endpoint's refusal to trust model confidence), with `test_suggest_tolerates_non_numeric_confidence` + `test_suggest_dedups_repeated_ref` added.
+- **`_claim_match_client` wrapper placed next to its only caller** (just above `list_suggestions`) rather than above `apply_suggestion` — module-level def, patchable, reads better.
+- **Unused test imports omitted** (`_select`, `AssignedBy` from the plan's draft snippet) to avoid lint noise; `logger` added to `processes.py` (none existed).
+
+### Follow-ups (non-blocking)
+- **503 vs 500 on `anthropic.APIError`.** The endpoint's `except (RuntimeError, ValueError)` does not catch `anthropic.APIError` (network/429/529), which would surface as 500, not the documented 503. This is the established convention across the AI-endpoint family (the SP-7c reconcile endpoint and `embeddings.py` catch identically); harden all of them together in a separate change rather than diverging one endpoint.
+- **200-candidate cap orders by `(kind, created_at)`**, so on projects with >200 unlinked claims the truncation is biased toward earlier kinds (logged, never silent). Revisit ordering only if it bites in practice.
+- Live smoke deferred per the plan's Step 3 unless run on the Windows dev stack with a real key (the stack is currently up via `./run-local.sh`, and `backend/.env` has a key, so this is now exercisable in the browser: create a process → **Suggest claims** → curate → **Add**).
