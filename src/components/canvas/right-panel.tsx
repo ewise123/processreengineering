@@ -33,21 +33,25 @@ import {
   type ReactNode,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import { api } from "@/lib/api";
 import type {
   ChatTurn,
   InputRow,
   NodeIssue,
+  ReconcileBatch,
+  ReconcileSuggestion,
   ReviewState,
   UUID,
   ViewerTarget,
 } from "@/lib/types";
 import { buildVersionRows, type TreeRow } from "./version-tree";
 import { diffChangeCount, isEmptyDiff } from "./version-diff";
+import { reconcileRow } from "./reconcile";
 import { bucketNodes, reviewByNodeMap } from "./review-summary";
 
-type TabId = "chat" | "versions" | "issues" | "review" | "sources";
+type TabId = "chat" | "versions" | "issues" | "review" | "sources" | "refresh";
 
 const TAB_LABELS: Record<TabId, string> = {
   chat: "Chat",
@@ -55,6 +59,7 @@ const TAB_LABELS: Record<TabId, string> = {
   issues: "Issues",
   review: "Review",
   sources: "Sources",
+  refresh: "Refresh",
 };
 
 const SUGGESTED_PROMPTS = [
@@ -118,6 +123,7 @@ export function RightPanel({
     { id: "issues", count: issues.length },
     { id: "review" },
     { id: "sources" },
+    { id: "refresh" },
   ];
 
   if (collapsed) {
@@ -258,6 +264,9 @@ export function RightPanel({
         {tab === "sources" && (
           <SourcesTab projectId={projectId} onOpenSource={onOpenSource} />
         )}
+        {tab === "refresh" && (
+          <RefreshTab projectId={projectId} modelId={modelId} versionId={versionId} />
+        )}
       </div>
     </div>
   );
@@ -276,6 +285,8 @@ function TabIcon({ id }: { id: TabId }) {
       return <ShieldCheck {...props} />;
     case "sources":
       return <Link2 {...props} />;
+    case "refresh":
+      return <RotateCcw {...props} />;
   }
 }
 
@@ -1045,6 +1056,130 @@ function DocumentRow({
         </span>
       )}
     </button>
+  );
+}
+
+// ─── Refresh-from-claims tab ────────────────────────────────
+function RefreshTab({
+  projectId,
+  modelId,
+  versionId,
+}: {
+  projectId: UUID;
+  modelId: UUID;
+  versionId: UUID;
+}) {
+  const queryClient = useQueryClient();
+  const [batch, setBatch] = useState<ReconcileBatch | null>(null);
+  const [resolved, setResolved] = useState<Record<string, "accepted" | "rejected" | "target_gone">>({});
+
+  const invalidateCanvas = () => {
+    queryClient.invalidateQueries({ queryKey: ["graph", projectId, modelId, versionId] });
+    queryClient.invalidateQueries({ queryKey: ["issues", projectId, modelId, versionId] });
+  };
+
+  const reconcile = useMutation({
+    mutationFn: () => api.reconcileMap(projectId, modelId, versionId),
+    onSuccess: (data) => {
+      setResolved({});
+      setBatch(data);
+    },
+    onError: (e: Error) => toast.error(`Refresh failed: ${e.message}`),
+  });
+
+  const accept = useMutation({
+    mutationFn: (id: UUID) => api.acceptSuggestion(projectId, id),
+    onSuccess: (data, id) => {
+      setResolved((r) => ({ ...r, [id]: data.outcome === "target_gone" ? "target_gone" : "accepted" }));
+      invalidateCanvas();
+    },
+    onError: (e: Error) => toast.error(`Accept failed: ${e.message}`),
+  });
+
+  const reject = useMutation({
+    mutationFn: (id: UUID) => api.rejectSuggestion(projectId, id),
+    onSuccess: (_d, id) => {
+      setResolved((r) => ({ ...r, [id]: "rejected" }));
+      invalidateCanvas();
+    },
+    onError: (e: Error) => toast.error(`Reject failed: ${e.message}`),
+  });
+
+  const items: ReconcileSuggestion[] = batch && !batch.empty ? batch.suggestions : [];
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="shrink-0 border-b border-slate-200 p-3">
+        <button
+          type="button"
+          onClick={() => reconcile.mutate()}
+          disabled={reconcile.isPending}
+          className="flex w-full items-center justify-center gap-1.5 rounded-md bg-violet-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:bg-slate-300"
+        >
+          <RotateCcw size={11} className={reconcile.isPending ? "animate-spin" : ""} />
+          {reconcile.isPending ? "Checking claims…" : "Refresh from claims"}
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-3 py-3">
+        {!batch && !reconcile.isPending && (
+          <p className="text-[11px] text-slate-500">
+            Compare this map against its process&apos;s claims and propose targeted
+            updates. Layout and hand edits are preserved.
+          </p>
+        )}
+        {batch?.empty && (
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700">
+            Map is in sync with its claims — nothing to reconcile.
+          </div>
+        )}
+        {items.length > 0 && (
+          <ul className="space-y-2">
+            {items.map((s) => {
+              const row = reconcileRow(s);
+              const state = resolved[s.id];
+              return (
+                <li key={s.id} className="rounded border border-slate-200 p-2">
+                  <div className="text-[12px] font-medium text-slate-800">{row.title}</div>
+                  <div className="text-[11px] text-slate-500">{row.detail}</div>
+                  {s.rationale && (
+                    <p className="mt-1 text-[11px] text-slate-500">{s.rationale}</p>
+                  )}
+                  {state ? (
+                    <span className="mt-1 inline-block text-[11px] font-medium text-slate-400">
+                      {state === "accepted"
+                        ? "Accepted"
+                        : state === "target_gone"
+                          ? "No change — target was deleted"
+                          : "Rejected"}
+                    </span>
+                  ) : (
+                    <div className="mt-1.5 flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => accept.mutate(s.id)}
+                        disabled={accept.isPending && accept.variables === s.id}
+                        className="rounded bg-slate-900 px-2 py-1 text-[11px] font-semibold text-white hover:bg-slate-700 disabled:bg-slate-300"
+                      >
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => reject.mutate(s.id)}
+                        disabled={reject.isPending && reject.variables === s.id}
+                        className="rounded px-2 py-1 text-[11px] font-medium text-slate-500 hover:bg-slate-100"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
   );
 }
 
