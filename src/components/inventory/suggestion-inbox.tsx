@@ -23,6 +23,7 @@ export function SuggestionInbox({
     qc.invalidateQueries({ queryKey: ["suggestions", projectId] });
     qc.invalidateQueries({ queryKey: ["processes", projectId] });
     qc.invalidateQueries({ queryKey: ["unassigned", projectId] });
+    qc.invalidateQueries({ queryKey: ["maps", projectId] });
   };
 
   const accept = useMutation({

@@ -39,6 +39,7 @@ export function BulkAssignPopover({
       toast.success(`Assigned ${claimIds.length} claim(s) to ${chosen.size} process(es).`);
       qc.invalidateQueries({ queryKey: ["processes", projectId] });
       qc.invalidateQueries({ queryKey: ["unassigned", projectId] });
+      qc.invalidateQueries({ queryKey: ["maps", projectId] });
       setChosen(new Set());
       setOpen(false);
       onAssigned();

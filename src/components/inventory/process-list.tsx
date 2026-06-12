@@ -23,6 +23,7 @@ export function ProcessList({
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["processes", projectId] });
     qc.invalidateQueries({ queryKey: ["unassigned", projectId] });
+    qc.invalidateQueries({ queryKey: ["maps", projectId] });
   };
 
   const create = useMutation({
