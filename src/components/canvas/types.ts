@@ -38,6 +38,9 @@ export interface CanvasNode {
   aiProposed?: boolean;
   /** Optional free-text description (properties.description). */
   description?: string;
+  /** True when SP-7c reconcile flagged this node's evidence as stale
+   * (properties.evidence_stale). Frontend-read-only badge. */
+  evidenceStale?: boolean;
 }
 
 /** Resolved node with absolute world Y, used for SVG rendering. */

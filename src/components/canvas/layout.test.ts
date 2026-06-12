@@ -38,3 +38,15 @@ describe("buildCanvasState ai_proposed + description", () => {
     expect(nodes[0].description).toBeUndefined();
   });
 });
+
+describe("buildCanvasState evidence_stale", () => {
+  it("maps properties.evidence_stale onto the node", () => {
+    const { nodes } = buildCanvasState(graphWith({ evidence_stale: true }));
+    expect(nodes[0].evidenceStale).toBe(true);
+  });
+
+  it("defaults evidenceStale to false when absent", () => {
+    const { nodes } = buildCanvasState(graphWith({}));
+    expect(nodes[0].evidenceStale).toBe(false);
+  });
+});
