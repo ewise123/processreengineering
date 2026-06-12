@@ -1477,6 +1477,65 @@ def ai_edit_node(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+def _create_proposed_step(
+    db: Session,
+    *,
+    version_id: UUID,
+    source: ProcessNode,
+    lane_id: UUID,
+    name: str,
+    node_type: str,
+    x: float,
+    relative_y: float,
+    edge_label: str | None,
+    cited_claim_ids: list[UUID],
+    project_id: UUID,
+) -> tuple[ProcessNode, ProcessEdge]:
+    """Create one ai_proposed node downstream of ``source`` plus the connecting
+    edge and AI_PROPOSED NodeClaimLinks for cited claims that genuinely belong to
+    ``project_id``. Caller owns the transaction (no commit here). Shared by the
+    ai-proposed-step endpoint and the SP-7c reconcile ``add_step`` accept."""
+    node = ProcessNode(
+        version_id=version_id,
+        type=node_type,
+        name=name,
+        lane_id=lane_id,
+        position={"x": x, "relative_y": relative_y},
+        properties={},
+    )
+    db.add(node)
+    db.flush()
+    node.properties = {**node.properties, LINEAGE_KEY: str(node.id), "ai_proposed": True}
+    flag_modified(node, "properties")
+
+    edge = ProcessEdge(
+        version_id=version_id,
+        source_node_id=source.id,
+        target_node_id=node.id,
+        label=edge_label or None,
+    )
+    db.add(edge)
+
+    if cited_claim_ids:
+        real_claims = list(
+            db.scalars(
+                select(Claim).where(
+                    Claim.id.in_(cited_claim_ids),
+                    Claim.project_id == project_id,
+                )
+            ).all()
+        )
+        for claim in real_claims:
+            db.add(
+                NodeClaimLink(
+                    node_id=node.id,
+                    claim_id=claim.id,
+                    link_kind=ClaimLinkKind.AI_PROPOSED.value,
+                )
+            )
+    return node, edge
+
+
 @router.post(
     "/process-maps/{model_id}/versions/{version_id}/ai-proposed-step",
     response_model=AiProposedStepResult,
@@ -1512,49 +1571,19 @@ def apply_proposed_step(
             status_code=422, detail="lane_id must reference a lane in this version"
         )
 
-    # Create the new node; flush to obtain its id before we stamp the lineage key.
-    node = ProcessNode(
+    node, edge = _create_proposed_step(
+        db,
         version_id=version.id,
-        type=payload.type,
-        name=payload.name,
+        source=source,
         lane_id=payload.lane_id,
-        position={"x": payload.x, "relative_y": payload.relative_y},
-        properties={},
+        name=payload.name,
+        node_type=payload.type,
+        x=payload.x,
+        relative_y=payload.relative_y,
+        edge_label=payload.edge_label,
+        cited_claim_ids=payload.cited_claim_ids,
+        project_id=project.id,
     )
-    db.add(node)
-    db.flush()
-
-    node.properties = {**node.properties, LINEAGE_KEY: str(node.id), "ai_proposed": True}
-    flag_modified(node, "properties")
-
-    # Create the edge from the source node to the new node.
-    edge = ProcessEdge(
-        version_id=version.id,
-        source_node_id=source.id,
-        target_node_id=node.id,
-        label=payload.edge_label or None,
-    )
-    db.add(edge)
-
-    # Resolve cited claim ids: only create links for claims that genuinely
-    # belong to this project; silently ignore any bogus/foreign ids.
-    if payload.cited_claim_ids:
-        real_claims = list(
-            db.scalars(
-                select(Claim).where(
-                    Claim.id.in_(payload.cited_claim_ids),
-                    Claim.project_id == project.id,
-                )
-            ).all()
-        )
-        for claim in real_claims:
-            db.add(
-                NodeClaimLink(
-                    node_id=node.id,
-                    claim_id=claim.id,
-                    link_kind=ClaimLinkKind.AI_PROPOSED.value,
-                )
-            )
 
     db.commit()
     db.refresh(node)
