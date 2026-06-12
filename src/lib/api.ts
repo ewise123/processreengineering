@@ -47,6 +47,7 @@ import type {
   Project,
   ProjectCreate,
   ProjectUpdate,
+  ReconcileBatch,
   ReviewState,
   SuggestBatchResult,
   TriageClaim,
@@ -383,6 +384,11 @@ export const api = {
     request<AiProposedStepResult>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/ai-proposed-step`,
       { method: "POST", json: body }
+    ),
+  reconcileMap: (projectId: UUID, modelId: UUID, versionId: UUID) =>
+    request<ReconcileBatch>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/reconcile`,
+      { method: "POST", json: {} }
     ),
 
   // Process inventory

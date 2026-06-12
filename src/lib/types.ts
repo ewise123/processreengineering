@@ -410,6 +410,31 @@ export interface SuggestBatchResult {
   suggestion_count: number;
 }
 
+export type ReconcileOp =
+  | "add_step"
+  | "recite_node"
+  | "flag_stale_node"
+  | "relabel_node";
+
+export interface ReconcileSuggestion {
+  id: UUID;
+  batch_id: UUID;
+  op: ReconcileOp;
+  /** Op-specific payload with resolved UUIDs. See the SP-7c op vocabulary. */
+  payload: Record<string, unknown>;
+  rationale: string;
+  confidence: number | null;
+  status: "pending" | "accepted" | "rejected";
+}
+
+export interface ReconcileBatch {
+  /** null when the delta was empty and no LLM call was made. */
+  batch_id: UUID | null;
+  version_id: UUID;
+  empty: boolean;
+  suggestions: ReconcileSuggestion[];
+}
+
 export interface AcceptSuggestionResult {
   suggestion_id: UUID;
   status: string;
