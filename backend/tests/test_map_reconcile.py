@@ -1,4 +1,5 @@
 """Tests for SP-7c map reconcile: pure delta, forced-tool service, endpoint."""
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -16,6 +17,7 @@ from app.models.process import (
 from app.models.process_inventory import Process, ProcessClaimLink
 from app.models.project import Project
 from app.schemas.version_reconcile import ReconcileOp, ReconcileSuggestionRead
+from app.services import map_reconcile
 from app.services.map_reconcile import compute_claim_delta
 
 
@@ -131,3 +133,83 @@ def test_reconcile_suggestion_read_shape():
     )
     assert sug.op == ReconcileOp.RELABEL_NODE
     assert sug.payload["proposed_name"] == "Receive PO"
+
+
+# ---------------------------------------------------------------------------
+# Forced-tool service tests (faked client — no ANTHROPIC_API_KEY required)
+# ---------------------------------------------------------------------------
+
+
+class _FakeBlock:
+    def __init__(self, name, payload):
+        self.type = "tool_use"
+        self.name = name
+        self.input = payload
+
+
+class _FakeClient:
+    def __init__(self, name, payload):
+        self._block = _FakeBlock(name, payload)
+
+    @property
+    def messages(self):
+        return self
+
+    def create(self, **kwargs):
+        return SimpleNamespace(content=[self._block])
+
+
+def test_propose_reconcile_parses_ops():
+    fake = _FakeClient(
+        "propose_reconcile",
+        {
+            "ops": [
+                {
+                    "op": "add_step",
+                    "name": "Verify budget",
+                    "type": "task",
+                    "after_node_ref": "N1",
+                    "lane_ref": "L1",
+                    "lane_name": None,
+                    "edge_label": "if over $10k",
+                    "cited_claim_refs": ["C1"],
+                    "rationale": "C1 implies a budget check.",
+                },
+                {
+                    "op": "flag_stale_node",
+                    "node_ref": "N1",
+                    "vanished_claim_refs": ["C2"],
+                    "rationale": "C2 no longer scoped.",
+                },
+            ]
+        },
+    )
+    out = map_reconcile.propose_reconcile(
+        client=fake, model="m", context_block="...", delta_block="..."
+    )
+    assert out["ops"][0]["op"] == "add_step"
+    assert out["ops"][1]["node_ref"] == "N1"
+
+
+def test_propose_reconcile_empty_on_malformed():
+    fake = _FakeClient("not_the_tool", {"junk": True})
+    out = map_reconcile.propose_reconcile(
+        client=fake, model="m", context_block="...", delta_block="..."
+    )
+    assert out == {"ops": []}
+
+
+def test_propose_reconcile_empty_on_non_list_ops():
+    # Forced tool_use present, but ``ops`` is not a list -> degrade, don't raise.
+    fake = _FakeClient("propose_reconcile", {"ops": None})
+    out = map_reconcile.propose_reconcile(
+        client=fake, model="m", context_block="...", delta_block="..."
+    )
+    assert out == {"ops": []}
+
+
+def test_get_client_raises_without_key(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    map_reconcile._client = None
+    with pytest.raises(RuntimeError):
+        map_reconcile._get_client()
