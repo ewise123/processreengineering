@@ -50,6 +50,7 @@ import type {
   ReconcileBatch,
   ReviewState,
   SuggestBatchResult,
+  SuggestClaimsResult,
   TriageClaim,
   UUID,
   VersionDiff,
@@ -421,6 +422,11 @@ export const api = {
     request<{ process_id: UUID; removed: number }>(
       `/api/v2/projects/${projectId}/processes/${processId}/claims`,
       { method: "DELETE", json: { claim_ids: claimIds } }
+    ),
+  suggestClaimsForProcess: (projectId: UUID, processId: UUID) =>
+    request<SuggestClaimsResult>(
+      `/api/v2/projects/${projectId}/processes/${processId}/suggest-claims`,
+      { method: "POST", json: {} }
     ),
   listUnassignedClaims: (projectId: UUID) =>
     request<TriageClaim[]>(`/api/v2/projects/${projectId}/claims/unassigned`),

@@ -410,6 +410,19 @@ export interface SuggestBatchResult {
   suggestion_count: number;
 }
 
+export interface ClaimMatchCandidate {
+  claim_id: UUID;
+  subject: string;
+  kind: string;
+  confidence: number | null;
+  rationale: string;
+  in_other_processes: boolean;
+}
+
+export interface SuggestClaimsResult {
+  candidates: ClaimMatchCandidate[];
+}
+
 export type ReconcileOp =
   | "add_step"
   | "recite_node"
