@@ -6,7 +6,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
-import type { Process, UUID } from "@/lib/types";
+import { SuggestClaimsDialog } from "./suggest-claims-dialog";
+import type { ClaimMatchCandidate, Process, UUID } from "@/lib/types";
 
 export function ProcessList({
   projectId,
@@ -51,6 +52,23 @@ export function ProcessList({
     mutationFn: (id: UUID) => api.updateProcess(projectId, id, { status: "archived" }),
     onSuccess: invalidate,
     onError: (e: Error) => toast.error(`Archive failed: ${e.message}`),
+  });
+
+  const [matchFor, setMatchFor] = useState<{
+    process: Process;
+    candidates: ClaimMatchCandidate[];
+  } | null>(null);
+
+  const suggest = useMutation({
+    mutationFn: (p: Process) => api.suggestClaimsForProcess(projectId, p.id),
+    onSuccess: (data, p) => {
+      if (data.candidates.length === 0) {
+        toast(`No unlinked claims matched "${p.name}".`);
+      } else {
+        setMatchFor({ process: p, candidates: data.candidates });
+      }
+    },
+    onError: (e: Error) => toast.error(`Suggest failed: ${e.message}`),
   });
 
   const active = processes.filter((p) => p.status === "active");
@@ -102,6 +120,16 @@ export function ProcessList({
                   <Button
                     size="sm"
                     variant="ghost"
+                    onClick={() => suggest.mutate(p)}
+                    disabled={suggest.isPending && suggest.variables?.id === p.id}
+                  >
+                    {suggest.isPending && suggest.variables?.id === p.id
+                      ? "Matching…"
+                      : "Suggest claims"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
                     onClick={() => {
                       setEditingId(p.id);
                       setEditName(p.name);
@@ -131,6 +159,19 @@ export function ProcessList({
           </li>
         )}
       </ul>
+
+      {matchFor && (
+        <SuggestClaimsDialog
+          projectId={projectId}
+          processId={matchFor.process.id}
+          processName={matchFor.process.name}
+          candidates={matchFor.candidates}
+          open={matchFor !== null}
+          onOpenChange={(o) => {
+            if (!o) setMatchFor(null);
+          }}
+        />
+      )}
     </div>
   );
 }
