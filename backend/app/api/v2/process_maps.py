@@ -1,6 +1,6 @@
 """Phase 2.5 endpoints: generate process maps from claims, read them back."""
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, func, or_, select, update
@@ -28,6 +28,7 @@ from app.models.process import (
     ProcessNode,
     ProcessVersion,
 )
+from app.models.process_inventory import ProcessSuggestion
 from app.models.project import Project
 from app.models.workflow import Review
 from app.models.claim import Claim, ClaimCitation, ClaimConflict
@@ -75,6 +76,12 @@ from app.schemas.version_ai_edit import (
     ValidateGap,
     ValidateProposal,
 )
+from app.schemas.version_reconcile import (
+    ReconcileBatchRead,
+    ReconcileOp,
+    ReconcileRequest,
+    ReconcileSuggestionRead,
+)
 from app.services.legacy_bpmn import build_bpmn_xml, validate_xml
 from app.services.map_ai_edit import (
     propose_relabel,
@@ -84,6 +91,8 @@ from app.services.map_ai_edit import (
 )
 from app.services.map_chat import ChatTurn as MapChatTurn, chat as run_map_chat
 from app.services.map_context import assemble_map_context
+from app.services.map_reconcile import compute_claim_delta, propose_reconcile
+from app.services import map_reconcile as _map_reconcile_mod
 from app.services.process_generation import generate_structure_from_claims
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
@@ -1398,6 +1407,37 @@ def _resolve_refs(refs, claim_ref_to_id):
     return out
 
 
+def _resolve_node_ref(ref, node_id_by_ref):
+    """Map one node short ref (N1) to its UUID; None if absent/fabricated."""
+    if ref is None:
+        return None
+    return node_id_by_ref.get(str(ref).strip().upper())
+
+
+def _reconcile_client():
+    """Thin wrapper so the endpoint resolves the Anthropic client lazily and
+    tests can patch it without a real key."""
+    return _map_reconcile_mod._get_client()
+
+
+def _render_delta(delta, ctx) -> str:
+    """Compact, ref-anchored rendering of the delta for the prompt."""
+    lines: list[str] = []
+    ref_by_claim = {cid: ref for ref, cid in ctx.claim_ref_to_id.items()}
+    if delta.new_evidence:
+        lines.append("New evidence (claims in the process, cited by no step):")
+        for c in delta.new_evidence:
+            ref = ref_by_claim.get(c.id, "?")
+            lines.append(f"  {ref}: [{c.kind}] {c.subject}")
+    if any(delta.vanished_evidence.values()):
+        lines.append("Vanished evidence (claims a step cites but that left the process):")
+        for node_id, claim_ids in delta.vanished_evidence.items():
+            node_ref = ctx.node_ref_by_id.get(node_id, "?")
+            for cid in claim_ids:
+                lines.append(f"  {node_ref} still cites {ref_by_claim.get(cid, '?')}")
+    return "\n".join(lines) if lines else "(no drift)"
+
+
 @router.post(
     "/process-maps/{model_id}/versions/{version_id}/nodes/{node_id}/ai-edit",
     response_model=AiEditResponse,
@@ -1591,4 +1631,138 @@ def apply_proposed_step(
     return AiProposedStepResult(
         node=ProcessNodeRead.model_validate(node),
         edge=ProcessEdgeRead.model_validate(edge),
+    )
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/reconcile",
+    response_model=ReconcileBatchRead,
+)
+def reconcile_map(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    payload: ReconcileRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> ReconcileBatchRead:
+    """Refresh a map from its process's claims. Computes the claim delta in
+    plain code; if it is empty, returns an empty batch with NO LLM call. Else
+    asks Claude for reconcile ops, resolves their refs to real UUIDs (dropping
+    fabrications), and persists one map_reconcile suggestion batch. LLM failure
+    -> 503 with nothing persisted."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+    if model.process_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This map is not linked to a process; attach it before reconciling.",
+        )
+
+    delta = compute_claim_delta(db, version, model.process_id)
+    if delta.is_empty():
+        return ReconcileBatchRead(
+            batch_id=None, version_id=version.id, empty=True, suggestions=[]
+        )
+
+    ctx = assemble_map_context(db, version, selected_node_id=None)
+    node_id_by_ref = {ref: nid for nid, ref in ctx.node_ref_by_id.items()}
+    delta_block = _render_delta(delta, ctx)
+
+    try:
+        client = _reconcile_client()  # raises RuntimeError if no key
+        raw = propose_reconcile(
+            client=client,
+            model=_map_reconcile_mod.RECONCILE_MODEL,
+            context_block=ctx.text,
+            delta_block=delta_block,
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    batch_id = uuid4()
+    rows: list[ProcessSuggestion] = []
+    for op in raw.get("ops", []):
+        kind = op.get("op")
+        payload_out: dict | None = None
+        if kind == ReconcileOp.ADD_STEP.value:
+            after_id = _resolve_node_ref(op.get("after_node_ref"), node_id_by_ref)
+            if after_id is None:
+                continue  # fabricated anchor -> drop
+            payload_out = {
+                "name": (op.get("name") or "").strip(),
+                "type": op.get("type") or "task",
+                "after_node_id": str(after_id),
+                "lane_ref": op.get("lane_ref"),
+                "lane_name": op.get("lane_name"),
+                "edge_label": op.get("edge_label"),
+                "cited_claim_ids": [str(c) for c in _resolve_refs(op.get("cited_claim_refs"), ctx.claim_ref_to_id)],
+            }
+            if not payload_out["name"]:
+                continue
+        elif kind == ReconcileOp.RECITE_NODE.value:
+            node_id = _resolve_node_ref(op.get("node_ref"), node_id_by_ref)
+            if node_id is None:
+                continue
+            payload_out = {
+                "node_id": str(node_id),
+                "add_claim_ids": [str(c) for c in _resolve_refs(op.get("add_claim_refs"), ctx.claim_ref_to_id)],
+                "remove_claim_ids": [str(c) for c in _resolve_refs(op.get("remove_claim_refs"), ctx.claim_ref_to_id)],
+            }
+        elif kind == ReconcileOp.FLAG_STALE_NODE.value:
+            node_id = _resolve_node_ref(op.get("node_ref"), node_id_by_ref)
+            if node_id is None:
+                continue
+            payload_out = {
+                "node_id": str(node_id),
+                "vanished_claim_ids": [str(c) for c in _resolve_refs(op.get("vanished_claim_refs"), ctx.claim_ref_to_id)],
+            }
+        elif kind == ReconcileOp.RELABEL_NODE.value:
+            node_id = _resolve_node_ref(op.get("node_ref"), node_id_by_ref)
+            proposed = (op.get("proposed_name") or "").strip()
+            if node_id is None or not proposed:
+                continue
+            payload_out = {"node_id": str(node_id), "proposed_name": proposed}
+        else:
+            continue  # unknown op -> drop
+
+        rows.append(
+            ProcessSuggestion(
+                batch_id=batch_id,
+                project_id=project.id,
+                kind="map_reconcile",
+                process_id=model.process_id,
+                version_id=version.id,
+                op=kind,
+                payload=payload_out,
+                rationale=op.get("rationale", ""),
+                status="pending",
+            )
+        )
+
+    for r in rows:
+        db.add(r)
+    db.commit()
+    for r in rows:
+        db.refresh(r)
+
+    return ReconcileBatchRead(
+        batch_id=batch_id,
+        version_id=version.id,
+        empty=False,
+        suggestions=[
+            ReconcileSuggestionRead(
+                id=r.id,
+                batch_id=r.batch_id,
+                op=ReconcileOp(r.op),
+                payload=r.payload,
+                rationale=r.rationale or "",
+                confidence=r.confidence,
+                status=r.status,
+            )
+            for r in rows
+        ],
     )

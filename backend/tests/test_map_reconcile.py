@@ -1,5 +1,6 @@
 """Tests for SP-7c map reconcile: pure delta, forced-tool service, endpoint."""
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -213,3 +214,179 @@ def test_get_client_raises_without_key(monkeypatch):
     map_reconcile._client = None
     with pytest.raises(RuntimeError):
         map_reconcile._get_client()
+
+
+# ---------------------------------------------------------------------------
+# Endpoint tests (reconcile_map): empty-delta short-circuit, persist + ref
+# hygiene, 409 (unattached map), 503 (LLM failure persists nothing).
+# ---------------------------------------------------------------------------
+
+from fastapi import HTTPException
+from sqlalchemy import select as _select
+
+from app.api.v2 import process_maps as pm_api
+from app.models.process_inventory import ProcessSuggestion
+from app.schemas.version_reconcile import ReconcileRequest
+
+
+def test_reconcile_empty_delta_no_llm_no_persist(db):
+    process, version, n1, claim_new, claim_kept, claim_gone = _seed(db)
+    # Bring into sync so the delta is empty.
+    db.add(ProcessClaimLink(process_id=process.id, claim_id=claim_gone.id))
+    db.add(NodeClaimLink(node_id=n1.id, claim_id=claim_new.id, link_kind=ClaimLinkKind.SUPPORTS.value))
+    db.commit()
+
+    # Patch the service so a stray LLM call would blow up the test.
+    with patch.object(pm_api, "propose_reconcile", side_effect=AssertionError("LLM called")):
+        resp = pm_api.reconcile_map(
+            project=_project_of(db, version),
+            model_id=version.model_id,
+            version_id=version.id,
+            payload=ReconcileRequest(),
+            db=db,
+        )
+    assert resp.empty is True
+    assert resp.batch_id is None
+    assert resp.suggestions == []
+    assert db.scalars(_select(ProcessSuggestion)).first() is None
+
+
+def test_reconcile_persists_batch_and_resolves_refs(db):
+    process, version, n1, claim_new, claim_kept, claim_gone = _seed(db)
+    # Model returns one valid add_step (cites C1) + a relabel of a fabricated
+    # node ref (N99 -> dropped, op skipped).
+    def fake_propose(*, client, model, context_block, delta_block):
+        return {
+            "ops": [
+                {
+                    "op": "add_step",
+                    "name": "New step",
+                    "type": "task",
+                    "after_node_ref": "N1",
+                    "lane_ref": "L1",
+                    "lane_name": None,
+                    "edge_label": None,
+                    "cited_claim_refs": ["C1"],
+                    "rationale": "new evidence",
+                },
+                {
+                    "op": "relabel_node",
+                    "node_ref": "N99",
+                    "proposed_name": "Bogus",
+                    "rationale": "fabricated node",
+                },
+            ]
+        }
+
+    with patch.object(pm_api, "propose_reconcile", fake_propose), \
+         patch.object(pm_api, "_reconcile_client", return_value=object()):
+        resp = pm_api.reconcile_map(
+            project=_project_of(db, version),
+            model_id=version.model_id,
+            version_id=version.id,
+            payload=ReconcileRequest(),
+            db=db,
+        )
+    assert resp.empty is False
+    assert resp.batch_id is not None
+    ops = [s.op for s in resp.suggestions]
+    assert "add_step" in ops
+    # The relabel on the fabricated node ref was dropped (no resolvable node).
+    assert "relabel_node" not in ops
+    rows = list(db.scalars(_select(ProcessSuggestion).where(
+        ProcessSuggestion.batch_id == resp.batch_id)).all())
+    assert len(rows) == len(resp.suggestions)
+    assert all(r.kind == "map_reconcile" and r.version_id == version.id for r in rows)
+
+
+def test_reconcile_persists_recite_flag_and_drops_unknown(db):
+    process, version, n1, claim_new, claim_kept, claim_gone = _seed(db)
+
+    def fake_propose(*, client, model, context_block, delta_block):
+        return {
+            "ops": [
+                {
+                    "op": "recite_node",
+                    "node_ref": "n1",  # lowercase -> resolver upper-cases to N1
+                    "add_claim_refs": ["C1", "C99"],  # C99 fabricated -> dropped
+                    "remove_claim_refs": [],
+                    "rationale": "recite",
+                },
+                {
+                    "op": "flag_stale_node",
+                    "node_ref": "N1",
+                    "vanished_claim_refs": ["C1"],
+                    "rationale": "stale",
+                },
+                {
+                    "op": "frobnicate",  # unknown op -> dropped
+                    "node_ref": "N1",
+                    "rationale": "junk",
+                },
+            ]
+        }
+
+    with patch.object(pm_api, "propose_reconcile", fake_propose), \
+         patch.object(pm_api, "_reconcile_client", return_value=object()):
+        resp = pm_api.reconcile_map(
+            project=_project_of(db, version),
+            model_id=version.model_id,
+            version_id=version.id,
+            payload=ReconcileRequest(),
+            db=db,
+        )
+
+    ops = [s.op for s in resp.suggestions]
+    assert ops.count("recite_node") == 1
+    assert ops.count("flag_stale_node") == 1
+    assert "frobnicate" not in ops  # unknown op dropped
+    assert len(resp.suggestions) == 2
+
+    recite = next(s for s in resp.suggestions if s.op == "recite_node")
+    assert recite.payload["node_id"] == str(n1.id)
+    # "n1" lowercased resolved to N1; C1 resolved to a real claim id, C99 dropped.
+    assert len(recite.payload["add_claim_ids"]) == 1
+    assert recite.payload["remove_claim_ids"] == []
+
+    flag = next(s for s in resp.suggestions if s.op == "flag_stale_node")
+    assert flag.payload["node_id"] == str(n1.id)
+    assert len(flag.payload["vanished_claim_ids"]) == 1
+
+
+def test_reconcile_409_when_map_has_no_process(db):
+    process, version, n1, *_ = _seed(db)
+    model = db.get(ProcessModel, version.model_id)
+    model.process_id = None
+    db.commit()
+    with pytest.raises(HTTPException) as exc:
+        pm_api.reconcile_map(
+            project=_project_of(db, version),
+            model_id=version.model_id,
+            version_id=version.id,
+            payload=ReconcileRequest(),
+            db=db,
+        )
+    assert exc.value.status_code == 409
+
+
+def test_reconcile_503_on_llm_failure_persists_nothing(db):
+    process, version, n1, *_ = _seed(db)  # non-empty delta from _seed
+    with patch.object(pm_api, "_reconcile_client", return_value=object()), \
+         patch.object(pm_api, "propose_reconcile", side_effect=RuntimeError("boom")):
+        with pytest.raises(HTTPException) as exc:
+            pm_api.reconcile_map(
+                project=_project_of(db, version),
+                model_id=version.model_id,
+                version_id=version.id,
+                payload=ReconcileRequest(),
+                db=db,
+            )
+    assert exc.value.status_code == 503
+    assert db.scalars(_select(ProcessSuggestion)).first() is None
+
+
+def _project_of(db, version):
+    """Return the Project the version belongs to (the route dependency would)."""
+    from app.models.project import Project
+    model = db.get(ProcessModel, version.model_id)
+    return db.get(Project, model.project_id)
