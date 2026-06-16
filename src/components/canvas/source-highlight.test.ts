@@ -1,11 +1,31 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  escapeHtml,
   findQuoteInText,
   isQuoteFragment,
   normalizeForMatch,
   targetPageFromRef,
 } from "./source-highlight";
+
+describe("escapeHtml", () => {
+  it("neutralizes script tags and angle brackets", () => {
+    expect(escapeHtml("<script>alert(1)</script>")).toBe(
+      "&lt;script&gt;alert(1)&lt;/script&gt;",
+    );
+  });
+  it("escapes the img onerror XSS payload", () => {
+    expect(escapeHtml('<img src=x onerror="alert(1)">')).toBe(
+      "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;",
+    );
+  });
+  it("escapes ampersands first so entities are not double-decoded", () => {
+    expect(escapeHtml("a & <b>")).toBe("a &amp; &lt;b&gt;");
+  });
+  it("leaves plain text untouched", () => {
+    expect(escapeHtml("plain words 123")).toBe("plain words 123");
+  });
+});
 
 describe("normalizeForMatch", () => {
   it("collapses whitespace and lowercases", () => {
