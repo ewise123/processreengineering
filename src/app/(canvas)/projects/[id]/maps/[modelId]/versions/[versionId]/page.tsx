@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowLeft } from "lucide-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -23,7 +24,15 @@ import { buildCanvasState } from "@/components/canvas/layout";
 import { reviewByNodeMap } from "@/components/canvas/review-summary";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
-import type { IssueSeverity, NodeReviewUpdate, ReviewDecision, UUID } from "@/lib/types";
+import type { IssueSeverity, NodeReviewUpdate, ReviewDecision, UUID, ViewerTarget } from "@/lib/types";
+
+// react-pdf / pdfjs reference browser-only globals at module eval, which crash
+// server-side rendering. Load the viewer client-only so the page route never
+// imports pdfjs on the server.
+const DocumentViewer = dynamic(
+  () => import("@/components/canvas/document-viewer").then((m) => m.DocumentViewer),
+  { ssr: false },
+);
 
 const STATUS_LABEL: Record<SaveStatus, string> = {
   idle: "Saved",
@@ -58,6 +67,8 @@ export default function CanvasPage() {
   // Properties panel collapse state lifted so the page can resize the
   // wrapper to a small button when collapsed.
   const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
+  const [viewerTarget, setViewerTarget] = useState<ViewerTarget | null>(null);
+  const [viewerExpanded, setViewerExpanded] = useState(true);
   const [counts, setCounts] = useState<{ lanes: number; nodes: number; edges: number } | null>(null);
   const handleCountsChange = useCallback(
     (c: { lanes: number; nodes: number; edges: number }) => setCounts(c),
@@ -357,6 +368,10 @@ export default function CanvasPage() {
             onDelete={handleNodeDelete}
             onUpdate={handleNodeUpdate}
             onAddStep={handleAddStep}
+            onOpenSource={(target) => {
+              setViewerTarget(target);
+              setViewerExpanded(true);
+            }}
             review={
               selectedNode
                 ? {
@@ -433,8 +448,36 @@ export default function CanvasPage() {
             reviewState={reviewState}
             onSendRequest={() => requestReviewMutation.mutate()}
             onNavigateVersion={handleNavigateVersion}
+            onOpenSource={(target) => {
+              setViewerTarget(target);
+              setViewerExpanded(true);
+            }}
             collapsed={rightCollapsed}
             onCollapsedChange={setRightCollapsed}
+          />
+        </div>
+      )}
+
+      {/* Source document viewer — floats over the canvas at single/double
+          width; opened from citation cards or the Sources tab. */}
+      {viewerTarget && (
+        <div
+          style={{
+            position: "absolute",
+            right: rightCollapsed ? 64 : 384,
+            top: 60,
+            bottom: 60,
+            zIndex: 30,
+            display: "flex",
+          }}
+        >
+          <DocumentViewer
+            key={viewerTarget.inputId}
+            projectId={params.id}
+            target={viewerTarget}
+            expanded={viewerExpanded}
+            onToggleExpanded={() => setViewerExpanded((v) => !v)}
+            onClose={() => setViewerTarget(null)}
           />
         </div>
       )}

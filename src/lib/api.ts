@@ -106,6 +106,17 @@ export const api = {
     const suffix = qs.toString() ? `?${qs}` : "";
     return request<Page<InputRow>>(`/api/v2/projects/${projectId}/inputs${suffix}`);
   },
+  /** Absolute URL of the rendered-PDF stream for a source document.
+   *  react-pdf fetches by URL, so this returns a string (not a JSON request). */
+  inputPdfUrl: (projectId: UUID, inputId: UUID) =>
+    `${API_BASE}/api/v2/projects/${projectId}/inputs/${inputId}/pdf`,
+  /** Plain-text body of a text source (the no-LibreOffice fast-path).
+   *  Rejects (throws) with 415 for non-text formats — the viewer then uses
+   *  the PDF path. */
+  getInputText: (projectId: UUID, inputId: UUID) =>
+    request<{ text: string }>(
+      `/api/v2/projects/${projectId}/inputs/${inputId}/text`,
+    ),
   uploadInput: async (projectId: UUID, type: string, file: File) => {
     const fd = new FormData();
     fd.append("type", type);

@@ -41,6 +41,7 @@ import type {
   NodeIssue,
   ReviewState,
   UUID,
+  ViewerTarget,
 } from "@/lib/types";
 import { buildVersionRows, type TreeRow } from "./version-tree";
 import { diffChangeCount, isEmptyDiff } from "./version-diff";
@@ -80,6 +81,7 @@ export function RightPanel({
   reviewState,
   onSendRequest,
   onNavigateVersion,
+  onOpenSource,
   collapsed,
   onCollapsedChange,
   initialTab = "chat",
@@ -94,6 +96,8 @@ export function RightPanel({
   reviewState?: ReviewState;
   onSendRequest: () => void;
   onNavigateVersion?: (versionId: UUID) => void;
+  /** Open a source document in the viewer (no citation = page 1, no highlight). */
+  onOpenSource: (target: ViewerTarget) => void;
   /** Controlled collapse state — the page lifts this so the Properties
    * panel can shift when the right panel collapses. */
   collapsed: boolean;
@@ -251,7 +255,9 @@ export function RightPanel({
             onSendRequest={onSendRequest}
           />
         )}
-        {tab === "sources" && <SourcesTab projectId={projectId} />}
+        {tab === "sources" && (
+          <SourcesTab projectId={projectId} onOpenSource={onOpenSource} />
+        )}
       </div>
     </div>
   );
@@ -491,7 +497,7 @@ function VersionsTab({
   if (versionsQuery.isError) {
     return (
       <div className="px-3 py-3 text-[11px] text-rose-600">
-        Couldn't load versions.
+        Couldn&apos;t load versions.
       </div>
     );
   }
@@ -516,7 +522,7 @@ function VersionsTab({
 
       {copyMutation.isError && (
         <div className="mb-2 rounded bg-rose-50 px-2 py-1 text-[10px] text-rose-700">
-          Couldn't create the version. Try again.
+          Couldn&apos;t create the version. Try again.
         </div>
       )}
 
@@ -970,7 +976,13 @@ function Bucket({
 }
 
 // ─── Sources tab ────────────────────────────────────────────
-function SourcesTab({ projectId }: { projectId: UUID }) {
+function SourcesTab({
+  projectId,
+  onOpenSource,
+}: {
+  projectId: UUID;
+  onOpenSource: (target: ViewerTarget) => void;
+}) {
   const inputsQuery = useQuery({
     queryKey: ["inputs", projectId],
     queryFn: () => api.listInputs(projectId, { limit: 200 }),
@@ -986,7 +998,7 @@ function SourcesTab({ projectId }: { projectId: UUID }) {
       )}
       <div className="space-y-1">
         {items.map((d) => (
-          <DocumentRow key={d.id} input={d} />
+          <DocumentRow key={d.id} input={d} onOpenSource={onOpenSource} />
         ))}
       </div>
       {!inputsQuery.isLoading && items.length === 0 && (
@@ -995,15 +1007,34 @@ function SourcesTab({ projectId }: { projectId: UUID }) {
         </div>
       )}
       <div className="mt-4 text-center text-[10.5px] italic text-slate-400">
-        Per-node citations live in the Properties panel when a node is selected.
+        Click a document to open it in the viewer. Per-node citations live in the
+        Properties panel when a node is selected.
       </div>
     </div>
   );
 }
 
-function DocumentRow({ input }: { input: InputRow }) {
+function DocumentRow({
+  input,
+  onOpenSource,
+}: {
+  input: InputRow;
+  onOpenSource: (target: ViewerTarget) => void;
+}) {
   return (
-    <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5">
+    <button
+      type="button"
+      onClick={() =>
+        onOpenSource({
+          inputId: input.id,
+          inputName: input.name,
+          sectionRef: null,
+          quote: null,
+        })
+      }
+      title="Open in viewer"
+      className="flex w-full items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-left hover:border-violet-300 hover:bg-violet-50"
+    >
       <FileText size={14} className="text-slate-500" />
       <span className="flex-1 truncate text-[11px] text-slate-700">
         {input.name}
@@ -1013,7 +1044,7 @@ function DocumentRow({ input }: { input: InputRow }) {
           {input.claim_count} claim{input.claim_count === 1 ? "" : "s"}
         </span>
       )}
-    </div>
+    </button>
   );
 }
 
