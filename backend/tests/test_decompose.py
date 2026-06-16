@@ -30,22 +30,39 @@ def test_next_level_increments_and_caps():
 def _seed_neighbors(db):
     """A linear graph n1 -> n2 -> n3, with claims c1@n1, c2@n2, c3@n3 and a
     detached claim c4 attached to no node. Returns (project, version, n2, ids)."""
-    org = Organization(name="O"); db.add(org); db.flush()
-    user = User(org_id=org.id, email=f"u-{uuid4()}@x.io", name="U"); db.add(user); db.flush()
-    project = Project(org_id=org.id, name="P", created_by=user.id); db.add(project); db.flush()
-    model = ProcessModel(project_id=project.id, name="M", level="L2"); db.add(model); db.flush()
-    version = ProcessVersion(model_id=model.id, version_number=1); db.add(version); db.flush()
-    lane = ProcessLane(version_id=version.id, name="Ops", order_index=0); db.add(lane); db.flush()
+    org = Organization(name="O")
+    db.add(org)
+    db.flush()
+    user = User(org_id=org.id, email=f"u-{uuid4()}@x.io", name="U")
+    db.add(user)
+    db.flush()
+    project = Project(org_id=org.id, name="P", created_by=user.id)
+    db.add(project)
+    db.flush()
+    model = ProcessModel(project_id=project.id, name="M", level="L2")
+    db.add(model)
+    db.flush()
+    version = ProcessVersion(model_id=model.id, version_number=1)
+    db.add(version)
+    db.flush()
+    lane = ProcessLane(version_id=version.id, name="Ops", order_index=0)
+    db.add(lane)
+    db.flush()
     def node(name):
         n = ProcessNode(version_id=version.id, lane_id=lane.id, type="task", name=name,
-                        position={}, properties={}); db.add(n); db.flush(); return n
+                        position={}, properties={})
+        db.add(n)
+        db.flush()
+        return n
     n1, n2, n3 = node("n1"), node("n2"), node("n3")
     db.add(ProcessEdge(version_id=version.id, source_node_id=n1.id, target_node_id=n2.id))
     db.add(ProcessEdge(version_id=version.id, source_node_id=n2.id, target_node_id=n3.id))
     claims = {}
     for key, owner in [("c1", n1), ("c2", n2), ("c3", n3), ("c4", None)]:
         c = Claim(project_id=project.id, kind="task", subject=key, normalized={})
-        db.add(c); db.flush(); claims[key] = c
+        db.add(c)
+        db.flush()
+        claims[key] = c
         if owner is not None:
             db.add(NodeClaimLink(node_id=owner.id, claim_id=c.id, link_kind=ClaimLinkKind.SUPPORTS.value))
     db.commit()

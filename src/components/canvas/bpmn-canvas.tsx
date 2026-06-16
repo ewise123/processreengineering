@@ -621,24 +621,6 @@ function BpmnCanvas({
     });
   }, []);
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      deleteNode: deleteNodeImpl,
-      updateNode: updateNodeImpl,
-      addProposedStep,
-      selectNode: (id) => {
-        setSelectedIds(new Set([id]));
-        focusNodeInViewport(id);
-      },
-      clearChildModelId,
-      deleteSelection: deleteSelectionImpl,
-      copySelection: copySelectionImpl,
-      moveSelectionToLane: moveSelectionToLaneImpl,
-    }),
-    [deleteNodeImpl, updateNodeImpl, addProposedStep, focusNodeInViewport, clearChildModelId, deleteSelectionImpl]
-  );
-
   // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
   // Cmd/Ctrl+Shift+Z (or Cmd/Ctrl+Y) for undo/redo. All of them no-op
   // when the user is typing in an input/textarea/contenteditable.
@@ -1407,6 +1389,27 @@ function BpmnCanvas({
       .map((e) => ({ fromOldId: e.from, toOldId: e.to, label: e.label }));
     clipboard.copy({ nodes, edges });
   }, [clipboard]);
+
+  // Exposed imperative handle. Declared here — after every *Impl callback it
+  // references — because the dependency array is evaluated during render, so
+  // forward-referencing a later `const` would hit the temporal dead zone.
+  useImperativeHandle(
+    ref,
+    () => ({
+      deleteNode: deleteNodeImpl,
+      updateNode: updateNodeImpl,
+      addProposedStep,
+      selectNode: (id) => {
+        setSelectedIds(new Set([id]));
+        focusNodeInViewport(id);
+      },
+      clearChildModelId,
+      deleteSelection: deleteSelectionImpl,
+      copySelection: copySelectionImpl,
+      moveSelectionToLane: moveSelectionToLaneImpl,
+    }),
+    [deleteNodeImpl, updateNodeImpl, addProposedStep, focusNodeInViewport, clearChildModelId, deleteSelectionImpl, copySelectionImpl, moveSelectionToLaneImpl]
+  );
 
   const pasteClipboardImpl = useCallback(async () => {
     const snap = clipboard.get();
