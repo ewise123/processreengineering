@@ -9,6 +9,7 @@ import "./pdf-worker";
 import { api } from "@/lib/api";
 import type { UUID, ViewerTarget } from "@/lib/types";
 import {
+  escapeHtml,
   findQuoteInText,
   isQuoteFragment,
   targetPageFromRef,
@@ -69,7 +70,10 @@ export function DocumentViewer({
     if (mode === "text" && markRef.current) {
       markRef.current.scrollIntoView({ block: "center" });
     }
-  }, [mode, text]);
+    // Re-run when the citation changes within the same document (the viewer is
+    // keyed only by inputId, so switching citations doesn't remount): textMatch
+    // moves the <mark>, and we need to scroll to the new position.
+  }, [mode, text, target.quote, textMatch?.start, textMatch?.end]);
 
   // PDF mode: highlight quote fragments per text-layer item.
   // CustomTextRenderer's type isn't re-exported, so derive it from PageProps.
@@ -77,8 +81,8 @@ export function DocumentViewer({
     target.quote
       ? ({ str }) =>
           isQuoteFragment(str, target.quote as string)
-            ? `<mark class="bg-amber-200 text-inherit" data-sp6-hit="1">${str}</mark>`
-            : str
+            ? `<mark class="bg-amber-200 text-inherit" data-sp6-hit="1">${escapeHtml(str)}</mark>`
+            : escapeHtml(str)
       : undefined;
 
   // PDF mode: after pages render, scroll the first highlighted run into view;
