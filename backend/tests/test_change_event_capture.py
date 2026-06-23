@@ -214,3 +214,89 @@ def test_add_lane_logs_one_create_event(db):
     assert ev.target_type == "lane"
     assert ev.source == "manual"
     assert ev.after["name"] == "New Lane"
+
+
+# ---------------------------------------------------------------------------
+# Delete tests
+# ---------------------------------------------------------------------------
+
+def test_delete_node_logs_delete_event_and_node_is_gone(db):
+    from app.models.process import ProcessNode
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    node_id = n1.id
+    # capture identifying fields before deletion
+    node_name = n1.name
+    node_type = n1.type
+
+    pm_api.delete_node(project=project, node_id=node_id, db=db)
+
+    # event survives
+    events = _events_for(db, node_id)
+    assert len(events) >= 1
+    ev = max(events, key=lambda e: e.created_at)
+    assert ev.kind == "delete"
+    assert ev.target_type == "node"
+    assert ev.target_id == node_id
+    assert ev.source == "manual"
+    assert ev.before["name"] == node_name
+    assert ev.before["type"] == node_type
+
+    # object is gone
+    assert db.get(ProcessNode, node_id) is None
+
+
+def test_delete_edge_logs_delete_event_and_edge_is_gone(db):
+    from app.models.process import ProcessEdge
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    edge_id = edge.id
+    src_id = edge.source_node_id
+    tgt_id = edge.target_node_id
+
+    pm_api.delete_edge(project=project, edge_id=edge_id, db=db)
+
+    # event survives
+    events = _events_for(db, edge_id)
+    assert len(events) >= 1
+    ev = max(events, key=lambda e: e.created_at)
+    assert ev.kind == "delete"
+    assert ev.target_type == "edge"
+    assert ev.target_id == edge_id
+    assert ev.source == "manual"
+    assert ev.before["source_node_id"] == str(src_id)
+    assert ev.before["target_node_id"] == str(tgt_id)
+    assert "label" in ev.before
+
+    # object is gone
+    assert db.get(ProcessEdge, edge_id) is None
+
+
+def test_delete_lane_logs_delete_event_and_lane_is_gone(db):
+    from app.models.process import ProcessLane
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    # add a second lane so deletion is allowed
+    new_lane = pm_api.add_lane(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=LaneCreate(name="Lane To Delete", order_index=1),
+        db=db,
+    )
+    lane_id = new_lane.id
+    lane_name = new_lane.name
+
+    pm_api.delete_lane(project=project, lane_id=lane_id, db=db)
+
+    # event survives
+    events = _events_for(db, lane_id)
+    # filter to delete events only (add_lane logs a create event above)
+    delete_events = [e for e in events if e.kind == "delete"]
+    assert len(delete_events) == 1
+    ev = delete_events[0]
+    assert ev.target_type == "lane"
+    assert ev.target_id == lane_id
+    assert ev.source == "manual"
+    assert ev.before["name"] == lane_name
+
+    # object is gone
+    assert db.get(ProcessLane, lane_id) is None

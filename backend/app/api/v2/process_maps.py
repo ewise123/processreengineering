@@ -920,6 +920,21 @@ def delete_edge(
     if edge is None:
         raise HTTPException(status_code=404, detail="Edge not found")
     _check_edge_in_project(edge, project.id, db)
+    record_change(
+        db,
+        target_type=ChangeTargetType.EDGE.value,
+        target_id=edge.id,
+        model_id=model_id_for_version(db, edge.version_id),
+        version_id=edge.version_id,
+        kind=ChangeKind.DELETE.value,
+        reason="Deleted",
+        before={
+            "source_node_id": str(edge.source_node_id),
+            "target_node_id": str(edge.target_node_id),
+            "label": edge.label,
+        },
+        source=ChangeSource.MANUAL.value,
+    )
     db.delete(edge)
     db.commit()
 
@@ -937,6 +952,17 @@ def delete_node(
         raise HTTPException(status_code=404, detail="Node not found")
     _check_node_in_project(node, project.id, db)
     version_id = node.version_id
+    record_change(
+        db,
+        target_type=ChangeTargetType.NODE.value,
+        target_id=node.id,
+        model_id=model_id_for_version(db, node.version_id),
+        version_id=node.version_id,
+        kind=ChangeKind.DELETE.value,
+        reason="Deleted",
+        before={"name": node.name, "type": node.type},
+        source=ChangeSource.MANUAL.value,
+    )
     db.execute(
         delete(Review).where(
             Review.target_type == ReviewTargetType.PROCESS_NODE.value,
@@ -1353,6 +1379,17 @@ def delete_lane(
         update(ProcessNode)
         .where(ProcessNode.lane_id == lane_id)
         .values(lane_id=fallback.id)
+    )
+    record_change(
+        db,
+        target_type=ChangeTargetType.LANE.value,
+        target_id=lane.id,
+        model_id=model_id_for_version(db, lane.version_id),
+        version_id=lane.version_id,
+        kind=ChangeKind.DELETE.value,
+        reason="Deleted",
+        before={"name": lane.name},
+        source=ChangeSource.MANUAL.value,
     )
     db.delete(lane)
     db.flush()
