@@ -228,6 +228,11 @@ export const api = {
       `/api/v2/projects/${projectId}/generate-process-map`,
       { method: "POST", json: payload }
     ),
+  generateBestPractices: (projectId: UUID, body: ProcessMapGenerateRequest) =>
+    request<ProcessMapGenerateResult>(
+      `/api/v2/projects/${projectId}/generate-best-practices`,
+      { method: "POST", json: body }
+    ),
   createBlankMap: (projectId: UUID, body: BlankMapRequest) =>
     request<BlankMapResult>(`/api/v2/projects/${projectId}/process-maps`, {
       method: "POST",

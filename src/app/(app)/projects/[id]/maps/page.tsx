@@ -114,6 +114,7 @@ export default function MapsPage() {
         </p>
         <div className="flex items-center gap-2">
           <NewBlankMapButton projectId={id} />
+          <GenerateBestPracticesButton projectId={id} />
           <GenerateMapForm projectId={id} />
         </div>
       </div>
@@ -192,6 +193,106 @@ const BLANK_LEVELS = [
   { value: "3", label: "L3 — Detailed Operational" },
   { value: "4", label: "L4 — Work Instruction" },
 ];
+
+function GenerateBestPracticesButton({ projectId }: { projectId: string }) {
+  const router = useRouter();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [level, setLevel] = useState("2");
+  const [focus, setFocus] = useState("");
+
+  const generate = useMutation({
+    mutationFn: () =>
+      api.generateBestPractices(projectId, {
+        name: name.trim(),
+        level,
+        focus: focus.trim() || null,
+      }),
+    onSuccess: (res) => {
+      toast.success(`Generated best-practices draft "${res.process_name}".`);
+      qc.invalidateQueries({ queryKey: ["maps", projectId] });
+      setOpen(false);
+      setName("");
+      setFocus("");
+      router.push(
+        `/projects/${projectId}/maps/${res.model_id}/versions/${res.version_id}`
+      );
+    },
+    onError: (e: Error) => toast.error(`Generate failed: ${e.message}`),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline">Generate best-practices draft</Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Generate best-practices draft</DialogTitle>
+          <DialogDescription>
+            Builds a starter map from generic best-practice knowledge — no
+            transcripts required. Each node records a best-practice origin in
+            its History. Refine on the canvas or re-ingest a transcript to layer
+            in project-specific claims.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="bp-name">Process name *</Label>
+            <Input
+              id="bp-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Order to Cash"
+              maxLength={300}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="bp-level">Level</Label>
+            <Select value={level} onValueChange={setLevel}>
+              <SelectTrigger id="bp-level">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {BLANK_LEVELS.map((l) => (
+                  <SelectItem key={l.value} value={l.value}>
+                    {l.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="bp-focus">Focus (optional)</Label>
+            <Input
+              id="bp-focus"
+              value={focus}
+              onChange={(e) => setFocus(e.target.value)}
+              placeholder="e.g. manufacturing, SaaS, healthcare"
+              maxLength={200}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => setOpen(false)}
+            disabled={generate.isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => generate.mutate()}
+            disabled={!name.trim() || generate.isPending}
+          >
+            {generate.isPending ? "Generating…" : "Generate"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function NewBlankMapButton({ projectId }: { projectId: string }) {
   const router = useRouter();
