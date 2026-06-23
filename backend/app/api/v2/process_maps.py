@@ -1216,13 +1216,28 @@ def attach_node_claims(
         ).all()
     )
     added = 0
+    newly_added_ids: list[UUID] = []
     for cid in requested_ids:
         if cid in existing:
             continue
         db.add(
             NodeClaimLink(node_id=node_id, claim_id=cid, link_kind=payload.link_kind)
         )
+        newly_added_ids.append(cid)
         added += 1
+    if added > 0:
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=node.id,
+            model_id=model_id_for_version(db, node.version_id),
+            version_id=node.version_id,
+            kind=ChangeKind.LINK_CLAIM.value,
+            reason="Linked claim(s) as evidence",
+            source=ChangeSource.MANUAL.value,
+            after={"claim_ids": [str(cid) for cid in newly_added_ids]},
+            cited_claim_ids=newly_added_ids,
+        )
     db.commit()
     return NodeClaimLinkResult(
         node_id=node_id,
@@ -1246,12 +1261,25 @@ def detach_node_claim(
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     _check_node_in_project(node, project.id, db)
-    db.execute(
+    result = db.execute(
         delete(NodeClaimLink).where(
             NodeClaimLink.node_id == node_id,
             NodeClaimLink.claim_id == claim_id,
         )
     )
+    if result.rowcount > 0:
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=node.id,
+            model_id=model_id_for_version(db, node.version_id),
+            version_id=node.version_id,
+            kind=ChangeKind.UNLINK_CLAIM.value,
+            reason="Removed claim",
+            source=ChangeSource.MANUAL.value,
+            before={"claim_id": str(claim_id)},
+            cited_claim_ids=[claim_id],
+        )
     db.commit()
 
 

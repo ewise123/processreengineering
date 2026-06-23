@@ -6,8 +6,9 @@ from sqlalchemy import select
 
 from app.api.v2 import process_maps as pm_api
 from app.models.change_event import ChangeEvent
+from app.models.claim import Claim
 from app.models.process import ProcessLane
-from app.schemas.process_map import EdgeCreate, EdgeUpdate, LaneCreate, LaneUpdate, NodeCreate, NodeUpdate
+from app.schemas.process_map import EdgeCreate, EdgeUpdate, LaneCreate, LaneUpdate, NodeCreate, NodeUpdate, NodeClaimLinkRequest
 from tests.test_ai_edit import _seed_version_for_endpoint
 
 
@@ -300,3 +301,90 @@ def test_delete_lane_logs_delete_event_and_lane_is_gone(db):
 
     # object is gone
     assert db.get(ProcessLane, lane_id) is None
+
+
+# ---------------------------------------------------------------------------
+# Claim attach / detach tests
+# ---------------------------------------------------------------------------
+
+def test_attach_new_claim_logs_link_claim_event(db):
+    """Attaching a new claim to a node logs exactly one link_claim event."""
+    project, version, n1, existing_claim = _seed_version_for_endpoint(db)
+    new_claim = Claim(project_id=project.id, kind="task", subject="New evidence claim", normalized={})
+    db.add(new_claim)
+    db.commit()
+
+    before = len(_events_for(db, n1.id))
+    pm_api.attach_node_claims(
+        project=project,
+        node_id=n1.id,
+        payload=NodeClaimLinkRequest(claim_ids=[new_claim.id]),
+        db=db,
+    )
+    events = _events_for(db, n1.id)
+    assert len(events) == before + 1
+    ev = max(events, key=lambda e: e.created_at)
+    assert ev.kind == "link_claim"
+    assert ev.target_type == "node"
+    assert ev.source == "manual"
+    assert ev.after == {"claim_ids": [str(new_claim.id)]}
+    assert str(new_claim.id) in [str(c) for c in ev.cited_claim_ids]
+
+
+def test_attach_multiple_new_claims_logs_one_event_with_all_ids(db):
+    """Attaching multiple new claims logs one event listing all added ids."""
+    project, version, n1, existing_claim = _seed_version_for_endpoint(db)
+    c2 = Claim(project_id=project.id, kind="task", subject="Claim 2", normalized={})
+    c3 = Claim(project_id=project.id, kind="task", subject="Claim 3", normalized={})
+    db.add(c2); db.add(c3)
+    db.commit()
+
+    before = len(_events_for(db, n1.id))
+    pm_api.attach_node_claims(
+        project=project,
+        node_id=n1.id,
+        payload=NodeClaimLinkRequest(claim_ids=[c2.id, c3.id]),
+        db=db,
+    )
+    events = _events_for(db, n1.id)
+    assert len(events) == before + 1
+    ev = max(events, key=lambda e: e.created_at)
+    assert ev.kind == "link_claim"
+    added_ids_in_event = ev.after["claim_ids"]
+    assert len(added_ids_in_event) == 2
+    assert str(c2.id) in added_ids_in_event
+    assert str(c3.id) in added_ids_in_event
+
+
+def test_attach_already_linked_claim_logs_no_event(db):
+    """Re-attaching an already-linked claim (added_count 0) must not log any event."""
+    project, version, n1, existing_claim = _seed_version_for_endpoint(db)
+    # existing_claim is already linked to n1 by _seed_version_for_endpoint
+    before = len(_events_for(db, n1.id))
+    pm_api.attach_node_claims(
+        project=project,
+        node_id=n1.id,
+        payload=NodeClaimLinkRequest(claim_ids=[existing_claim.id]),
+        db=db,
+    )
+    assert len(_events_for(db, n1.id)) == before
+
+
+def test_detach_linked_claim_logs_unlink_claim_event(db):
+    """Detaching a linked claim logs exactly one unlink_claim event."""
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    before = len(_events_for(db, n1.id))
+    pm_api.detach_node_claim(
+        project=project,
+        node_id=n1.id,
+        claim_id=claim.id,
+        db=db,
+    )
+    events = _events_for(db, n1.id)
+    assert len(events) == before + 1
+    ev = max(events, key=lambda e: e.created_at)
+    assert ev.kind == "unlink_claim"
+    assert ev.target_type == "node"
+    assert ev.source == "manual"
+    assert ev.before == {"claim_id": str(claim.id)}
+    assert str(claim.id) in [str(c) for c in ev.cited_claim_ids]
