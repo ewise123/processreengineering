@@ -7,6 +7,7 @@ import type {
   BatchAcceptResult,
   BlankMapRequest,
   BlankMapResult,
+  ChangeEvent,
   ChatRequest,
   ChatResponse,
   Claim,
@@ -470,5 +471,15 @@ export const api = {
     request<ProcessModel>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}`,
       { method: "PATCH", json: { process_id: processId } }
+    ),
+
+  // Change history
+  getNodeHistory: (projectId: UUID, nodeId: UUID) =>
+    request<ChangeEvent[]>(
+      `/api/v2/projects/${projectId}/nodes/${nodeId}/history`
+    ),
+  getEdgeHistory: (projectId: UUID, edgeId: UUID) =>
+    request<ChangeEvent[]>(
+      `/api/v2/projects/${projectId}/edges/${edgeId}/history`
     ),
 };

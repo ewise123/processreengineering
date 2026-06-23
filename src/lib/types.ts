@@ -215,6 +215,7 @@ export interface LaneUpdate {
   height_px?: number;
   color?: string;
   collapsed?: boolean;
+  reason?: string;
 }
 
 export interface NodeUpdate {
@@ -224,6 +225,7 @@ export interface NodeUpdate {
   x?: number;
   relative_y?: number;
   description?: string;
+  reason?: string;
 }
 
 export interface NodeCreate {
@@ -244,6 +246,7 @@ export interface EdgeUpdate {
   label?: string | null;
   bend_x?: number | null;
   bend_y?: number | null;
+  reason?: string;
 }
 
 export interface CitationDetail {
@@ -460,6 +463,26 @@ export interface BatchAcceptResult {
   batch_id: UUID;
   accepted: number;
   skipped: number;
+}
+
+export type ChangeActorKind = "user" | "ai" | "system";
+export type ChangeSource = "generation" | "manual" | "chat" | "reconcile" | "import" | "migration";
+
+export interface ChangeEvent {
+  id: UUID;
+  created_at: string;
+  target_type: "node" | "edge" | "lane" | "version";
+  target_id: UUID;
+  kind: string;
+  reason: string;
+  actor_kind: ChangeActorKind;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  cited_claim_ids: UUID[] | null;
+  has_thinking: boolean;
+  reasoning_trace: unknown;
+  source: ChangeSource;
+  version_id: UUID | null;
 }
 
 export const INPUT_TYPES = [
