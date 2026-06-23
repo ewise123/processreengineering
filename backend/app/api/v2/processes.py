@@ -15,12 +15,17 @@ from app.db.session import get_db
 from app.api.v2.process_maps import _create_proposed_step
 from app.enums import (
     AssignedBy,
+    ChangeActorKind,
+    ChangeKind,
+    ChangeSource,
+    ChangeTargetType,
     ClaimLinkKind,
     ProcessStatus,
     SuggestionKind,
     SuggestionOutcome,
     SuggestionStatus,
 )
+from app.services.change_log import model_id_for_version, record_change
 from app.models.claim import Claim
 from app.models.identity import User
 from app.models.process import (
@@ -571,7 +576,7 @@ def apply_suggestion(
             lane_id = lane.id
         cited = [UUID(c) for c in payload.get("cited_claim_ids", [])]
         new_x = float((source.position or {}).get("x", 0)) + 250.0
-        _create_proposed_step(
+        new_node, _ = _create_proposed_step(
             db,
             version_id=version.id,
             source=source,
@@ -583,6 +588,19 @@ def apply_suggestion(
             edge_label=payload.get("edge_label"),
             cited_claim_ids=cited,
             project_id=project.id,
+        )
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=new_node.id,
+            model_id=model_id_for_version(db, sug.version_id),
+            version_id=sug.version_id,
+            kind=ChangeKind.CREATE.value,
+            reason=sug.rationale or "add_step applied via reconcile",
+            actor_kind=ChangeActorKind.AI.value,
+            source=ChangeSource.RECONCILE.value,
+            suggestion_id=sug.id,
+            after={"name": new_node.name},
         )
         return AcceptSuggestionResult(
             suggestion_id=sug.id,
@@ -628,6 +646,22 @@ def apply_suggestion(
             ).first()
             if link is not None:
                 db.delete(link)
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=node.id,
+            model_id=model_id_for_version(db, sug.version_id),
+            version_id=sug.version_id,
+            kind=ChangeKind.RECITE.value,
+            reason=sug.rationale or "recite_node applied via reconcile",
+            actor_kind=ChangeActorKind.AI.value,
+            source=ChangeSource.RECONCILE.value,
+            suggestion_id=sug.id,
+            after={
+                "added_claim_ids": [str(c) for c in payload.get("add_claim_ids", [])],
+                "removed_claim_ids": [str(c) for c in payload.get("remove_claim_ids", [])],
+            },
+        )
         return AcceptSuggestionResult(
             suggestion_id=sug.id,
             status=SuggestionStatus.ACCEPTED.value,
@@ -649,6 +683,19 @@ def apply_suggestion(
         new_props["evidence_stale"] = True
         node.properties = new_props
         flag_modified(node, "properties")
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=node.id,
+            model_id=model_id_for_version(db, sug.version_id),
+            version_id=sug.version_id,
+            kind=ChangeKind.FLAG_STALE.value,
+            reason=sug.rationale or "flag_stale_node applied via reconcile",
+            actor_kind=ChangeActorKind.AI.value,
+            source=ChangeSource.RECONCILE.value,
+            suggestion_id=sug.id,
+            after={"evidence_stale": True},
+        )
         return AcceptSuggestionResult(
             suggestion_id=sug.id,
             status=SuggestionStatus.ACCEPTED.value,
@@ -673,7 +720,22 @@ def apply_suggestion(
                 status=SuggestionStatus.ACCEPTED.value,
                 outcome=SuggestionOutcome.TARGET_GONE.value,
             )
+        old_name = node.name
         node.name = proposed
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=node.id,
+            model_id=model_id_for_version(db, sug.version_id),
+            version_id=sug.version_id,
+            kind=ChangeKind.RELABEL.value,
+            reason=sug.rationale or "relabel_node applied via reconcile",
+            actor_kind=ChangeActorKind.AI.value,
+            source=ChangeSource.RECONCILE.value,
+            suggestion_id=sug.id,
+            before={"name": old_name},
+            after={"name": proposed},
+        )
         return AcceptSuggestionResult(
             suggestion_id=sug.id,
             status=SuggestionStatus.ACCEPTED.value,
