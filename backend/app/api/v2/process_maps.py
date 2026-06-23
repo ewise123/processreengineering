@@ -12,12 +12,16 @@ from app.api.v2.reviews import _recompute_version_status
 from app.constants import LINEAGE_KEY
 from app.db.session import get_db
 from app.enums import (
+    ChangeKind,
+    ChangeSource,
+    ChangeTargetType,
     ClaimLinkKind,
     ConflictStatus,
     NodeType,
     ProcessVersionStatus,
     ReviewTargetType,
 )
+from app.services.change_log import NODE_SEMANTIC_FIELDS, model_id_for_version, pick_kind, record_change
 from app.models.identity import User
 from app.models.process import (
     EdgeClaimLink,
@@ -699,6 +703,16 @@ def update_node(
         raise HTTPException(status_code=404, detail="Node not found")
     _check_node_in_project(node, project.id, db)
 
+    def _semantic_snapshot() -> dict:
+        return {
+            "name": node.name,
+            "type": node.type,
+            "lane_id": str(node.lane_id) if node.lane_id else None,
+            "description": (node.properties or {}).get("description"),
+        }
+
+    old = _semantic_snapshot()
+
     if payload.lane_id is not None:
         target_lane = db.get(ProcessLane, payload.lane_id)
         if target_lane is None or target_lane.version_id != node.version_id:
@@ -724,6 +738,29 @@ def update_node(
             new_position["relative_y"] = payload.relative_y
         node.position = new_position
         flag_modified(node, "position")
+
+    new = _semantic_snapshot()
+    changed = {f: (old[f], new[f]) for f in NODE_SEMANTIC_FIELDS if old[f] != new[f]}
+    if changed:
+        if not (payload.reason and payload.reason.strip()):
+            db.rollback()
+            raise HTTPException(
+                status_code=422,
+                detail="A reason is required when changing a step's name, description, type, or lane.",
+            )
+        kind = pick_kind({NODE_SEMANTIC_FIELDS[f] for f in changed})
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=node.id,
+            model_id=model_id_for_version(db, node.version_id),
+            version_id=node.version_id,
+            kind=kind.value,
+            reason=payload.reason.strip(),
+            before={f: changed[f][0] for f in changed},
+            after={f: changed[f][1] for f in changed},
+            source=ChangeSource.MANUAL.value,
+        )
     db.commit()
     db.refresh(node)
     return node

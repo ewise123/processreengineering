@@ -202,7 +202,7 @@ def test_update_node_writes_description_preserving_other_properties(db):
     result = pm_api.update_node(
         project=project,
         node_id=n1.id,
-        payload=NodeUpdate(description="Clerk logs the order into SAP."),
+        payload=NodeUpdate(description="Clerk logs the order into SAP.", reason="clarify step"),
         db=db,
     )
     assert result.properties["description"] == "Clerk logs the order into SAP."
