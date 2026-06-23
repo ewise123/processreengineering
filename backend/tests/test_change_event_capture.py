@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.api.v2 import process_maps as pm_api
 from app.models.change_event import ChangeEvent
 from app.models.process import ProcessLane
-from app.schemas.process_map import EdgeCreate, EdgeUpdate, LaneUpdate, NodeUpdate
+from app.schemas.process_map import EdgeCreate, EdgeUpdate, LaneCreate, LaneUpdate, NodeCreate, NodeUpdate
 from tests.test_ai_edit import _seed_version_for_endpoint
 
 
@@ -146,3 +146,71 @@ def test_update_lane_noop_name_logs_nothing(db):
     pm_api.update_lane(project=project, lane_id=lane.id,
                        payload=LaneUpdate(name=lane.name, reason="no-op check"), db=db)
     assert len(_events_for(db, lane.id)) == before
+
+
+# ---------------------------------------------------------------------------
+# Create tests
+# ---------------------------------------------------------------------------
+
+def test_create_node_logs_one_create_event(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    new_node = pm_api.create_node(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=NodeCreate(type="task", name="New Step", lane_id=n1.lane_id, x=100.0, relative_y=0.0),
+        db=db,
+    )
+    events = _events_for(db, new_node.id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind == "create"
+    assert ev.target_type == "node"
+    assert ev.source == "manual"
+    assert ev.after["name"] == "New Step"
+    assert ev.after["type"] == "task"
+
+
+def test_create_edge_logs_one_connect_event(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    # Create a second node to connect to
+    from app.models.process import ProcessNode
+    n2 = ProcessNode(version_id=version.id, lane_id=n1.lane_id, type="task",
+                     name="Second Step", position={}, properties={})
+    db.add(n2)
+    db.flush()
+    db.commit()
+
+    new_edge = pm_api.create_edge(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=EdgeCreate(source_node_id=n1.id, target_node_id=n2.id),
+        db=db,
+    )
+    events = _events_for(db, new_edge.id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind == "connect"
+    assert ev.target_type == "edge"
+    assert ev.source == "manual"
+    assert ev.after["source_node_id"] == str(n1.id)
+    assert ev.after["target_node_id"] == str(n2.id)
+
+
+def test_add_lane_logs_one_create_event(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    new_lane = pm_api.add_lane(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=LaneCreate(name="New Lane", order_index=1),
+        db=db,
+    )
+    events = _events_for(db, new_lane.id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind == "create"
+    assert ev.target_type == "lane"
+    assert ev.source == "manual"
+    assert ev.after["name"] == "New Lane"

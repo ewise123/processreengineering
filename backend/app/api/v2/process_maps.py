@@ -686,6 +686,19 @@ def create_node(
     db.add(node)
     db.flush()
     node.properties = {**node.properties, LINEAGE_KEY: str(node.id)}
+    db.flush()
+    record_change(
+        db,
+        target_type=ChangeTargetType.NODE.value,
+        target_id=node.id,
+        model_id=version.model_id,
+        version_id=version.id,
+        kind=ChangeKind.CREATE.value,
+        reason="Added from the shape palette",
+        after={"name": node.name, "type": node.type,
+               "lane_id": str(node.lane_id) if node.lane_id else None},
+        source=ChangeSource.MANUAL.value,
+    )
     db.commit()
     db.refresh(node)
     return node
@@ -837,6 +850,19 @@ def create_edge(
         label=payload.label,
     )
     db.add(edge)
+    db.flush()
+    record_change(
+        db,
+        target_type=ChangeTargetType.EDGE.value,
+        target_id=edge.id,
+        model_id=version.model_id,
+        version_id=version.id,
+        kind=ChangeKind.CONNECT.value,
+        reason="Connected two nodes",
+        after={"source_node_id": str(edge.source_node_id),
+               "target_node_id": str(edge.target_node_id)},
+        source=ChangeSource.MANUAL.value,
+    )
     db.commit()
     db.refresh(edge)
     return edge
@@ -1015,6 +1041,18 @@ def add_lane(
         color=payload.color,
     )
     db.add(lane)
+    db.flush()
+    record_change(
+        db,
+        target_type=ChangeTargetType.LANE.value,
+        target_id=lane.id,
+        model_id=version.model_id,
+        version_id=version.id,
+        kind=ChangeKind.CREATE.value,
+        reason="Added a new swim lane",
+        after={"name": lane.name},
+        source=ChangeSource.MANUAL.value,
+    )
     db.commit()
     db.refresh(lane)
     return lane
