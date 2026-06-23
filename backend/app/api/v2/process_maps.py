@@ -98,7 +98,10 @@ from app.services.map_chat import ChatTurn as MapChatTurn, chat as run_map_chat
 from app.services.map_context import assemble_map_context
 from app.services.map_reconcile import compute_claim_delta, propose_reconcile
 from app.services import map_reconcile as _map_reconcile_mod
-from app.services.process_generation import generate_structure_from_claims
+from app.services.process_generation import (
+    generate_structure_from_best_practices,
+    generate_structure_from_claims,
+)
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
 
@@ -202,6 +205,231 @@ def _create_model_and_version(
     return model, version, lane
 
 
+def _persist_structure_graph(
+    db: Session,
+    *,
+    version: ProcessVersion,
+    structure,
+    claims: list[Claim],
+    create_claim_links: bool,
+    origin_reason: str,
+) -> tuple[list[str], list[dict], dict[str, list[ProcessEdge]], int]:
+    """Persist lanes/nodes/edges from an AI structure, then write the origin
+    change events. Shared by claim-based generation and best-practice seeding.
+
+    When `create_claim_links` is True, each element's claim_refs are resolved
+    against `claims` into NodeClaimLinks/EdgeClaimLinks and the origin events
+    cite them. When False (best-practice seeding, no claims), no links are
+    created and every origin event carries empty cited_claim_ids. `origin_reason`
+    is stamped as the reason on every node/edge create event.
+
+    Returns (role_order, elements, edges_by_source, node_link_count)."""
+    # Lanes: one per unique role in document order.
+    role_order: list[str] = []
+    seen: set[str] = set()
+    for step in structure.steps:
+        r = (step.get("role") or "Process Team").strip()
+        if r not in seen:
+            role_order.append(r)
+            seen.add(r)
+    if not role_order:
+        role_order = ["Process Team"]
+
+    lane_by_role: dict[str, ProcessLane] = {}
+    for idx, role in enumerate(role_order):
+        lane = ProcessLane(version_id=version.id, name=role, order_index=idx)
+        db.add(lane)
+        lane_by_role[role] = lane
+    db.flush()
+
+    # Build the ordered element list (Start, steps with gateways inserted, End).
+    gateway_by_after_step = {gw["after_step"]: gw for gw in structure.gateways}
+    elements: list[dict] = []
+    first_role = (structure.steps[0].get("role") or "Process Team").strip() if structure.steps else "Process Team"
+    last_role = (structure.steps[-1].get("role") or "Process Team").strip() if structure.steps else "Process Team"
+
+    elements.append(
+        {"id": "Start_1", "kind": "start", "name": "Start", "role": first_role, "claim_refs": []}
+    )
+    for step in structure.steps:
+        elements.append(
+            {
+                "id": step["id"],
+                "kind": "step",
+                "name": step.get("name", ""),
+                "role": (step.get("role") or "Process Team").strip(),
+                "bpmn_type": (step.get("type") or "userTask").strip(),
+                "claim_refs": step.get("claim_refs") or [],
+            }
+        )
+        if step["id"] in gateway_by_after_step:
+            gw = gateway_by_after_step[step["id"]]
+            elements.append(
+                {
+                    "id": gw["id"],
+                    "kind": "gateway",
+                    "name": gw.get("name", "Decision?"),
+                    "role": (step.get("role") or "Process Team").strip(),
+                    "gateway_kind": (gw.get("type") or "exclusive").strip(),
+                    "claim_refs": gw.get("claim_refs") or [],
+                    "yes_to": gw.get("yes_to"),
+                    "no_to": gw.get("no_to"),
+                }
+            )
+    elements.append(
+        {"id": "End_1", "kind": "end", "name": "End", "role": last_role, "claim_refs": []}
+    )
+
+    # Persist nodes.
+    node_by_external_id: dict[str, ProcessNode] = {}
+    for col, el in enumerate(elements):
+        if el["kind"] == "start":
+            ntype = NodeType.EVENT_START.value
+        elif el["kind"] == "end":
+            ntype = NodeType.EVENT_END.value
+        elif el["kind"] == "gateway":
+            ntype = _node_type_for_gateway(el["gateway_kind"])
+        else:
+            ntype = NodeType.TASK.value
+        properties = {"col": col, "external_id": el["id"]}
+        if el["kind"] == "step":
+            properties["bpmn_task_type"] = el.get("bpmn_type")
+        if el["kind"] == "gateway":
+            properties["bpmn_gateway_kind"] = el.get("gateway_kind")
+        node = ProcessNode(
+            version_id=version.id,
+            lane_id=lane_by_role[el["role"]].id,
+            type=ntype,
+            name=el["name"],
+            position={"col": col},
+            properties=properties,
+        )
+        db.add(node)
+        node_by_external_id[el["id"]] = node
+    db.flush()
+    for node in node_by_external_id.values():
+        node.properties = {**(node.properties or {}), LINEAGE_KEY: str(node.id)}
+    db.flush()
+
+    # Derive sequence edges (mirror legacy add_flow logic, logical only).
+    el_by_id = {el["id"]: el for el in elements}
+
+    def _add_edge(src_id: str, tgt_id: str, label: str | None) -> ProcessEdge | None:
+        if src_id not in node_by_external_id or tgt_id not in node_by_external_id:
+            return None
+        edge = ProcessEdge(
+            version_id=version.id,
+            source_node_id=node_by_external_id[src_id].id,
+            target_node_id=node_by_external_id[tgt_id].id,
+            label=label or None,
+        )
+        db.add(edge)
+        return edge
+
+    edges_by_source: dict[str, list[ProcessEdge]] = {}
+    for i in range(len(elements) - 1):
+        src = elements[i]
+        nxt = elements[i + 1]
+        if src["kind"] == "gateway":
+            is_parallel = src["gateway_kind"] == "parallel"
+            yes_edge = _add_edge(src["id"], nxt["id"], "" if is_parallel else "Yes")
+            if yes_edge:
+                edges_by_source.setdefault(src["id"], []).append(yes_edge)
+            no_tgt = src.get("no_to") or "End_1"
+            if no_tgt not in el_by_id or no_tgt == nxt["id"]:
+                no_tgt = "End_1"
+            if no_tgt != nxt["id"]:
+                no_edge = _add_edge(src["id"], no_tgt, "" if is_parallel else "No")
+                if no_edge:
+                    edges_by_source.setdefault(src["id"], []).append(no_edge)
+        else:
+            edge = _add_edge(src["id"], nxt["id"], None)
+            if edge:
+                edges_by_source.setdefault(src["id"], []).append(edge)
+    db.flush()
+
+    # Resolve claim_refs → node_claim_links + edge_claim_links.
+    # Build claim-id lists per element id so origin events can cite them.
+    # Resolved here (after nodes/edges have ids) so cited_claim_ids is populated
+    # on the same create event rather than requiring a subsequent link_claim event.
+    # For best-practice seeding there are no claims, so this whole pass is skipped
+    # and every event carries empty cited_claim_ids.
+    node_link_count = 0
+    cited_ids_by_el: dict[str, list] = {}
+    if create_claim_links:
+        for el in elements:
+            node = node_by_external_id.get(el["id"])
+            if node is None:
+                continue
+            valid_refs = [
+                ref for ref in el.get("claim_refs", [])
+                if isinstance(ref, int) and 0 <= ref < len(claims)
+            ]
+            el_claim_ids = [claims[ref].id for ref in valid_refs]
+            cited_ids_by_el[el["id"]] = el_claim_ids
+            for cid in el_claim_ids:
+                db.add(
+                    NodeClaimLink(
+                        node_id=node.id,
+                        claim_id=cid,
+                        link_kind=ClaimLinkKind.SUPPORTS.value,
+                    )
+                )
+                node_link_count += 1
+            # Gateway claim_refs also propagate to its outgoing edges (decision logic)
+            if el["kind"] == "gateway":
+                for edge in edges_by_source.get(el["id"], []):
+                    for cid in el_claim_ids:
+                        db.add(
+                            EdgeClaimLink(
+                                edge_id=edge.id,
+                                claim_id=cid,
+                                link_kind=ClaimLinkKind.INFERRED.value,
+                            )
+                        )
+
+    # Write origin change events (generation trail). Edges carry no direct
+    # claim_refs in the AI structure (only gateways propagate to
+    # edge_claim_links), so edge events are emitted without cited_claim_ids.
+    for el in elements:
+        node = node_by_external_id.get(el["id"])
+        if node is None:
+            continue
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=node.id,
+            model_id=version.model_id,
+            version_id=version.id,
+            kind=ChangeKind.CREATE.value,
+            reason=origin_reason,
+            actor_kind=ChangeActorKind.AI.value,
+            source=ChangeSource.GENERATION.value,
+            after={"name": node.name, "type": node.type},
+            cited_claim_ids=cited_ids_by_el.get(el["id"]) or None,
+        )
+
+    all_edges = [edge for edge_list in edges_by_source.values() for edge in edge_list]
+    for edge in all_edges:
+        record_change(
+            db,
+            target_type=ChangeTargetType.EDGE.value,
+            target_id=edge.id,
+            model_id=version.model_id,
+            version_id=version.id,
+            kind=ChangeKind.CREATE.value,
+            reason=origin_reason,
+            actor_kind=ChangeActorKind.AI.value,
+            source=ChangeSource.GENERATION.value,
+            after={
+                "source_node_id": str(edge.source_node_id),
+                "target_node_id": str(edge.target_node_id),
+            },
+        )
+
+    return role_order, elements, edges_by_source, node_link_count
+
+
 @router.post(
     "/generate-process-map",
     response_model=ProcessMapGenerateResult,
@@ -285,207 +513,94 @@ def generate_process_map(
     if payload.process_id is not None:
         model.process_id = payload.process_id
 
-    # 6. Persist lanes (one per unique role in document order)
-    role_order: list[str] = []
-    seen: set[str] = set()
-    for step in structure.steps:
-        r = (step.get("role") or "Process Team").strip()
-        if r not in seen:
-            role_order.append(r)
-            seen.add(r)
-    if not role_order:
-        role_order = ["Process Team"]
-
-    lane_by_role: dict[str, ProcessLane] = {}
-    for idx, role in enumerate(role_order):
-        lane = ProcessLane(version_id=version.id, name=role, order_index=idx)
-        db.add(lane)
-        lane_by_role[role] = lane
-    db.flush()
-
-    # 7. Build the ordered element list (Start, steps with gateways inserted, End)
-    gateway_by_after_step = {gw["after_step"]: gw for gw in structure.gateways}
-    elements: list[dict] = []
-    first_role = (structure.steps[0].get("role") or "Process Team").strip() if structure.steps else "Process Team"
-    last_role = (structure.steps[-1].get("role") or "Process Team").strip() if structure.steps else "Process Team"
-
-    elements.append(
-        {"id": "Start_1", "kind": "start", "name": "Start", "role": first_role, "claim_refs": []}
-    )
-    for step in structure.steps:
-        elements.append(
-            {
-                "id": step["id"],
-                "kind": "step",
-                "name": step.get("name", ""),
-                "role": (step.get("role") or "Process Team").strip(),
-                "bpmn_type": (step.get("type") or "userTask").strip(),
-                "claim_refs": step.get("claim_refs") or [],
-            }
-        )
-        if step["id"] in gateway_by_after_step:
-            gw = gateway_by_after_step[step["id"]]
-            elements.append(
-                {
-                    "id": gw["id"],
-                    "kind": "gateway",
-                    "name": gw.get("name", "Decision?"),
-                    "role": (step.get("role") or "Process Team").strip(),
-                    "gateway_kind": (gw.get("type") or "exclusive").strip(),
-                    "claim_refs": gw.get("claim_refs") or [],
-                    "yes_to": gw.get("yes_to"),
-                    "no_to": gw.get("no_to"),
-                }
-            )
-    elements.append(
-        {"id": "End_1", "kind": "end", "name": "End", "role": last_role, "claim_refs": []}
+    # 6-11. Persist lanes/nodes/edges + claim links + origin events (shared).
+    role_order, elements, edges_by_source, node_link_count = _persist_structure_graph(
+        db,
+        version=version,
+        structure=structure,
+        claims=claims,
+        create_claim_links=True,
+        origin_reason="Generated from source claims",
     )
 
-    # 8. Persist nodes
-    node_by_external_id: dict[str, ProcessNode] = {}
-    for col, el in enumerate(elements):
-        if el["kind"] == "start":
-            ntype = NodeType.EVENT_START.value
-        elif el["kind"] == "end":
-            ntype = NodeType.EVENT_END.value
-        elif el["kind"] == "gateway":
-            ntype = _node_type_for_gateway(el["gateway_kind"])
-        else:
-            ntype = NodeType.TASK.value
-        properties = {"col": col, "external_id": el["id"]}
-        if el["kind"] == "step":
-            properties["bpmn_task_type"] = el.get("bpmn_type")
-        if el["kind"] == "gateway":
-            properties["bpmn_gateway_kind"] = el.get("gateway_kind")
-        node = ProcessNode(
-            version_id=version.id,
-            lane_id=lane_by_role[el["role"]].id,
-            type=ntype,
-            name=el["name"],
-            position={"col": col},
-            properties=properties,
+    db.commit()
+
+    return ProcessMapGenerateResult(
+        model_id=model.id,
+        version_id=version.id,
+        process_name=structure.process_name,
+        level=canonical_level,
+        lane_count=len(role_order),
+        node_count=len(elements),
+        edge_count=sum(len(v) for v in edges_by_source.values()),
+        node_link_count=node_link_count,
+        bpmn_xml_size=len(bpmn_xml),
+    )
+
+
+@router.post(
+    "/generate-best-practices",
+    response_model=ProcessMapGenerateResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def generate_best_practices_map(
+    payload: ProcessMapGenerateRequest,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessMapGenerateResult:
+    """Seed a starter map from the LLM's GENERIC best-practice knowledge for a
+    named process — no client documents or claims required. Each node/edge gets
+    an origin change_event with source=generation, actor_kind=ai, EMPTY
+    cited_claim_ids, and reason="Best-practice assumption (no source document)".
+    No NodeClaimLinks are created (there are no claims). The existing claim-based
+    generate-process-map path is unaffected."""
+    # 1. Call Claude with the best-practice framing (name/level/focus only —
+    #    scope_input_ids/process_id are ignored here).
+    try:
+        structure = generate_structure_from_best_practices(
+            level=_level_for_prompt(payload.level),
+            process_name=payload.name,
+            focus=payload.focus,
+            map_type=payload.map_type,
         )
-        db.add(node)
-        node_by_external_id[el["id"]] = node
-    db.flush()
-    for node in node_by_external_id.values():
-        node.properties = {**(node.properties or {}), LINEAGE_KEY: str(node.id)}
-    db.flush()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
-    # 9. Derive sequence edges (mirror legacy add_flow logic, logical only — no geometry)
-    el_by_id = {el["id"]: el for el in elements}
+    # 2. Render BPMN XML for storage / canvas.
+    structure_dict = {
+        "process_name": structure.process_name,
+        "steps": structure.steps,
+        "gateways": structure.gateways,
+    }
+    bpmn_xml = build_bpmn_xml(structure_dict)
+    valid, err = validate_xml(bpmn_xml)
+    if not valid:
+        raise HTTPException(status_code=500, detail=f"Generated BPMN XML failed validation: {err}")
 
-    def _add_edge(src_id: str, tgt_id: str, label: str | None) -> ProcessEdge | None:
-        if src_id not in node_by_external_id or tgt_id not in node_by_external_id:
-            return None
-        edge = ProcessEdge(
-            version_id=version.id,
-            source_node_id=node_by_external_id[src_id].id,
-            target_node_id=node_by_external_id[tgt_id].id,
-            label=label or None,
-        )
-        db.add(edge)
-        return edge
+    # 3. Find-or-create ProcessModel + next ProcessVersion (shared helper).
+    canonical_level = _normalize_level(payload.level)
+    model, version, _ = _create_model_and_version(
+        db,
+        project=project,
+        name=structure.process_name,
+        level=canonical_level,
+        created_by=user.id,
+        bpmn_xml=bpmn_xml,
+        notes="Seeded from best-practice knowledge (no source document).",
+        default_lane_name=None,  # AI path builds one lane per role
+    )
 
-    edges_by_source: dict[str, list[ProcessEdge]] = {}
-    for i in range(len(elements) - 1):
-        src = elements[i]
-        nxt = elements[i + 1]
-        if src["kind"] == "gateway":
-            is_parallel = src["gateway_kind"] == "parallel"
-            yes_edge = _add_edge(src["id"], nxt["id"], "" if is_parallel else "Yes")
-            if yes_edge:
-                edges_by_source.setdefault(src["id"], []).append(yes_edge)
-            no_tgt = src.get("no_to") or "End_1"
-            if no_tgt not in el_by_id or no_tgt == nxt["id"]:
-                no_tgt = "End_1"
-            if no_tgt != nxt["id"]:
-                no_edge = _add_edge(src["id"], no_tgt, "" if is_parallel else "No")
-                if no_edge:
-                    edges_by_source.setdefault(src["id"], []).append(no_edge)
-        else:
-            edge = _add_edge(src["id"], nxt["id"], None)
-            if edge:
-                edges_by_source.setdefault(src["id"], []).append(edge)
-    db.flush()
-
-    # 10. Resolve claim_refs → node_claim_links + edge_claim_links
-    node_link_count = 0
-    # Build claim-id lists per element id so origin events can cite them.
-    # Resolved here (after nodes/edges have ids) so cited_claim_ids is populated
-    # on the same create event rather than requiring a subsequent link_claim event.
-    cited_ids_by_el: dict[str, list] = {}
-    for el in elements:
-        node = node_by_external_id.get(el["id"])
-        if node is None:
-            continue
-        valid_refs = [
-            ref for ref in el.get("claim_refs", [])
-            if isinstance(ref, int) and 0 <= ref < len(claims)
-        ]
-        el_claim_ids = [claims[ref].id for ref in valid_refs]
-        cited_ids_by_el[el["id"]] = el_claim_ids
-        for cid in el_claim_ids:
-            db.add(
-                NodeClaimLink(
-                    node_id=node.id,
-                    claim_id=cid,
-                    link_kind=ClaimLinkKind.SUPPORTS.value,
-                )
-            )
-            node_link_count += 1
-        # Gateway claim_refs also propagate to its outgoing edges (decision logic)
-        if el["kind"] == "gateway":
-            for edge in edges_by_source.get(el["id"], []):
-                for cid in el_claim_ids:
-                    db.add(
-                        EdgeClaimLink(
-                            edge_id=edge.id,
-                            claim_id=cid,
-                            link_kind=ClaimLinkKind.INFERRED.value,
-                        )
-                    )
-
-    # 11. Write origin change events (generation trail).
-    # We log AFTER step 10 so that cited_claim_ids is resolved from claim_refs
-    # in the same pass. Edges carry no direct claim_refs in the AI structure
-    # (only gateways propagate to edge_claim_links), so edge events are emitted
-    # without cited_claim_ids.
-    for el in elements:
-        node = node_by_external_id.get(el["id"])
-        if node is None:
-            continue
-        record_change(
-            db,
-            target_type=ChangeTargetType.NODE.value,
-            target_id=node.id,
-            model_id=version.model_id,
-            version_id=version.id,
-            kind=ChangeKind.CREATE.value,
-            reason="Generated from source claims",
-            actor_kind=ChangeActorKind.AI.value,
-            source=ChangeSource.GENERATION.value,
-            after={"name": node.name, "type": node.type},
-            cited_claim_ids=cited_ids_by_el.get(el["id"]) or None,
-        )
-
-    all_edges = [edge for edge_list in edges_by_source.values() for edge in edge_list]
-    for edge in all_edges:
-        record_change(
-            db,
-            target_type=ChangeTargetType.EDGE.value,
-            target_id=edge.id,
-            model_id=version.model_id,
-            version_id=version.id,
-            kind=ChangeKind.CREATE.value,
-            reason="Generated from source claims",
-            actor_kind=ChangeActorKind.AI.value,
-            source=ChangeSource.GENERATION.value,
-            after={
-                "source_node_id": str(edge.source_node_id),
-                "target_node_id": str(edge.target_node_id),
-            },
-        )
+    # 4. Persist lanes/nodes/edges + origin events. No claims, no claim links;
+    #    every origin event carries the best-practice reason + empty cited ids.
+    role_order, elements, edges_by_source, node_link_count = _persist_structure_graph(
+        db,
+        version=version,
+        structure=structure,
+        claims=[],
+        create_claim_links=False,
+        origin_reason="Best-practice assumption (no source document)",
+    )
 
     db.commit()
 
