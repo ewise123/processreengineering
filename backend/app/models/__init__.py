@@ -18,7 +18,8 @@ from app.models.process_inventory import (
 )
 from app.models.analysis import Analysis, Output
 from app.models.workflow import Review, ReviewComment
-from app.models.audit import AiInteraction, AuditEvent, GenerationJob
+from app.models.audit import GenerationJob
+from app.models.change_event import ChangeEvent
 
 __all__ = [
     "Organization",
@@ -46,7 +47,6 @@ __all__ = [
     "Output",
     "Review",
     "ReviewComment",
-    "AuditEvent",
-    "AiInteraction",
     "GenerationJob",
+    "ChangeEvent",
 ]

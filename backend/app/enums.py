@@ -212,3 +212,42 @@ class SuggestionOutcome(StrEnum):
 
     APPLIED = "applied"
     TARGET_GONE = "target_gone"
+
+
+class ChangeTargetType(StrEnum):
+    NODE = "node"
+    EDGE = "edge"
+    LANE = "lane"
+    VERSION = "version"
+
+
+class ChangeActorKind(StrEnum):
+    USER = "user"
+    AI = "ai"
+    SYSTEM = "system"
+
+
+class ChangeKind(StrEnum):
+    CREATE = "create"
+    RELABEL = "relabel"
+    DESCRIBE = "describe"
+    RETYPE = "retype"
+    RELANE = "relane"
+    LINK_CLAIM = "link_claim"
+    UNLINK_CLAIM = "unlink_claim"
+    CONNECT = "connect"
+    RECONNECT = "reconnect"
+    DELETE = "delete"
+    BRANCH = "branch"
+    RESTORE = "restore"
+    FLAG_STALE = "flag_stale"
+    RECITE = "recite"
+
+
+class ChangeSource(StrEnum):
+    GENERATION = "generation"
+    MANUAL = "manual"
+    CHAT = "chat"
+    RECONCILE = "reconcile"
+    IMPORT = "import"
+    MIGRATION = "migration"
