@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.v2.deps import get_current_user, get_project_or_404
 from app.constants import LINEAGE_KEY
 from app.db.session import get_db
-from app.enums import ProcessVersionStatus
+from app.enums import ChangeKind, ChangeSource, ChangeTargetType, ProcessVersionStatus
 from app.models.identity import User
 from app.models.process import (
     EdgeClaimLink,
@@ -24,6 +24,7 @@ from app.models.process import (
 )
 from app.models.project import Project
 from app.schemas.process_map import ProcessVersionRead
+from app.services.change_log import record_change
 from app.schemas.version import (
     EdgeChange,
     EdgeDiff,
@@ -230,6 +231,24 @@ def copy_version(
             claim_id=link.claim_id,
             link_kind=link.link_kind,
         ))
+
+    # Log ONE version-level event for this branch. VersionCopyRequest carries
+    # only an optional `note` — no kind/restore discriminator — so we default
+    # unconditionally to BRANCH. Restore logging is deferred to a follow-up
+    # task that adds a discriminator field to the request schema and frontend.
+    record_change(
+        db,
+        target_type=ChangeTargetType.VERSION.value,
+        target_id=new_version.id,
+        model_id=new_version.model_id,
+        version_id=new_version.id,
+        kind=ChangeKind.BRANCH.value,
+        reason=payload.note or f"Branched from v{source.version_number}",
+        actor_id=None,
+        before={"source_version_number": source.version_number},
+        after={"version_number": new_version.version_number},
+        source=ChangeSource.MANUAL.value,
+    )
 
     db.commit()
     db.refresh(new_version)
