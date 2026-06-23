@@ -56,6 +56,7 @@ class LaneUpdate(BaseModel):
     height_px: int | None = Field(default=None, ge=80)
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     collapsed: bool | None = None
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class NodeUpdate(BaseModel):
@@ -68,6 +69,7 @@ class NodeUpdate(BaseModel):
         pattern=_NODE_TYPE_PATTERN,
     )
     description: str | None = Field(default=None, max_length=5000)
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class NodeCreate(BaseModel):
@@ -97,6 +99,7 @@ class EdgeUpdate(BaseModel):
     label: str | None = Field(default=None, max_length=300)
     bend_x: float | None = None
     bend_y: float | None = None
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class CitationDetail(BaseModel):
