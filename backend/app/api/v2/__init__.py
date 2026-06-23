@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v2 import (
+    change_log,
     claims,
     embeddings,
     inputs,
@@ -20,3 +21,4 @@ router.include_router(process_maps.router)
 router.include_router(processes.router)
 router.include_router(reviews.router)
 router.include_router(versions.router)
+router.include_router(change_log.router)
