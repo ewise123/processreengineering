@@ -93,7 +93,8 @@ def record_change(
 def backfill_origin_events(db: Session) -> int:
     """Insert one MIGRATION origin event per existing node/edge that has none.
     Reason is mined from the object's linked claims where present. Idempotent:
-    skips objects that already have a change_event. Returns rows inserted."""
+    each record_change flushes its row, so the NOT EXISTS guards see prior inserts
+    within the same session. Returns rows inserted."""
     inserted = 0
     node_rows = db.execute(
         text(
@@ -152,13 +153,13 @@ def backfill_origin_events(db: Session) -> int:
             source=ChangeSource.MIGRATION.value,
         )
         inserted += 1
-    db.flush()
     return inserted
 
 
 def _origin_reason_for(db: Session, target_id: UUID, kind: str) -> tuple[str, list]:
     link_table = "node_claim_links" if kind == "node" else "edge_claim_links"
     fk = "node_id" if kind == "node" else "edge_id"
+    # link_table and fk are hardcoded constants (not user input) — safe to interpolate
     rows = db.execute(
         text(
             f"""

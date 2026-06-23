@@ -15,7 +15,7 @@ def test_backfill_mines_claim_for_linked_node(db):
 
     inserted = backfill_origin_events(db)
     db.commit()
-    assert inserted >= 1
+    assert inserted == 1
     ev = db.scalars(
         select(ChangeEvent).where(ChangeEvent.target_id == n1.id)
     ).one()
