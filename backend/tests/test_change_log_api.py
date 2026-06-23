@@ -1,12 +1,14 @@
 """Tests for GET /projects/{project_id}/nodes/{node_id}/history
-and GET /projects/{project_id}/edges/{edge_id}/history (Task 15).
+and GET /projects/{project_id}/edges/{edge_id}/history (Task 15),
+and GET /projects/{project_id}/models/{model_id}/log (Task 19).
 
 Reuses _seed_version_for_endpoint from test_ai_edit to create a minimal
 project/model/version/lane/node fixture, then drives the existing update_node
 and create_edge endpoints to produce ChangeEvent rows, and exercises the
 new history endpoints directly (no TestClient needed).
 """
-from uuid import uuid4
+from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -21,6 +23,107 @@ from app.models.project import Project
 from app.schemas.change_event import ChangeEventRead, ChangeLogPage
 from app.schemas.process_map import EdgeCreate, EdgeUpdate, NodeUpdate
 from tests.test_ai_edit import _seed_version_for_endpoint
+
+
+# ---------------------------------------------------------------------------
+# Task 19 helpers
+# ---------------------------------------------------------------------------
+
+def _seed_events_for_model(db, model, version, node_a, node_b):
+    """Insert 5 ChangeEvent rows with explicit, spaced created_at values so
+    ordering is deterministic (server_default=now() would be the same for
+    rapid consecutive inserts).
+
+    Events (newest → oldest when fetched desc):
+      ev5  node_a  actor_kind=human    source=manual      t+40
+      ev4  node_b  actor_kind=human    source=reconcile   t+30
+      ev3  node_a  actor_kind=ai       source=ai_edit     t+20
+      ev2  node_b  actor_kind=human    source=manual      t+10
+      ev1  node_a  actor_kind=human    source=manual      t+00
+    """
+    base = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    rows = [
+        ChangeEvent(
+            model_id=model.id,
+            version_id=version.id,
+            target_type="node",
+            target_id=node_a.id,
+            actor_kind="human",
+            kind="relabel",
+            reason="first",
+            source="manual",
+            created_at=base + timedelta(seconds=0),
+        ),
+        ChangeEvent(
+            model_id=model.id,
+            version_id=version.id,
+            target_type="node",
+            target_id=node_b.id,
+            actor_kind="human",
+            kind="relabel",
+            reason="second",
+            source="manual",
+            created_at=base + timedelta(seconds=10),
+        ),
+        ChangeEvent(
+            model_id=model.id,
+            version_id=version.id,
+            target_type="node",
+            target_id=node_a.id,
+            actor_kind="ai",
+            kind="relabel",
+            reason="third",
+            source="ai_edit",
+            created_at=base + timedelta(seconds=20),
+        ),
+        ChangeEvent(
+            model_id=model.id,
+            version_id=version.id,
+            target_type="node",
+            target_id=node_b.id,
+            actor_kind="human",
+            kind="relabel",
+            reason="fourth",
+            source="reconcile",
+            created_at=base + timedelta(seconds=30),
+        ),
+        ChangeEvent(
+            model_id=model.id,
+            version_id=version.id,
+            target_type="node",
+            target_id=node_a.id,
+            actor_kind="human",
+            kind="relabel",
+            reason="fifth",
+            source="manual",
+            created_at=base + timedelta(seconds=40),
+        ),
+    ]
+    for ev in rows:
+        db.add(ev)
+    db.commit()
+    # Reload to get ids assigned
+    for ev in rows:
+        db.refresh(ev)
+    return rows  # ev1..ev5 in ascending created_at order
+
+
+def _seed_second_project(db):
+    """Create an independent project + model; return (project2, model2)."""
+    org2 = Organization(name=f"OtherOrg-{uuid4()}")
+    db.add(org2)
+    db.flush()
+    user2 = User(org_id=org2.id, email=f"other-{uuid4()}@x.io", name="U2")
+    db.add(user2)
+    db.flush()
+    project2 = Project(org_id=org2.id, name="P2", created_by=user2.id)
+    db.add(project2)
+    db.flush()
+    model2 = ProcessModel(project_id=project2.id, name="M2", level="L2")
+    db.add(model2)
+    db.flush()
+    db.commit()
+    return project2, model2
 
 
 # ---------------------------------------------------------------------------
@@ -326,4 +429,300 @@ def test_edge_history_404_for_edge_in_other_project(db):
 
     with pytest.raises(HTTPException) as exc:
         cl_api.get_edge_history(project=project, edge_id=foreign_edge.id, db=db)
+    assert exc.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Task 19: Model-wide log endpoint — GET /models/{model_id}/log
+# ---------------------------------------------------------------------------
+
+def _setup_log_fixture(db):
+    """Return (project, model, version, node_a, node_b, [ev1..ev5])."""
+    project, version, node_a, claim = _seed_version_for_endpoint(db)
+    # Retrieve the model (version.model_id)
+    model = db.get(ProcessModel, version.model_id)
+
+    # Create a second node in the same version so we have two targets
+    node_b = ProcessNode(
+        version_id=version.id,
+        lane_id=node_a.lane_id,
+        type="task",
+        name="Approve",
+        position={},
+        properties={},
+    )
+    db.add(node_b)
+    db.commit()
+    db.refresh(node_b)
+
+    events = _seed_events_for_model(db, model, version, node_a, node_b)
+    return project, model, version, node_a, node_b, events
+
+
+def test_log_default_feed_newest_first(db):
+    """Model log returns all events newest-first (default, no filters)."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+
+    page = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+    )
+
+    assert isinstance(page, ChangeLogPage)
+    assert len(page.items) == 5
+
+    # Verify descending created_at order
+    for i in range(len(page.items) - 1):
+        assert page.items[i].created_at >= page.items[i + 1].created_at
+
+    # First item should be the last-inserted (ev5, reason="fifth")
+    assert page.items[0].reason == "fifth"
+    # Last item should be the first-inserted (ev1, reason="first")
+    assert page.items[-1].reason == "first"
+
+
+def test_log_filter_by_target_id(db):
+    """?target_id= returns only events for that target."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+
+    page = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        target_id=node_a.id,
+    )
+
+    assert isinstance(page, ChangeLogPage)
+    # ev1, ev3, ev5 belong to node_a → 3 events
+    assert len(page.items) == 3
+    for item in page.items:
+        assert item.target_id == node_a.id
+
+
+def test_log_filter_by_source(db):
+    """?source=reconcile returns only reconcile events."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+
+    page = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        source="reconcile",
+    )
+
+    assert isinstance(page, ChangeLogPage)
+    # Only ev4 has source=reconcile
+    assert len(page.items) == 1
+    assert page.items[0].source == "reconcile"
+    assert page.items[0].reason == "fourth"
+
+
+def test_log_filter_by_actor_kind(db):
+    """?actor_kind=ai returns only AI-authored events."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+
+    page = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        actor_kind="ai",
+    )
+
+    assert isinstance(page, ChangeLogPage)
+    # Only ev3 has actor_kind=ai
+    assert len(page.items) == 1
+    assert page.items[0].actor_kind == "ai"
+    assert page.items[0].reason == "third"
+
+
+def test_log_filter_by_since(db):
+    """?since=<datetime> returns events at or after that time."""
+    from datetime import datetime, timedelta, timezone
+
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+    # Base is 2025-01-01 12:00:00; ev3..ev5 are at t+20,30,40 seconds
+    # Use t+15s as cutoff so ev3, ev4, ev5 are included
+    base = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    since = base + timedelta(seconds=15)
+
+    page = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        since=since,
+    )
+
+    assert isinstance(page, ChangeLogPage)
+    assert len(page.items) == 3
+    for item in page.items:
+        assert item.created_at >= since
+
+
+def test_log_pagination_basic(db):
+    """Requesting limit=2 returns 2 items + a next_cursor."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+
+    page1 = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        limit=2,
+    )
+
+    assert isinstance(page1, ChangeLogPage)
+    assert len(page1.items) == 2
+    assert page1.next_cursor is not None
+
+    # First page should contain the 2 newest (ev5=fifth, ev4=fourth)
+    assert page1.items[0].reason == "fifth"
+    assert page1.items[1].reason == "fourth"
+
+
+def test_log_pagination_continues_without_overlap(db):
+    """Page 2 cursor continues from page 1 with no overlap."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+
+    page1 = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        limit=2,
+    )
+    assert page1.next_cursor is not None
+
+    page2 = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        limit=2,
+        cursor=page1.next_cursor,
+    )
+
+    # No items from page1 should appear in page2
+    page1_ids = {item.id for item in page1.items}
+    page2_ids = {item.id for item in page2.items}
+    assert page1_ids.isdisjoint(page2_ids)
+
+    # Together they cover 4 of the 5 events
+    assert len(page2.items) == 2
+    # Page 2 should have ev3=third, ev2=second
+    assert page2.items[0].reason == "third"
+    assert page2.items[1].reason == "second"
+
+
+def test_log_pagination_last_page_no_cursor(db):
+    """The last page returns next_cursor = None."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+
+    page1 = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        limit=3,
+    )
+    assert page1.next_cursor is not None
+
+    page2 = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        limit=3,
+        cursor=page1.next_cursor,
+    )
+
+    # 5 events total; first page has 3, second page has 2 → last page
+    assert len(page2.items) == 2
+    assert page2.next_cursor is None
+
+
+def test_log_pagination_full_page_exact(db):
+    """When the result count equals the limit exactly, next_cursor is None."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+
+    page = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        limit=5,  # exactly 5 events exist
+    )
+
+    assert len(page.items) == 5
+    assert page.next_cursor is None
+
+
+def test_log_malformed_cursor_does_not_500(db):
+    """A garbage cursor string must not raise a 500 (treat as no cursor or 422)."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+
+    try:
+        page = cl_api.get_model_log(
+            project=project,
+            model_id=model.id,
+            db=db,
+            cursor="not-a-valid-cursor!!!",
+        )
+        # If it ignores the bad cursor, it should still return a valid page
+        assert isinstance(page, ChangeLogPage)
+    except HTTPException as exc:
+        # 422 is acceptable; 500 is not
+        assert exc.status_code == 422
+
+
+def test_log_limit_clamped_to_max(db):
+    """limit > 200 is silently clamped to 200 (no error)."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+
+    # Just verifies it doesn't error; with 5 events, all 5 are returned
+    page = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        limit=9999,
+    )
+    assert isinstance(page, ChangeLogPage)
+    assert len(page.items) == 5
+
+
+def test_log_limit_clamped_min_1(db):
+    """limit < 1 is clamped to 1."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+
+    page = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        limit=0,
+    )
+    assert isinstance(page, ChangeLogPage)
+    assert len(page.items) == 1
+    # Should also have a next_cursor since 4 events remain
+    assert page.next_cursor is not None
+
+
+def test_log_404_for_model_in_other_project(db):
+    """Model that exists but belongs to another project → 404."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+    project2, model2 = _seed_second_project(db)
+
+    # Ask project1 for model2 (which belongs to project2)
+    with pytest.raises(HTTPException) as exc:
+        cl_api.get_model_log(
+            project=project,
+            model_id=model2.id,
+            db=db,
+        )
+    assert exc.value.status_code == 404
+
+
+def test_log_404_for_unknown_model(db):
+    """Completely unknown model_id → 404."""
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+
+    with pytest.raises(HTTPException) as exc:
+        cl_api.get_model_log(
+            project=project,
+            model_id=uuid4(),
+            db=db,
+        )
     assert exc.value.status_code == 404
