@@ -12,6 +12,7 @@ from app.api.v2.reviews import _recompute_version_status
 from app.constants import LINEAGE_KEY
 from app.db.session import get_db
 from app.enums import (
+    ChangeActorKind,
     ChangeKind,
     ChangeSource,
     ChangeTargetType,
@@ -1805,6 +1806,20 @@ def apply_proposed_step(
         edge_label=payload.edge_label,
         cited_claim_ids=payload.cited_claim_ids,
         project_id=project.id,
+    )
+
+    record_change(
+        db,
+        target_type=ChangeTargetType.NODE.value,
+        target_id=node.id,
+        model_id=version.model_id,
+        version_id=version.id,
+        kind=ChangeKind.CREATE.value,
+        actor_kind=ChangeActorKind.AI.value,
+        source=ChangeSource.RECONCILE.value,
+        cited_claim_ids=payload.cited_claim_ids,
+        reason="AI-proposed step accepted",
+        reasoning_trace=None,
     )
 
     db.commit()
