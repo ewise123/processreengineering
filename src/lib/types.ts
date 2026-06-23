@@ -648,3 +648,8 @@ export interface BlankMapResult {
   start_node_id: UUID;
   end_node_id: UUID;
 }
+
+export interface ChangeLogPage {
+  items: ChangeEvent[];
+  next_cursor: string | null;
+}

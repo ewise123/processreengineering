@@ -8,6 +8,7 @@ import type {
   BlankMapRequest,
   BlankMapResult,
   ChangeEvent,
+  ChangeLogPage,
   ChatRequest,
   ChatResponse,
   Claim,
@@ -482,4 +483,28 @@ export const api = {
     request<ChangeEvent[]>(
       `/api/v2/projects/${projectId}/edges/${edgeId}/history`
     ),
+  getChangeLog: (
+    projectId: UUID,
+    modelId: UUID,
+    params: {
+      target_id?: UUID;
+      actor_kind?: string;
+      source?: string;
+      since?: string;
+      cursor?: string;
+      limit?: number;
+    } = {}
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.target_id !== undefined) qs.set("target_id", params.target_id);
+    if (params.actor_kind !== undefined) qs.set("actor_kind", params.actor_kind);
+    if (params.source !== undefined) qs.set("source", params.source);
+    if (params.since !== undefined) qs.set("since", params.since);
+    if (params.cursor !== undefined) qs.set("cursor", params.cursor);
+    if (params.limit !== undefined) qs.set("limit", String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : "";
+    return request<ChangeLogPage>(
+      `/api/v2/projects/${projectId}/models/${modelId}/log${suffix}`
+    );
+  },
 };

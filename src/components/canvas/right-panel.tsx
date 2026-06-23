@@ -19,6 +19,7 @@ import {
   FileText,
   GitBranch,
   GitCompare,
+  History,
   Link2,
   MessageSquare,
   RotateCcw,
@@ -32,11 +33,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
 import type {
+  ChangeLogPage,
   ChatTurn,
   InputRow,
   NodeIssue,
@@ -46,12 +48,13 @@ import type {
   UUID,
   ViewerTarget,
 } from "@/lib/types";
+import { ChangeEntry } from "./change-entry";
 import { buildVersionRows, type TreeRow } from "./version-tree";
 import { diffChangeCount, isEmptyDiff } from "./version-diff";
 import { reconcileRow } from "./reconcile";
 import { bucketNodes, reviewByNodeMap } from "./review-summary";
 
-type TabId = "chat" | "versions" | "issues" | "review" | "sources" | "refresh";
+type TabId = "chat" | "versions" | "issues" | "review" | "sources" | "refresh" | "changelog";
 
 const TAB_LABELS: Record<TabId, string> = {
   chat: "Chat",
@@ -60,6 +63,7 @@ const TAB_LABELS: Record<TabId, string> = {
   review: "Review",
   sources: "Sources",
   refresh: "Refresh",
+  changelog: "Change Log",
 };
 
 const SUGGESTED_PROMPTS = [
@@ -124,6 +128,7 @@ export function RightPanel({
     { id: "review" },
     { id: "sources" },
     { id: "refresh" },
+    { id: "changelog" },
   ];
 
   if (collapsed) {
@@ -267,6 +272,14 @@ export function RightPanel({
         {tab === "refresh" && (
           <RefreshTab projectId={projectId} modelId={modelId} versionId={versionId} />
         )}
+        {tab === "changelog" && (
+          <ChangeLogTab
+            projectId={projectId}
+            modelId={modelId}
+            selected={selected}
+            onFocusNode={onFocusNode}
+          />
+        )}
       </div>
     </div>
   );
@@ -287,6 +300,8 @@ function TabIcon({ id }: { id: TabId }) {
       return <Link2 {...props} />;
     case "refresh":
       return <RotateCcw {...props} />;
+    case "changelog":
+      return <History {...props} />;
   }
 }
 
@@ -1177,6 +1192,112 @@ function RefreshTab({
               );
             })}
           </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Change Log tab ─────────────────────────────────────────
+function ChangeLogTab({
+  projectId,
+  modelId,
+  selected,
+  onFocusNode,
+}: {
+  projectId: UUID;
+  modelId: UUID;
+  selected: { id: UUID; kind: "node" | "edge"; name?: string } | null;
+  onFocusNode: (id: UUID) => void;
+}) {
+  // When a node or edge is selected, we default to showing only changes for
+  // that object; the user can toggle back to the model-wide view.
+  const [filterToSelection, setFilterToSelection] = useState(true);
+
+  const targetId =
+    selected !== null && filterToSelection ? selected.id : undefined;
+
+  const query = useInfiniteQuery<ChangeLogPage>({
+    queryKey: ["changelog", projectId, modelId, targetId],
+    queryFn: ({ pageParam }) =>
+      api.getChangeLog(projectId, modelId, {
+        target_id: targetId,
+        cursor: pageParam as string | undefined,
+        limit: 50,
+      }),
+    initialPageParam: undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+  });
+
+  const allItems = query.data?.pages.flatMap((p) => p.items) ?? [];
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* Filter bar — only shown when something is selected */}
+      {selected !== null && (
+        <div className="shrink-0 border-b border-slate-100 px-3 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate text-[10.5px] text-slate-500">
+              {filterToSelection ? (
+                <>
+                  Changes for{" "}
+                  <span className="font-semibold text-slate-700">
+                    {selected.name ?? selected.id.slice(0, 8)}
+                  </span>
+                </>
+              ) : (
+                <span className="italic">All changes in this model</span>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => setFilterToSelection((v) => !v)}
+              className="shrink-0 rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50"
+            >
+              {filterToSelection ? "Show all" : "Show selected"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex-1 overflow-y-auto px-3 py-3">
+        <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+          Change Log
+        </div>
+
+        {query.isLoading && (
+          <div className="text-[11px] italic text-slate-400">Loading…</div>
+        )}
+        {query.isError && (
+          <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] text-rose-700">
+            {(query.error as Error).message}
+          </div>
+        )}
+        {!query.isLoading && allItems.length === 0 && (
+          <div className="py-8 text-center text-[11px] text-slate-400">
+            No changes recorded yet.
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          {allItems.map((evt) => (
+            <ChangeEntry
+              key={evt.id}
+              event={evt}
+              onFocus={evt.target_type === "node" ? onFocusNode : undefined}
+            />
+          ))}
+        </div>
+
+        {query.hasNextPage && (
+          <button
+            type="button"
+            onClick={() => void query.fetchNextPage()}
+            disabled={query.isFetchingNextPage}
+            className="mt-3 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10.5px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {query.isFetchingNextPage ? "Loading…" : "Load more"}
+          </button>
         )}
       </div>
     </div>
