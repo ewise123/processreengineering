@@ -940,6 +940,8 @@ def update_lane(
         raise HTTPException(status_code=404, detail="Lane not found")
     _check_lane_in_project(lane, project.id, db)
 
+    old_name = lane.name
+
     if payload.name is not None:
         lane.name = payload.name
     if payload.order_index is not None:
@@ -950,6 +952,27 @@ def update_lane(
         lane.color = payload.color
     if payload.collapsed is not None:
         lane.collapsed = payload.collapsed
+
+    name_changed = payload.name is not None and lane.name != old_name
+    if name_changed:
+        if not (payload.reason and payload.reason.strip()):
+            db.rollback()
+            raise HTTPException(
+                status_code=422,
+                detail="A reason is required when renaming a lane.",
+            )
+        record_change(
+            db,
+            target_type=ChangeTargetType.LANE.value,
+            target_id=lane.id,
+            model_id=model_id_for_version(db, lane.version_id),
+            version_id=lane.version_id,
+            kind=ChangeKind.RELABEL.value,
+            reason=payload.reason.strip(),
+            before={"name": old_name},
+            after={"name": lane.name},
+            source=ChangeSource.MANUAL.value,
+        )
     db.commit()
     db.refresh(lane)
     return lane

@@ -6,7 +6,8 @@ from sqlalchemy import select
 
 from app.api.v2 import process_maps as pm_api
 from app.models.change_event import ChangeEvent
-from app.schemas.process_map import EdgeCreate, EdgeUpdate, NodeUpdate
+from app.models.process import ProcessLane
+from app.schemas.process_map import EdgeCreate, EdgeUpdate, LaneUpdate, NodeUpdate
 from tests.test_ai_edit import _seed_version_for_endpoint
 
 
@@ -96,3 +97,52 @@ def test_update_edge_bend_only_logs_nothing(db):
     pm_api.update_edge(project=project, edge_id=edge.id,
                        payload=EdgeUpdate(bend_x=10.0, bend_y=20.0), db=db)
     assert len(_events_for(db, edge.id)) == before
+
+
+# ---------------------------------------------------------------------------
+# Lane tests
+# ---------------------------------------------------------------------------
+
+def test_update_lane_name_requires_reason(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    lane = db.get(ProcessLane, n1.lane_id)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.update_lane(project=project, lane_id=lane.id,
+                           payload=LaneUpdate(name="New Lane Name"), db=db)
+    assert exc.value.status_code == 422
+
+
+def test_update_lane_name_with_reason_logs_one_relabel_event(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    lane = db.get(ProcessLane, n1.lane_id)
+    old_name = lane.name
+    before = len(_events_for(db, lane.id))
+    pm_api.update_lane(project=project, lane_id=lane.id,
+                       payload=LaneUpdate(name="New Lane Name", reason="Renamed per workshop"), db=db)
+    events = _events_for(db, lane.id)
+    assert len(events) == before + 1
+    ev = max(events, key=lambda e: e.created_at)
+    assert ev.kind == "relabel"
+    assert ev.target_id == lane.id
+    assert ev.before == {"name": old_name}
+    assert ev.after == {"name": "New Lane Name"}
+    assert ev.reason == "Renamed per workshop"
+
+
+def test_update_lane_cosmetic_only_logs_nothing(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    lane = db.get(ProcessLane, n1.lane_id)
+    before = len(_events_for(db, lane.id))
+    pm_api.update_lane(project=project, lane_id=lane.id,
+                       payload=LaneUpdate(color="#aabbcc", collapsed=True, height_px=200), db=db)
+    assert len(_events_for(db, lane.id)) == before
+
+
+def test_update_lane_noop_name_logs_nothing(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    lane = db.get(ProcessLane, n1.lane_id)
+    before = len(_events_for(db, lane.id))
+    # Same name value — should be a no-op, no event written
+    pm_api.update_lane(project=project, lane_id=lane.id,
+                       payload=LaneUpdate(name=lane.name, reason="no-op check"), db=db)
+    assert len(_events_for(db, lane.id)) == before
