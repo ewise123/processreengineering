@@ -411,17 +411,25 @@ def generate_process_map(
 
     # 10. Resolve claim_refs → node_claim_links + edge_claim_links
     node_link_count = 0
+    # Build claim-id lists per element id so origin events can cite them.
+    # Resolved here (after nodes/edges have ids) so cited_claim_ids is populated
+    # on the same create event rather than requiring a subsequent link_claim event.
+    cited_ids_by_el: dict[str, list] = {}
     for el in elements:
         node = node_by_external_id.get(el["id"])
         if node is None:
             continue
-        for ref in el.get("claim_refs", []):
-            if not isinstance(ref, int) or ref < 0 or ref >= len(claims):
-                continue
+        valid_refs = [
+            ref for ref in el.get("claim_refs", [])
+            if isinstance(ref, int) and 0 <= ref < len(claims)
+        ]
+        el_claim_ids = [claims[ref].id for ref in valid_refs]
+        cited_ids_by_el[el["id"]] = el_claim_ids
+        for cid in el_claim_ids:
             db.add(
                 NodeClaimLink(
                     node_id=node.id,
-                    claim_id=claims[ref].id,
+                    claim_id=cid,
                     link_kind=ClaimLinkKind.SUPPORTS.value,
                 )
             )
@@ -429,16 +437,55 @@ def generate_process_map(
         # Gateway claim_refs also propagate to its outgoing edges (decision logic)
         if el["kind"] == "gateway":
             for edge in edges_by_source.get(el["id"], []):
-                for ref in el.get("claim_refs", []):
-                    if not isinstance(ref, int) or ref < 0 or ref >= len(claims):
-                        continue
+                for cid in el_claim_ids:
                     db.add(
                         EdgeClaimLink(
                             edge_id=edge.id,
-                            claim_id=claims[ref].id,
+                            claim_id=cid,
                             link_kind=ClaimLinkKind.INFERRED.value,
                         )
                     )
+
+    # 11. Write origin change events (generation trail).
+    # We log AFTER step 10 so that cited_claim_ids is resolved from claim_refs
+    # in the same pass. Edges carry no direct claim_refs in the AI structure
+    # (only gateways propagate to edge_claim_links), so edge events are emitted
+    # without cited_claim_ids.
+    for el in elements:
+        node = node_by_external_id.get(el["id"])
+        if node is None:
+            continue
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=node.id,
+            model_id=version.model_id,
+            version_id=version.id,
+            kind=ChangeKind.CREATE.value,
+            reason="Generated from source claims",
+            actor_kind=ChangeActorKind.AI.value,
+            source=ChangeSource.GENERATION.value,
+            after={"name": node.name, "type": node.type},
+            cited_claim_ids=cited_ids_by_el.get(el["id"]) or None,
+        )
+
+    all_edges = [edge for edge_list in edges_by_source.values() for edge in edge_list]
+    for edge in all_edges:
+        record_change(
+            db,
+            target_type=ChangeTargetType.EDGE.value,
+            target_id=edge.id,
+            model_id=version.model_id,
+            version_id=version.id,
+            kind=ChangeKind.CREATE.value,
+            reason="Generated from source claims",
+            actor_kind=ChangeActorKind.AI.value,
+            source=ChangeSource.GENERATION.value,
+            after={
+                "source_node_id": str(edge.source_node_id),
+                "target_node_id": str(edge.target_node_id),
+            },
+        )
 
     db.commit()
 
