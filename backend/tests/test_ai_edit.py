@@ -305,3 +305,18 @@ def test_apply_proposed_step_logs_ai_create_change_event(db):
     # cited_claim_ids on the event records what was passed (as strings); real claim must be present
     assert ev.cited_claim_ids is not None
     assert str(claim.id) in ev.cited_claim_ids
+
+    # Also assert exactly one connect event for the created edge
+    new_edge_id = result.edge.id
+    edge_events = list(
+        db.scalars(
+            select(ChangeEvent).where(
+                ChangeEvent.target_id == new_edge_id,
+                ChangeEvent.kind == "connect",
+            )
+        ).all()
+    )
+    assert len(edge_events) == 1, f"Expected 1 connect event for edge, got {len(edge_events)}"
+    edge_ev = edge_events[0]
+    assert edge_ev.actor_kind == "ai"
+    assert edge_ev.source == "reconcile"

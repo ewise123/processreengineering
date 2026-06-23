@@ -224,7 +224,8 @@ def test_relabel_node_target_gone_writes_no_change_event(db):
 
 
 def test_add_step_writes_change_event(db):
-    """Accepting an add_step suggestion writes a 'create' change_event for the new node."""
+    """Accepting an add_step suggestion writes a 'create' change_event for the new node
+    and a 'connect' change_event for the created edge."""
     project, process, version, lane, n1, claim = _seed_map(db)
     s = _suggestion(db, project, process, version, "add_step", {
         "name": "Verify budget", "type": "task", "after_node_id": str(n1.id),
@@ -247,6 +248,18 @@ def test_add_step_writes_change_event(db):
     assert ev.source == "reconcile"
     assert ev.actor_kind == "ai"
     assert ev.suggestion_id == s.id
+
+    # Also assert exactly one connect event for the created edge
+    new_edge = db.scalars(
+        select(ProcessEdge).where(ProcessEdge.target_node_id == new_node.id)
+    ).one()
+    edge_events = _change_events_for_target(db, new_edge.id)
+    assert len(edge_events) == 1
+    edge_ev = edge_events[0]
+    assert edge_ev.kind == "connect"
+    assert edge_ev.source == "reconcile"
+    assert edge_ev.actor_kind == "ai"
+    assert edge_ev.suggestion_id == s.id
 
 
 def test_flag_stale_node_writes_change_event(db):

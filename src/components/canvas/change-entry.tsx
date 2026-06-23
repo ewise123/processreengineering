@@ -51,7 +51,7 @@ export function ChangeEntry({
   event: ChangeEvent;
   onFocus?: (id: UUID) => void;
 }) {
-  const actorIcon = ACTOR_ICON[event.actor_kind];
+  const actorIcon = ACTOR_ICON[event.actor_kind] ?? ACTOR_ICON.system;
   const actorLabel = ACTOR_LABEL[event.actor_kind] ?? event.actor_kind;
   const relTime = formatRelativeTime(event.created_at);
   const canFocus = event.target_type === "node" && onFocus != null;

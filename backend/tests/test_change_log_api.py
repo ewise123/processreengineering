@@ -35,11 +35,11 @@ def _seed_events_for_model(db, model, version, node_a, node_b):
     rapid consecutive inserts).
 
     Events (newest → oldest when fetched desc):
-      ev5  node_a  actor_kind=human    source=manual      t+40
-      ev4  node_b  actor_kind=human    source=reconcile   t+30
-      ev3  node_a  actor_kind=ai       source=ai_edit     t+20
-      ev2  node_b  actor_kind=human    source=manual      t+10
-      ev1  node_a  actor_kind=human    source=manual      t+00
+      ev5  node_a  actor_kind=user     source=manual      t+40
+      ev4  node_b  actor_kind=user     source=reconcile   t+30
+      ev3  node_a  actor_kind=ai       source=generation  t+20
+      ev2  node_b  actor_kind=user     source=manual      t+10
+      ev1  node_a  actor_kind=user     source=manual      t+00
     """
     base = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     rows = [
@@ -48,7 +48,7 @@ def _seed_events_for_model(db, model, version, node_a, node_b):
             version_id=version.id,
             target_type="node",
             target_id=node_a.id,
-            actor_kind="human",
+            actor_kind="user",
             kind="relabel",
             reason="first",
             source="manual",
@@ -59,7 +59,7 @@ def _seed_events_for_model(db, model, version, node_a, node_b):
             version_id=version.id,
             target_type="node",
             target_id=node_b.id,
-            actor_kind="human",
+            actor_kind="user",
             kind="relabel",
             reason="second",
             source="manual",
@@ -73,7 +73,7 @@ def _seed_events_for_model(db, model, version, node_a, node_b):
             actor_kind="ai",
             kind="relabel",
             reason="third",
-            source="ai_edit",
+            source="generation",
             created_at=base + timedelta(seconds=20),
         ),
         ChangeEvent(
@@ -81,7 +81,7 @@ def _seed_events_for_model(db, model, version, node_a, node_b):
             version_id=version.id,
             target_type="node",
             target_id=node_b.id,
-            actor_kind="human",
+            actor_kind="user",
             kind="relabel",
             reason="fourth",
             source="reconcile",
@@ -92,7 +92,7 @@ def _seed_events_for_model(db, model, version, node_a, node_b):
             version_id=version.id,
             target_type="node",
             target_id=node_a.id,
-            actor_kind="human",
+            actor_kind="user",
             kind="relabel",
             reason="fifth",
             source="manual",
@@ -557,6 +557,34 @@ def test_log_filter_by_since(db):
     assert len(page.items) == 3
     for item in page.items:
         assert item.created_at >= since
+
+
+
+def test_log_naive_since_does_not_500(db):
+    """A naive (no-timezone) since datetime must not cause a 500 error;
+    it should be interpreted as UTC and filter sensibly."""
+    from datetime import datetime, timedelta
+
+    project, model, version, node_a, node_b, events = _setup_log_fixture(db)
+    # Base is 2025-01-01 12:00:00; use a naive datetime 15s after base.
+    # This simulates what happens when an ISO string without offset is parsed by FastAPI.
+    naive_since = datetime(2025, 1, 1, 12, 0, 15)  # no tzinfo
+
+    # Should return 200 (not 500), with ev3, ev4, ev5 (t+20, t+30, t+40)
+    page = cl_api.get_model_log(
+        project=project,
+        model_id=model.id,
+        db=db,
+        since=naive_since,
+    )
+
+    assert isinstance(page, ChangeLogPage)
+    assert len(page.items) == 3
+    # All returned items should be at or after the since cutoff (when treated as UTC)
+    from datetime import timezone as _tz
+    aware_since = naive_since.replace(tzinfo=_tz.utc)
+    for item in page.items:
+        assert item.created_at >= aware_since
 
 
 def test_log_pagination_basic(db):

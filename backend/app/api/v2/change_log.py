@@ -6,7 +6,7 @@ GET /projects/{project_id}/edges/{edge_id}/history   -> list[ChangeEventRead]
 GET /projects/{project_id}/models/{model_id}/log     -> ChangeLogPage
 """
 import base64
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
@@ -156,6 +156,8 @@ def get_model_log(
     if source is not None:
         stmt = stmt.where(ChangeEvent.source == source)
     if since is not None:
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
         stmt = stmt.where(ChangeEvent.created_at >= since)
 
     # Cursor-based keyset pagination (desc order: next page has smaller values)

@@ -30,6 +30,7 @@ from app.models.claim import Claim
 from app.models.identity import User
 from app.models.process import (
     NodeClaimLink,
+    ProcessEdge,
     ProcessLane,
     ProcessModel,
     ProcessNode,
@@ -576,7 +577,7 @@ def apply_suggestion(
             lane_id = lane.id
         cited = [UUID(c) for c in payload.get("cited_claim_ids", [])]
         new_x = float((source.position or {}).get("x", 0)) + 250.0
-        new_node, _ = _create_proposed_step(
+        new_node, new_edge = _create_proposed_step(
             db,
             version_id=version.id,
             source=source,
@@ -589,6 +590,7 @@ def apply_suggestion(
             cited_claim_ids=cited,
             project_id=project.id,
         )
+        db.flush()  # ensure new_edge.id is assigned before logging
         record_change(
             db,
             target_type=ChangeTargetType.NODE.value,
@@ -601,6 +603,19 @@ def apply_suggestion(
             source=ChangeSource.RECONCILE.value,
             suggestion_id=sug.id,
             after={"name": new_node.name},
+        )
+        record_change(
+            db,
+            target_type=ChangeTargetType.EDGE.value,
+            target_id=new_edge.id,
+            model_id=model_id_for_version(db, sug.version_id),
+            version_id=sug.version_id,
+            kind=ChangeKind.CONNECT.value,
+            reason=sug.rationale or "add_step applied via reconcile",
+            actor_kind=ChangeActorKind.AI.value,
+            source=ChangeSource.RECONCILE.value,
+            suggestion_id=sug.id,
+            after={"source_node_id": str(new_edge.source_node_id), "target_node_id": str(new_edge.target_node_id)},
         )
         return AcceptSuggestionResult(
             suggestion_id=sug.id,

@@ -1970,6 +1970,7 @@ def apply_proposed_step(
         project_id=project.id,
     )
 
+    db.flush()  # ensure edge.id is assigned before logging
     record_change(
         db,
         target_type=ChangeTargetType.NODE.value,
@@ -1982,6 +1983,18 @@ def apply_proposed_step(
         cited_claim_ids=payload.cited_claim_ids,
         reason="AI-proposed step accepted",
         reasoning_trace=None,
+    )
+    record_change(
+        db,
+        target_type=ChangeTargetType.EDGE.value,
+        target_id=edge.id,
+        model_id=version.model_id,
+        version_id=version.id,
+        kind=ChangeKind.CONNECT.value,
+        actor_kind=ChangeActorKind.AI.value,
+        source=ChangeSource.RECONCILE.value,
+        reason="AI-proposed step accepted",
+        after={"source_node_id": str(edge.source_node_id), "target_node_id": str(edge.target_node_id)},
     )
 
     db.commit()
