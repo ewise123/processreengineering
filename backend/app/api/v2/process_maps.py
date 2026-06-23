@@ -853,13 +853,32 @@ def update_edge(
     if edge is None:
         raise HTTPException(status_code=404, detail="Edge not found")
     _check_edge_in_project(edge, project.id, db)
+
+    old_label = edge.label
     if "label" in payload.model_fields_set:
-        # Empty string ↔ "no label" so the round-trip is consistent.
         edge.label = payload.label or None
     if "bend_x" in payload.model_fields_set:
         edge.bend_x = payload.bend_x
     if "bend_y" in payload.model_fields_set:
         edge.bend_y = payload.bend_y
+
+    label_changed = "label" in payload.model_fields_set and (payload.label or None) != old_label
+    if label_changed:
+        if not (payload.reason and payload.reason.strip()):
+            db.rollback()
+            raise HTTPException(status_code=422, detail="A reason is required to change an edge label.")
+        record_change(
+            db,
+            target_type=ChangeTargetType.EDGE.value,
+            target_id=edge.id,
+            model_id=model_id_for_version(db, edge.version_id),
+            version_id=edge.version_id,
+            kind=ChangeKind.RELABEL.value,
+            reason=payload.reason.strip(),
+            before={"label": old_label},
+            after={"label": edge.label},
+            source=ChangeSource.MANUAL.value,
+        )
     db.commit()
     db.refresh(edge)
     return edge
