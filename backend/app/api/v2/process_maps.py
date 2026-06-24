@@ -1318,6 +1318,53 @@ def ai_edit_node(
 
 
 @router.post(
+    "/process-maps/{model_id}/versions/{version_id}/chat-suggest",
+    response_model=ChatSuggestResponse,
+)
+def chat_suggest(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    payload: ChatSuggestRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> ChatSuggestResponse:
+    """Word-style chat. Ask mode answers in prose; suggest mode also returns
+    structured, applyable suggested changes. Never mutates the map. Model claim
+    refs are resolved to UUIDs and fabricated ones dropped; malformed ops are
+    discarded before reaching the client."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+
+    # If a single node is attached as context, label it as the selection.
+    selected_node_id = next(
+        (r.id for r in payload.context_refs if r.kind == RefKind.NODE), None
+    )
+    ctx = assemble_map_context(db, version, selected_node_id=selected_node_id)
+
+    history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
+    try:
+        message, raw_suggestions = run_chat_suggest(
+            history=history,
+            user_message=payload.user_message,
+            map_context_text=ctx.text,
+            mode=payload.mode,
+        )
+    except RuntimeError as exc:  # missing API key, etc.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    suggestions = []
+    for i, raw in enumerate(raw_suggestions):
+        built = _build_suggestion(raw, ctx, index=i)
+        if built is not None:
+            suggestions.append(built)
+    return ChatSuggestResponse(message=message, suggestions=suggestions)
+
+
+@router.post(
     "/process-maps/{model_id}/versions/{version_id}/ai-proposed-step",
     response_model=AiProposedStepResult,
     status_code=status.HTTP_201_CREATED,

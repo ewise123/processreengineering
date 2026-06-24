@@ -194,3 +194,86 @@ def test_build_suggestion_resolves_lowercase_ref():
     s = pm_api._build_suggestion(raw, ctx, index=0)
     assert s.op.node_ref == str(n1)
     assert s.affected_refs[0].id == n1
+
+
+# ---------------------------------------------------------------------------
+# Endpoint tests (Task 5)
+# ---------------------------------------------------------------------------
+import pytest as _pytest
+from fastapi import HTTPException
+from uuid import uuid4
+
+
+def _seed(db):
+    from app.enums import ClaimLinkKind
+    from app.models.identity import Organization, User
+    from app.models.project import Project
+    from app.models.claim import Claim
+    from app.models.process import (
+        NodeClaimLink, ProcessModel, ProcessVersion, ProcessLane, ProcessNode,
+    )
+    org = Organization(name="O"); db.add(org); db.flush()
+    user = User(org_id=org.id, email=f"u-{uuid4()}@x.io", name="U"); db.add(user); db.flush()
+    project = Project(org_id=org.id, name="P", created_by=user.id); db.add(project); db.flush()
+    model = ProcessModel(project_id=project.id, name="M", level="L2"); db.add(model); db.flush()
+    version = ProcessVersion(model_id=model.id, version_number=1); db.add(version); db.flush()
+    lane = ProcessLane(version_id=version.id, name="Ops", order_index=0); db.add(lane); db.flush()
+    n1 = ProcessNode(version_id=version.id, lane_id=lane.id, type="task", name="Receive", position={}, properties={})
+    db.add(n1); db.flush()
+    claim = Claim(project_id=project.id, kind="task", subject="Clerk receives order", normalized={})
+    db.add(claim); db.flush()
+    db.add(NodeClaimLink(node_id=n1.id, claim_id=claim.id, link_kind=ClaimLinkKind.SUPPORTS.value))
+    db.commit()
+    return project, version, n1, claim
+
+
+def test_chat_suggest_endpoint_resolves_suggestion(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    project, version, n1, claim = _seed(db)
+
+    def fake_service(*, history, user_message, map_context_text, mode):
+        return ("Here is a fix.", [
+            {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
+             "title": "Clarify", "rationale": "C1 supports it.",
+             "cited_claim_refs": ["C1", "C99"]}])
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_suggest", fake_service)
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="improve N1", mode="suggest"),
+            db=db,
+        )
+    assert resp.message == "Here is a fix."
+    assert len(resp.suggestions) == 1
+    assert resp.suggestions[0].op.node_ref == str(n1.id)
+    assert resp.suggestions[0].cited_claim_ids == [claim.id]   # C99 dropped
+
+
+def test_chat_suggest_endpoint_ask_mode_has_no_suggestions(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    project, version, n1, claim = _seed(db)
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_suggest",
+                   lambda **k: ("Plain answer.", []))
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="what is N1?", mode="ask"),
+            db=db,
+        )
+    assert resp.suggestions == []
+    assert resp.message == "Plain answer."
+
+
+def test_chat_suggest_endpoint_404_for_foreign_model(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    project, version, n1, claim = _seed(db)
+    with _pytest.raises(HTTPException) as exc:
+        pm_api.chat_suggest(
+            project=project, model_id=uuid4(), version_id=version.id,
+            payload=ChatSuggestRequest(user_message="hi", mode="ask"), db=db,
+        )
+    assert exc.value.status_code == 404
