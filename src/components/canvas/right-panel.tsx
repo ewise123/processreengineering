@@ -596,6 +596,9 @@ function ChatMsg({
       <div className="min-w-0 flex-1">
         <div className="poet-chat-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] leading-relaxed text-slate-800">
           <ReactMarkdown
+            // react-markdown's default urlTransform strips non-standard URL
+            // schemes; keep poet:// intact so the custom link renderer fires.
+            urlTransform={(url) => url}
             components={{
               p: ({ children }) => <span className="block">{children}</span>,
               a: ({ href, children }) => {
