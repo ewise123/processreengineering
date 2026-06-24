@@ -1353,7 +1353,7 @@ def chat_suggest(
             map_context_text=ctx.text,
             mode=payload.mode,
         )
-    except RuntimeError as exc:  # missing API key, etc.
+    except RuntimeError as exc:  # service raises only RuntimeError; _build_suggestion swallows ValueError
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     suggestions = []

@@ -277,3 +277,19 @@ def test_chat_suggest_endpoint_404_for_foreign_model(db):
             payload=ChatSuggestRequest(user_message="hi", mode="ask"), db=db,
         )
     assert exc.value.status_code == 404
+
+
+def test_chat_suggest_endpoint_502_on_runtime_error(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    project, version, n1, claim = _seed(db)
+    def boom(**k):
+        raise RuntimeError("no key")
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_suggest", boom)
+        with _pytest.raises(HTTPException) as exc:
+            pm_api.chat_suggest(
+                project=project, model_id=version.model_id, version_id=version.id,
+                payload=ChatSuggestRequest(user_message="hi", mode="suggest"), db=db,
+            )
+    assert exc.value.status_code == 502
