@@ -307,3 +307,51 @@ def test_consistency_endpoint_reports_findings(db):
         project=project, model_id=version.model_id, version_id=version.id, db=db,
     )
     assert any(f.code == "duplicate_name" for f in resp)
+
+
+def test_build_suggestion_decompose_coerces_substeps():
+    from app.api.v2 import process_maps as pm_api
+    ctx, (n1, _n2, _e1, _l1, _c1) = _ctx_stub()
+    raw = {"kind": "decompose", "node_ref": "N1",
+           "sub_steps": [{"proposed_name": "Step A", "proposed_type": "task"},
+                         {"proposed_name": "Step B", "proposed_type": "task"}],
+           "title": "Break down", "rationale": "r", "cited_claim_refs": []}
+    s = pm_api._build_suggestion(raw, ctx, index=0)
+    assert s is not None
+    assert s.op.node_ref == str(n1)
+    assert len(s.op.sub_steps) == 2
+    assert s.op.sub_steps[0].proposed_name == "Step A"  # coerced to SubStepInput
+
+
+def test_build_suggestion_add_edge_between_two_temp_ids():
+    from app.api.v2 import process_maps as pm_api
+    ctx, _ = _ctx_stub()
+    raw = {"kind": "add_edge", "from_ref": "tmp:1", "to_ref": "tmp:2",
+           "edge_label": "yes", "title": "Connect new nodes", "rationale": "r",
+           "cited_claim_refs": []}
+    s = pm_api._build_suggestion(raw, ctx, index=0)
+    assert s is not None
+    assert s.op.from_ref == "tmp:1" and s.op.to_ref == "tmp:2"  # temp ids untouched
+    assert s.affected_refs == []  # neither endpoint is a real existing object
+
+
+def test_chat_suggest_endpoint_drops_only_malformed_op_in_batch(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    project, version, n1, claim = _seed(db)
+
+    def fake_service(*, history, user_message, map_context_text, mode):
+        return ("Two ideas.", [
+            {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
+             "title": "Good", "rationale": "r", "cited_claim_refs": []},
+            {"kind": "relabel_node", "node_ref": "N1",  # malformed: missing new_label
+             "title": "Bad", "rationale": "r", "cited_claim_refs": []},
+        ])
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_suggest", fake_service)
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="x", mode="suggest"), db=db)
+    assert len(resp.suggestions) == 1               # malformed dropped, good kept
+    assert resp.suggestions[0].title == "Good"
