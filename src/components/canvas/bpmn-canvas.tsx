@@ -693,6 +693,12 @@ function BpmnCanvas({
           target.isContentEditable);
       if (inEditable) return;
 
+      if (e.code === "Space") {
+        e.preventDefault(); // stop the page from scrolling
+        spaceHeld.current = true;
+        return;
+      }
+
       const mod = e.metaKey || e.ctrlKey;
       if (mod && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
@@ -740,12 +746,20 @@ function BpmnCanvas({
         void deleteSelectionImpl();
       }
     };
+    const upHandler = (e: KeyboardEvent) => {
+      if (e.code === "Space") spaceHeld.current = false;
+    };
     document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    document.addEventListener("keyup", upHandler);
+    return () => {
+      document.removeEventListener("keydown", handler);
+      document.removeEventListener("keyup", upHandler);
+    };
   }, [deleteSelectionImpl, undo, redo, clearSelection]);
 
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
+  const spaceHeld = useRef(false);
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const lanesRef = useRef(lanes);
@@ -910,6 +924,17 @@ function BpmnCanvas({
   }, []);
 
   const onNodeMouseDown = (e: MouseEvent, id: string) => {
+    if (e.button === 1 || spaceHeld.current) {
+      e.preventDefault();
+      setDrag({
+        type: "pan",
+        startX: e.clientX,
+        startY: e.clientY,
+        tx0: viewportRef.current.tx,
+        ty0: viewportRef.current.ty,
+      });
+      return;
+    }
     if (e.button !== 0) return;
     setContextMenu(null);
     e.stopPropagation();
@@ -1036,6 +1061,17 @@ function BpmnCanvas({
   );
 
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
+    if (e.button === 1 || spaceHeld.current) {
+      e.preventDefault();
+      setDrag({
+        type: "pan",
+        startX: e.clientX,
+        startY: e.clientY,
+        tx0: viewportRef.current.tx,
+        ty0: viewportRef.current.ty,
+      });
+      return;
+    }
     if (e.button !== 0) return;
     setContextMenu(null);
     const target = e.target as SVGElement;
