@@ -332,6 +332,14 @@ export interface NodeIssuesDetail {
   issues: NodeIssueDetail[];
 }
 
+export interface MentionSource {
+  claim_id: UUID;
+  input_id: UUID;
+  input_name: string;
+  section_ref: Record<string, unknown> | null;
+  quote: string | null;
+}
+
 export interface ChatTurn {
   role: "user" | "assistant";
   content: string;
@@ -405,6 +413,7 @@ export interface ChatSuggestRequest {
 export interface ChatSuggestResponse {
   message: string;
   suggestions: ChatSuggestion[];
+  mention_sources: MentionSource[];
 }
 
 export interface ProcessMapGenerateRequest {
