@@ -1,4 +1,4 @@
-import type { ObjectRef, RefKind, UUID } from "@/lib/types";
+import type { ObjectRef, UUID } from "@/lib/types";
 
 /** Mirrors the SelectedRef shape used by RightPanel/ChatTab. */
 export interface SelectedRef {
@@ -9,7 +9,7 @@ export interface SelectedRef {
 }
 
 export interface ContextChip {
-  kind: RefKind;
+  kind: "node" | "edge";
   id: UUID;
   label: string;
 }

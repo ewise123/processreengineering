@@ -620,6 +620,12 @@ function BpmnCanvas({
     flashTimer.current = setTimeout(() => setFlashId(null), 1400);
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    };
+  }, []);
+
   const focusEdgeInViewport = useCallback((id: UUID) => {
     const edge = edgesRef.current.find((e) => e.id === id);
     if (!edge) return;

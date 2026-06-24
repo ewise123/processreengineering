@@ -329,15 +329,13 @@ function ChatTab({
         context_refs: selectionToContextRefs(selected),
       }),
     onSuccess: (data, vars) => {
-      setHistory((curr) => {
-        const next: ChatTurn[] = [
-          ...curr,
-          { role: "user", content: vars.userMessage },
-          { role: "assistant", content: data.message },
-        ];
-        sessionStore.save(versionId, next);
-        return next;
-      });
+      const next: ChatTurn[] = [
+        ...vars.history,
+        { role: "user", content: vars.userMessage },
+        { role: "assistant", content: data.message },
+      ];
+      sessionStore.save(versionId, next);
+      setHistory(next);
     },
   });
 
@@ -417,7 +415,7 @@ function ChatTab({
             {chips.map((c) => (
               <button
                 key={`${c.kind}:${c.id}`}
-                onClick={() => onNavigate({ kind: c.kind as "node" | "edge", id: c.id })}
+                onClick={() => onNavigate({ kind: c.kind, id: c.id })}
                 className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-700 hover:bg-slate-100"
                 title="Jump to this object"
               >
