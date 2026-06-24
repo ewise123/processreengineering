@@ -23,7 +23,9 @@ import {
   MessageSquare,
   RotateCcw,
   ShieldCheck,
+  Sparkles,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import {
   useEffect,
@@ -47,7 +49,7 @@ import { buildVersionRows, type TreeRow } from "./version-tree";
 import { diffChangeCount, isEmptyDiff } from "./version-diff";
 import { bucketNodes, reviewByNodeMap } from "./review-summary";
 import { parseMentions } from "./mentions";
-import { selectionChips, selectionToContextRefs } from "./chat-context";
+import { selectionChips, selectionToContextRefs, type SelectedObject } from "./chat-context";
 import { browserChatSessionStore } from "./chat-session";
 
 type TabId = "chat" | "versions" | "issues" | "review" | "sources";
@@ -67,13 +69,6 @@ const SUGGESTED_PROMPTS = [
   "Compare this against typical processes",
 ];
 
-interface SelectedRef {
-  id: UUID;
-  kind: "node" | "edge";
-  name?: string;
-  nodeKind?: string;
-}
-
 export function RightPanel({
   projectId,
   modelId,
@@ -82,6 +77,7 @@ export function RightPanel({
   selected,
   onFocusNode,
   onNavigate,
+  onClearSelection,
   reviewState,
   onSendRequest,
   onNavigateVersion,
@@ -94,11 +90,13 @@ export function RightPanel({
   modelId: UUID;
   versionId: UUID;
   nodes: { id: UUID; name: string; type: string; lane_id: UUID | null }[];
-  selected: SelectedRef | null;
+  selected: SelectedObject[];
   /** Sets the canvas selection. Used by Issues "→ Node" links. */
   onFocusNode: (id: UUID) => void;
   /** Teleport + flash any object (node/edge) on the canvas. Used by chat mentions. */
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+  /** Clear the canvas selection. Used by the chat context tab's ✕. */
+  onClearSelection: () => void;
   reviewState?: ReviewState;
   onSendRequest: () => void;
   onNavigateVersion?: (versionId: UUID) => void;
@@ -237,6 +235,7 @@ export function RightPanel({
             selected={selected}
             nodes={nodes}
             onNavigate={onNavigate}
+            onClearSelection={onClearSelection}
           />
         )}
         {tab === "versions" && (
@@ -295,15 +294,18 @@ function ChatTab({
   selected,
   nodes,
   onNavigate,
+  onClearSelection,
 }: {
   projectId: UUID;
   modelId: UUID;
   versionId: UUID;
-  selected: SelectedRef | null;
+  selected: SelectedObject[];
   nodes: { id: UUID; name: string; type: string; lane_id: UUID | null }[];
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+  onClearSelection: () => void;
 }) {
   const sessionStore = useMemo(() => browserChatSessionStore(), []);
+  const [showExamples, setShowExamples] = useState(false);
   const [history, setHistory] = useState<ChatTurn[]>(() => sessionStore.load(versionId));
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -406,57 +408,105 @@ function ChatTab({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-slate-200 p-2">
-        {chips.length > 0 && (
-          <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-              Context
-            </span>
-            {chips.map((c) => (
+      <div className="relative shrink-0">
+        {/* Context tab — sits behind the composer and slides up when objects
+            are selected; tucks back down (hidden) when the selection clears. */}
+        <div
+          className={
+            "absolute inset-x-2 bottom-full z-0 transition-transform duration-200 ease-out " +
+            (chips.length > 0
+              ? "translate-y-0"
+              : "translate-y-full pointer-events-none")
+          }
+        >
+          <div className="rounded-t-lg border border-b-0 border-slate-200 bg-slate-50 px-2 pb-3 pt-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">
+                Context
+              </span>
+              {chips.map((c) => (
+                <button
+                  key={`${c.kind}:${c.id}`}
+                  onClick={() => onNavigate({ kind: c.kind, id: c.id })}
+                  className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] text-slate-700 hover:bg-slate-100"
+                  title="Jump to this object"
+                >
+                  <span
+                    className={
+                      "h-1.5 w-1.5 rounded-full " +
+                      (c.kind === "edge" ? "bg-amber-500" : "bg-indigo-500")
+                    }
+                  />
+                  {c.label}
+                </button>
+              ))}
               <button
-                key={`${c.kind}:${c.id}`}
-                onClick={() => onNavigate({ kind: c.kind, id: c.id })}
-                className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-700 hover:bg-slate-100"
-                title="Jump to this object"
+                onClick={onClearSelection}
+                title="Clear context"
+                className="ml-auto flex h-4 w-4 items-center justify-center rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-700"
               >
-                <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
-                {c.label}
+                <X size={11} />
               </button>
-            ))}
+            </div>
           </div>
-        )}
-        <div className="mb-1.5 flex flex-wrap gap-1.5">
-          {SUGGESTED_PROMPTS.map((s) => (
-            <button
-              key={s}
-              onClick={() => submit(s)}
-              className="rounded-full border border-slate-200 bg-slate-100 px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-200"
-            >
-              {s}
-            </button>
-          ))}
         </div>
-        <div className="flex items-end gap-1.5">
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                submit(draft);
+
+        {/* Composer — in front (z-10), casts a soft shadow up onto the tab. */}
+        <div
+          className="relative z-10 border-t border-slate-200 bg-white p-2"
+          style={{ boxShadow: "0 -6px 14px -8px rgba(15, 23, 42, 0.18)" }}
+        >
+          {showExamples && (
+            <div className="mb-1.5 flex flex-wrap gap-1.5">
+              {SUGGESTED_PROMPTS.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => {
+                    setShowExamples(false);
+                    submit(s);
+                  }}
+                  className="rounded-full border border-slate-200 bg-slate-100 px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-200"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex items-end gap-1.5">
+            <button
+              onClick={() => setShowExamples((v) => !v)}
+              title="Example prompts"
+              aria-label="Toggle example prompts"
+              className={
+                "flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition " +
+                (showExamples
+                  ? "border-indigo-300 bg-indigo-50 text-indigo-600"
+                  : "border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-700")
               }
-            }}
-            rows={2}
-            placeholder="Ask about any node, or describe a change…"
-            className="flex-1 resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs focus:border-slate-500 focus:outline-none"
-          />
-          <button
-            onClick={() => submit(draft)}
-            disabled={!draft.trim() || ask.isPending}
-            className="h-8 rounded-md bg-slate-900 px-3 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300"
-          >
-            Send
-          </button>
+            >
+              <Sparkles size={14} />
+            </button>
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submit(draft);
+                }
+              }}
+              rows={2}
+              placeholder="Ask about any node, or describe a change…"
+              className="flex-1 resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs focus:border-slate-500 focus:outline-none"
+            />
+            <button
+              onClick={() => submit(draft)}
+              disabled={!draft.trim() || ask.isPending}
+              className="h-8 rounded-md bg-slate-900 px-3 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300"
+            >
+              Send
+            </button>
+          </div>
         </div>
       </div>
     </div>

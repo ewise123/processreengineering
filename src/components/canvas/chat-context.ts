@@ -1,11 +1,11 @@
 import type { ObjectRef, UUID } from "@/lib/types";
 
-/** Mirrors the SelectedRef shape used by RightPanel/ChatTab. */
-export interface SelectedRef {
+/** One object currently attached to the chat as grounding context. A canvas
+ * multi-selection produces several of these. */
+export interface SelectedObject {
   id: UUID;
   kind: "node" | "edge";
   name?: string;
-  nodeKind?: string;
 }
 
 export interface ContextChip {
@@ -14,21 +14,22 @@ export interface ContextChip {
   label: string;
 }
 
-/** Selection attached to the next chat message as grounding context. */
-export function selectionToContextRefs(selected: SelectedRef | null): ObjectRef[] {
-  if (!selected) return [];
-  return [{ kind: selected.kind, id: selected.id }];
+/** The selected objects attached to the next chat message as grounding context. */
+export function selectionToContextRefs(selected: SelectedObject[]): ObjectRef[] {
+  return selected.map((s) => ({ kind: s.kind, id: s.id }));
 }
 
-/** Display chips shown above the composer for the attached selection. */
+/** Display chips shown in the context tab for every attached object. */
 export function selectionChips(
-  selected: SelectedRef | null,
+  selected: SelectedObject[],
   labelById: Map<UUID, string>
 ): ContextChip[] {
-  if (!selected) return [];
-  const label =
-    selected.kind === "node"
-      ? labelById.get(selected.id) ?? selected.name ?? "step"
-      : "transition";
-  return [{ kind: selected.kind, id: selected.id, label }];
+  return selected.map((s) => ({
+    kind: s.kind,
+    id: s.id,
+    label:
+      s.kind === "node"
+        ? labelById.get(s.id) ?? s.name ?? "step"
+        : "transition",
+  }));
 }

@@ -1,5 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { normalizeMarquee, rectsIntersect, nodesInMarquee } from "./selection";
+import { normalizeMarquee, rectsIntersect, nodesInMarquee, edgesInMarquee } from "./selection";
+
+describe("edgesInMarquee", () => {
+  const edges = [
+    { id: "e1", from: "a", to: "b" },
+    { id: "e2", from: "b", to: "c" },
+  ];
+  it("includes an edge only when BOTH endpoints are in the marquee", () => {
+    expect(edgesInMarquee(edges, ["a", "b"])).toEqual(["e1"]);
+  });
+  it("excludes an edge when one endpoint is outside", () => {
+    expect(edgesInMarquee(edges, ["b", "c"])).toEqual(["e2"]);
+    expect(edgesInMarquee(edges, ["a"])).toEqual([]);
+  });
+  it("returns [] when no nodes are inside the marquee", () => {
+    expect(edgesInMarquee(edges, [])).toEqual([]);
+  });
+});
 
 describe("normalizeMarquee", () => {
   it("normalizes a top-left → bottom-right drag", () => {

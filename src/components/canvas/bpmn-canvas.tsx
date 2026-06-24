@@ -24,7 +24,7 @@ import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType } from "./layout";
 import { sizeForNodeType } from "./node-type";
 import { placeProposedStep } from "./ai-edit";
 import { edgeFocusCenter } from "./edge-focus";
-import { normalizeMarquee, nodesInMarquee } from "./selection";
+import { normalizeMarquee, nodesInMarquee, edgesInMarquee } from "./selection";
 import {
   PALETTE_DRAG_MIME,
   PALETTE_SHAPES,
@@ -156,6 +156,8 @@ export interface BpmnCanvasHandle {
   /** Select a node (drives Properties panel + chat context) from outside
    * the canvas, e.g. clicking a node link in the Issues tab. */
   selectNode: (id: UUID) => void;
+  /** Clear the current selection (used by the chat context tab's ✕). */
+  clearSelection: () => void;
   /** Pan/zoom to an object by id, select it, and flash it briefly. Handles
    * both nodes and edges (used by chat mention links). */
   navigateTo: (ref: { kind: "node" | "edge"; id: UUID }) => void;
@@ -656,6 +658,7 @@ function BpmnCanvas({
         setSelectedIds(new Set([id]));
         focusNodeInViewport(id);
       },
+      clearSelection,
       navigateTo: (refTarget) => {
         setSelectedIds(new Set([refTarget.id]));
         if (refTarget.kind === "edge") focusEdgeInViewport(refTarget.id);
@@ -666,7 +669,7 @@ function BpmnCanvas({
       copySelection: copySelectionImpl,
       moveSelectionToLane: moveSelectionToLaneImpl,
     }),
-    [deleteNodeImpl, updateNodeImpl, addProposedStep, focusNodeInViewport, focusEdgeInViewport, flash, deleteSelectionImpl]
+    [deleteNodeImpl, updateNodeImpl, addProposedStep, focusNodeInViewport, focusEdgeInViewport, flash, clearSelection, deleteSelectionImpl]
   );
 
   // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
@@ -1268,8 +1271,12 @@ function BpmnCanvas({
             w: n.w,
             h: n.h,
           }));
-          const hit = nodesInMarquee(positioned, rect);
-          setSelection(hit, drag.additive);
+          const hitNodes = nodesInMarquee(positioned, rect);
+          const hitEdges = edgesInMarquee(
+            edgesRef.current.map((e) => ({ id: e.id, from: e.from, to: e.to })),
+            hitNodes
+          );
+          setSelection([...hitNodes, ...hitEdges], drag.additive);
         }
         setDrag(null);
         return;

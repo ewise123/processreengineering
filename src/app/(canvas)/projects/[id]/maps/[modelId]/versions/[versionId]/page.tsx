@@ -20,6 +20,7 @@ import { AiEditCacheProvider } from "@/components/canvas/ai-edit-cache";
 import { BpmnCanvas, type BpmnCanvasHandle, type CanvasSelection } from "@/components/canvas/bpmn-canvas";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { RightPanel } from "@/components/canvas/right-panel";
+import type { SelectedObject } from "@/components/canvas/chat-context";
 import { buildCanvasState } from "@/components/canvas/layout";
 import { reviewByNodeMap } from "@/components/canvas/review-summary";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
@@ -213,6 +214,26 @@ export default function CanvasPage() {
   );
 
   const selectedNode = selected.kind === "node" ? selected : null;
+
+  // Every selected object, flattened for the chat context tab (supports
+  // multi-select; node labels resolved from the loaded graph).
+  const chatSelected: SelectedObject[] = useMemo(() => {
+    if (selected.kind === "node")
+      return [{ id: selected.id, kind: "node", name: selected.name }];
+    if (selected.kind === "edge") return [{ id: selected.id, kind: "edge" }];
+    if (selected.kind === "multi") {
+      const nameById = new Map((data?.nodes ?? []).map((n) => [n.id, n.name]));
+      return [
+        ...selected.nodeIds.map((id) => ({
+          id,
+          kind: "node" as const,
+          name: nameById.get(id),
+        })),
+        ...selected.edgeIds.map((id) => ({ id, kind: "edge" as const })),
+      ];
+    }
+    return [];
+  }, [selected, data]);
 
   return (
     <AiEditCacheProvider>
@@ -437,15 +458,10 @@ export default function CanvasPage() {
               type: n.type,
               lane_id: n.lane_id,
             }))}
-            selected={
-              selected.kind === "node"
-                ? { id: selected.id, kind: "node", name: selected.name, nodeKind: selected.nodeKind }
-                : selected.kind === "edge"
-                  ? { id: selected.id, kind: "edge" }
-                  : null
-            }
+            selected={chatSelected}
             onFocusNode={(id) => canvasRef.current?.selectNode(id)}
             onNavigate={(refTarget) => canvasRef.current?.navigateTo(refTarget)}
+            onClearSelection={() => canvasRef.current?.clearSelection()}
             reviewState={reviewState}
             onSendRequest={() => requestReviewMutation.mutate()}
             onNavigateVersion={handleNavigateVersion}
