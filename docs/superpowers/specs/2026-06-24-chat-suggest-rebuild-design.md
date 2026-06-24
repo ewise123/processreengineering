@@ -93,7 +93,7 @@ Each suggestion carries one typed op. Ops reference **real object ids**, or
 **temp ids** (`tmp:N`) for objects created within the same response — so a new
 edge can point at a new node before either exists.
 
-```
+```text
 SuggestionOp =
   | { kind: "relabel_node";  nodeId; newLabel }
   | { kind: "describe_node"; nodeId; description }
@@ -114,7 +114,7 @@ SuggestionOp =
 
 Wrapper:
 
-```
+```text
 Suggestion {
   id, groupId?,                // groupId ties related ops into one "Apply all" unit
   title,                       // e.g. "Add approval gate after Review Invoice"
@@ -134,7 +134,7 @@ Suggestion {
 
 Request:
 
-```
+```text
 { history: ChatTurn[],
   user_message: string,
   mode: "ask" | "suggest",
@@ -143,7 +143,7 @@ Request:
 
 Response:
 
-```
+```text
 { message: string,             // prose, may contain [[N3]]/[[E2]]/[[C1]] mention refs
   suggestions: Suggestion[] }   // empty in ask mode, or when suggest judges none warranted
 ```
