@@ -158,6 +158,8 @@ export interface BpmnCanvasHandle {
   selectNode: (id: UUID) => void;
   /** Clear the current selection (used by the chat context tab's ✕). */
   clearSelection: () => void;
+  /** Remove a single object id from the current selection (chat context ✕). */
+  deselectId: (id: UUID) => void;
   /** Pan/zoom to an object by id, select it, and flash it briefly. Handles
    * both nodes and edges (used by chat mention links). */
   navigateTo: (ref: { kind: "node" | "edge"; id: UUID }) => void;
@@ -659,6 +661,12 @@ function BpmnCanvas({
         focusNodeInViewport(id);
       },
       clearSelection,
+      deselectId: (id) =>
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        }),
       navigateTo: (refTarget) => {
         setSelectedIds(new Set([refTarget.id]));
         if (refTarget.kind === "edge") focusEdgeInViewport(refTarget.id);

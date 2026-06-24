@@ -36,6 +36,8 @@ import {
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import ReactMarkdown from "react-markdown";
+
 import { api } from "@/lib/api";
 import type {
   ChatTurn,
@@ -48,7 +50,7 @@ import type {
 import { buildVersionRows, type TreeRow } from "./version-tree";
 import { diffChangeCount, isEmptyDiff } from "./version-diff";
 import { bucketNodes, reviewByNodeMap } from "./review-summary";
-import { parseMentions } from "./mentions";
+import { mentionsToMarkdown } from "./mention-markdown";
 import { selectionChips, selectionToContextRefs, type SelectedObject } from "./chat-context";
 import { browserChatSessionStore } from "./chat-session";
 
@@ -78,6 +80,7 @@ export function RightPanel({
   onFocusNode,
   onNavigate,
   onClearSelection,
+  onRemoveContext,
   reviewState,
   onSendRequest,
   onNavigateVersion,
@@ -97,6 +100,8 @@ export function RightPanel({
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
   /** Clear the canvas selection. Used by the chat context tab's ✕. */
   onClearSelection: () => void;
+  /** Remove a single id from the canvas selection (per-chip ✕ in context tab). */
+  onRemoveContext: (id: UUID) => void;
   reviewState?: ReviewState;
   onSendRequest: () => void;
   onNavigateVersion?: (versionId: UUID) => void;
@@ -236,6 +241,8 @@ export function RightPanel({
             nodes={nodes}
             onNavigate={onNavigate}
             onClearSelection={onClearSelection}
+            onRemoveContext={onRemoveContext}
+            onOpenSource={onOpenSource}
           />
         )}
         {tab === "versions" && (
@@ -295,6 +302,8 @@ function ChatTab({
   nodes,
   onNavigate,
   onClearSelection,
+  onRemoveContext,
+  onOpenSource,
 }: {
   projectId: UUID;
   modelId: UUID;
@@ -303,15 +312,20 @@ function ChatTab({
   nodes: { id: UUID; name: string; type: string; lane_id: UUID | null }[];
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
   onClearSelection: () => void;
+  onRemoveContext: (id: UUID) => void;
+  onOpenSource: (t: ViewerTarget) => void;
 }) {
+  type ChatItem = ChatTurn & { contextNote?: string };
+
   const sessionStore = useMemo(() => browserChatSessionStore(), []);
   const [showExamples, setShowExamples] = useState(false);
-  const [history, setHistory] = useState<ChatTurn[]>(() => sessionStore.load(versionId));
+  const [history, setHistory] = useState<ChatItem[]>(() => sessionStore.load(versionId) as ChatItem[]);
   const [draft, setDraft] = useState("");
+  const [sourceTargetByClaim, setSourceTargetByClaim] = useState<Map<UUID, ViewerTarget>>(new Map());
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setHistory(sessionStore.load(versionId));
+    setHistory(sessionStore.load(versionId) as ChatItem[]);
   }, [versionId, sessionStore]);
 
   const labelById = useMemo(() => {
@@ -322,8 +336,14 @@ function ChatTab({
 
   const chips = selectionChips(selected, labelById);
 
+  const sourceNameByClaim = useMemo(() => {
+    const m = new Map<UUID, string>();
+    sourceTargetByClaim.forEach((t, cid) => m.set(cid, t.inputName));
+    return m;
+  }, [sourceTargetByClaim]);
+
   const ask = useMutation({
-    mutationFn: (input: { history: ChatTurn[]; userMessage: string }) =>
+    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string }) =>
       api.chatSuggest(projectId, modelId, versionId, {
         history: input.history,
         user_message: input.userMessage,
@@ -331,13 +351,18 @@ function ChatTab({
         context_refs: selectionToContextRefs(selected),
       }),
     onSuccess: (data, vars) => {
-      const next: ChatTurn[] = [
+      const next: ChatItem[] = [
         ...vars.history,
-        { role: "user", content: vars.userMessage },
+        { role: "user", content: vars.userMessage, contextNote: vars.note },
         { role: "assistant", content: data.message },
       ];
       sessionStore.save(versionId, next);
       setHistory(next);
+      const sm = new Map<UUID, ViewerTarget>();
+      for (const s of data.mention_sources) {
+        sm.set(s.claim_id, { inputId: s.input_id, inputName: s.input_name, sectionRef: s.section_ref, quote: s.quote });
+      }
+      setSourceTargetByClaim((prev) => new Map([...prev, ...sm]));
     },
   });
 
@@ -349,8 +374,13 @@ function ChatTab({
   const submit = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || ask.isPending) return;
+    const note = chips.length ? chips.map((c) => c.label).join(", ") : undefined;
     setDraft("");
-    ask.mutate({ history, userMessage: trimmed });
+    // Capture pre-send history snapshot before optimistic update
+    const preSendHistory = history;
+    setHistory((curr) => [...curr, { role: "user", content: trimmed, contextNote: note }]);
+    ask.mutate({ history: preSendHistory, userMessage: trimmed, note });
+    onClearSelection(); // #11: tab slides away once the prompt is sent
   };
 
   const clearChat = () => {
@@ -360,7 +390,11 @@ function ChatTab({
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-3 py-3">
+      <div
+        ref={scrollRef}
+        className="flex-1 space-y-3 overflow-y-auto px-3 py-3"
+        style={{ paddingBottom: chips.length ? 44 : undefined }}
+      >
         <div className="flex items-start justify-between gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2.5">
           <div>
             <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-indigo-700">
@@ -382,14 +416,21 @@ function ChatTab({
         </div>
 
         {history.map((m, i) => (
-          <ChatMsg key={i} turn={m} labelById={labelById} onNavigate={onNavigate} />
+          <ChatMsg
+            key={i}
+            turn={m}
+            contextNote={m.contextNote}
+            labelById={labelById}
+            sourceNameByClaim={sourceNameByClaim}
+            sourceTargetByClaim={sourceTargetByClaim}
+            onNavigate={onNavigate}
+            onOpenSource={onOpenSource}
+          />
         ))}
 
         {ask.isPending && (
           <div className="flex items-start gap-2">
-            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-slate-900 text-[10px] font-bold text-white">
-              AI
-            </div>
+            <Sparkles size={16} className="mt-1 flex-shrink-0 text-indigo-500" />
             <div className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="flex items-center gap-1">
                 <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" style={{ animationDelay: "0s" }} />
@@ -425,20 +466,23 @@ function ChatTab({
                 Context
               </span>
               {chips.map((c) => (
-                <button
-                  key={`${c.kind}:${c.id}`}
-                  onClick={() => onNavigate({ kind: c.kind, id: c.id })}
-                  className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] text-slate-700 hover:bg-slate-100"
-                  title="Jump to this object"
-                >
-                  <span
-                    className={
-                      "h-1.5 w-1.5 rounded-full " +
-                      (c.kind === "edge" ? "bg-amber-500" : "bg-indigo-500")
-                    }
-                  />
-                  {c.label}
-                </button>
+                <span key={`${c.kind}:${c.id}`} className="group relative inline-flex">
+                  <button
+                    onClick={() => onNavigate({ kind: c.kind, id: c.id })}
+                    className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white py-0.5 pl-2 pr-5 text-[10px] text-slate-700 hover:bg-slate-100"
+                    title="Jump to this step"
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
+                    {c.label}
+                  </button>
+                  <button
+                    onClick={() => onRemoveContext(c.id)}
+                    title="Remove from context"
+                    className="absolute right-0.5 top-1/2 hidden -translate-y-1/2 rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 group-hover:block"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
               ))}
               <button
                 onClick={onClearSelection}
@@ -516,63 +560,73 @@ function ChatTab({
 function ChatMsg({
   turn,
   labelById,
+  sourceNameByClaim,
+  sourceTargetByClaim,
   onNavigate,
+  onOpenSource,
+  contextNote,
 }: {
   turn: ChatTurn;
   labelById: Map<UUID, string>;
+  sourceNameByClaim: Map<UUID, string>;
+  sourceTargetByClaim: Map<UUID, ViewerTarget>;
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+  onOpenSource: (t: ViewerTarget) => void;
+  contextNote?: string;
 }) {
   if (turn.role === "user") {
     return (
-      <div className="flex items-start justify-end gap-2">
+      <div className="flex flex-col items-end gap-1">
         <div className="max-w-[85%] rounded-lg bg-slate-900 px-3 py-2 text-[11.5px] leading-relaxed text-white">
           {turn.content}
         </div>
+        {contextNote && (
+          <div className="text-[9.5px] text-slate-400">Context: {contextNote}</div>
+        )}
       </div>
     );
   }
-  const segments = parseMentions(turn.content);
+  const md = mentionsToMarkdown(turn.content, labelById, sourceNameByClaim);
   return (
     <div className="flex items-start gap-2">
-      <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md bg-slate-900 text-[10px] font-bold text-white">
-        AI
-      </div>
+      <Sparkles size={16} className="mt-1 flex-shrink-0 text-indigo-500" />
       <div className="min-w-0 flex-1">
-        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] leading-relaxed text-slate-800">
-          {segments.map((seg, i) => {
-            if (seg.type === "text") {
-              return <span key={i} className="whitespace-pre-wrap">{seg.value}</span>;
-            }
-            const isNav = seg.kind === "node" || seg.kind === "edge";
-            const label =
-              seg.kind === "node"
-                ? labelById.get(seg.id) ?? "step"
-                : seg.kind === "edge"
-                  ? "transition"
-                  : seg.kind === "claim"
-                    ? "source"
-                    : "lane";
-            if (!isNav) {
-              return (
-                <span
-                  key={i}
-                  className="mx-0.5 inline-flex items-center rounded border border-slate-300 bg-white px-1 text-[10.5px] text-slate-600"
-                >
-                  {label}
-                </span>
-              );
-            }
-            return (
-              <button
-                key={i}
-                onClick={() => onNavigate({ kind: seg.kind as "node" | "edge", id: seg.id })}
-                className="mx-0.5 inline-flex items-center rounded border border-indigo-200 bg-indigo-50 px-1 text-[10.5px] font-medium text-indigo-700 hover:bg-indigo-100"
-                title="Jump to this object"
-              >
-                {label}
-              </button>
-            );
-          })}
+        <div className="poet-chat-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] leading-relaxed text-slate-800">
+          <ReactMarkdown
+            components={{
+              a: ({ href, children }) => {
+                const m = /^poet:\/\/(node|claim)\/(.+)$/.exec(href ?? "");
+                if (m && m[1] === "node") {
+                  const id = m[2];
+                  return (
+                    <button
+                      onClick={() => onNavigate({ kind: "node", id })}
+                      className="mx-0.5 inline rounded border border-indigo-200 bg-indigo-50 px-1 font-medium text-indigo-700 hover:bg-indigo-100"
+                      title="Jump to this step"
+                    >
+                      {children}
+                    </button>
+                  );
+                }
+                if (m && m[1] === "claim") {
+                  const id = m[2];
+                  const tgt = sourceTargetByClaim.get(id);
+                  return (
+                    <button
+                      onClick={() => tgt && onOpenSource(tgt)}
+                      className="mx-0.5 inline rounded border border-slate-300 bg-white px-1 text-slate-600 hover:bg-slate-100"
+                      title={tgt ? `Open ${tgt.inputName}` : "Source"}
+                    >
+                      {children}
+                    </button>
+                  );
+                }
+                return <span>{children}</span>;
+              },
+            }}
+          >
+            {md}
+          </ReactMarkdown>
         </div>
       </div>
     </div>

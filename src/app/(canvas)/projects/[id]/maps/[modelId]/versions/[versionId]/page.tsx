@@ -462,6 +462,7 @@ export default function CanvasPage() {
             onFocusNode={(id) => canvasRef.current?.selectNode(id)}
             onNavigate={(refTarget) => canvasRef.current?.navigateTo(refTarget)}
             onClearSelection={() => canvasRef.current?.clearSelection()}
+            onRemoveContext={(id) => canvasRef.current?.deselectId(id)}
             reviewState={reviewState}
             onSendRequest={() => requestReviewMutation.mutate()}
             onNavigateVersion={handleNavigateVersion}
