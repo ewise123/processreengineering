@@ -12,7 +12,6 @@ import {
   type MouseEvent,
 } from "react";
 
-import { ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
@@ -1608,6 +1607,9 @@ function BpmnCanvas({
         x: e.clientX,
         y: e.clientY,
         items: [
+          ...(count <= 1 && onOpenProperties
+            ? [{ label: "Properties", onSelect: () => onOpenProperties() }]
+            : []),
           { label: `Copy${suffix}`, onSelect: copySelectionImpl },
           {
             label: "Duplicate",
@@ -1620,7 +1622,7 @@ function BpmnCanvas({
         ],
       });
     },
-    [selectOnly, copySelectionImpl, pasteClipboardImpl, deleteSelectionImpl]
+    [selectOnly, copySelectionImpl, pasteClipboardImpl, deleteSelectionImpl, onOpenProperties]
   );
 
   const openEdgeMenu = useCallback(
@@ -2093,25 +2095,6 @@ function BpmnCanvas({
             })()}
         </g>
       </svg>
-
-      {/* Properties pill — anchored above the selected node in screen space */}
-      {(() => {
-        if (selectedIds.size !== 1 || !onOpenProperties) return null;
-        const id = [...selectedIds][0];
-        const n = renderNodes.find((rn) => rn.id === id);
-        if (!n) return null;
-        const left = viewport.tx + n.x * viewport.scale;
-        const top = viewport.ty + n.y * viewport.scale - 26;
-        return (
-          <button
-            onClick={onOpenProperties}
-            style={{ position: "absolute", left, top, zIndex: 20 }}
-            className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            Properties <ChevronRight size={11} />
-          </button>
-        );
-      })()}
 
       <LaneRail
         lanes={displayLanes}
