@@ -184,3 +184,13 @@ def test_build_suggestion_returns_none_for_malformed_op():
     raw = {"kind": "relabel_node", "node_ref": "N1",  # missing new_label
            "title": "x", "rationale": "y", "cited_claim_refs": []}
     assert pm_api._build_suggestion(raw, ctx, index=0) is None
+
+
+def test_build_suggestion_resolves_lowercase_ref():
+    from app.api.v2 import process_maps as pm_api
+    ctx, (n1, _n2, _e1, _l1, _c1) = _ctx_stub()
+    raw = {"kind": "relabel_node", "node_ref": "n1", "new_label": "Receive PO",
+           "title": "Clarify", "rationale": "r", "cited_claim_refs": []}
+    s = pm_api._build_suggestion(raw, ctx, index=0)
+    assert s.op.node_ref == str(n1)
+    assert s.affected_refs[0].id == n1

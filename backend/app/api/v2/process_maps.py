@@ -1,6 +1,6 @@
 """Phase 2.5 endpoints: generate process maps from claims, read them back."""
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, func, or_, select, update
@@ -85,12 +85,12 @@ from app.schemas.version_chat_suggest import (
     ChatSuggestRequest,
     ChatSuggestResponse,
     ChatSuggestion,
+    ChatTurn as SuggestChatTurn,
     ObjectRef,
     RefKind,
     SuggestionOp,
 )
 from app.services.map_chat_suggest import run_chat_suggest
-from app.schemas.version_chat_suggest import ChatTurn as SuggestChatTurn
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
 
@@ -1196,7 +1196,7 @@ def _resolve_one_ref(value, map_attr, ctx):
     """Short ref (N1) -> UUID string. tmp:N and unknown refs pass through unchanged."""
     if value is None or str(value).startswith("tmp:"):
         return value, None
-    real = getattr(ctx, map_attr).get(str(value).strip())
+    real = getattr(ctx, map_attr).get(str(value).strip().upper())
     if real is None:
         return value, None  # leave unresolved; affected_refs will skip it
     return str(real), real
@@ -1205,8 +1205,6 @@ def _resolve_one_ref(value, map_attr, ctx):
 def _build_suggestion(raw: dict, ctx, index: int):
     """Resolve a raw model suggestion into a validated ChatSuggestion, or None
     if the op is malformed. Mirrors _resolve_refs' fabricated-ref hygiene."""
-    import uuid as _uuid
-
     op_kwargs = {"kind": raw.get("kind")}
     affected: list[ObjectRef] = []
     for field, (map_attr, ref_kind) in _OP_REF_FIELDS.items():
@@ -1230,7 +1228,7 @@ def _build_suggestion(raw: dict, ctx, index: int):
         return None  # malformed op -> dropped, never reaches the client
 
     return ChatSuggestion(
-        id=f"sg-{index}-{_uuid.uuid4().hex[:8]}",
+        id=f"sg-{index}-{uuid4().hex[:8]}",
         group=raw.get("group"),
         title=str(raw.get("title") or op.kind.value)[:300],
         op=op,
