@@ -43,6 +43,7 @@ import type {
   ChatTurn,
   InputRow,
   NodeIssue,
+  ObjectRef,
   ReviewState,
   UUID,
   ViewerTarget,
@@ -70,6 +71,10 @@ const SUGGESTED_PROMPTS = [
   "Which steps lack source citations?",
   "Compare this against typical processes",
 ];
+
+/** A chat turn plus the (optional) "Context: …" note shown under a user
+ * message recording which steps were attached when it was sent. */
+type ChatItem = ChatTurn & { contextNote?: string };
 
 export function RightPanel({
   projectId,
@@ -315,8 +320,6 @@ function ChatTab({
   onRemoveContext: (id: UUID) => void;
   onOpenSource: (t: ViewerTarget) => void;
 }) {
-  type ChatItem = ChatTurn & { contextNote?: string };
-
   const sessionStore = useMemo(() => browserChatSessionStore(), []);
   const [showExamples, setShowExamples] = useState(false);
   const [history, setHistory] = useState<ChatItem[]>(() => sessionStore.load(versionId) as ChatItem[]);
@@ -343,12 +346,12 @@ function ChatTab({
   }, [sourceTargetByClaim]);
 
   const ask = useMutation({
-    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string }) =>
+    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextRefs: ObjectRef[] }) =>
       api.chatSuggest(projectId, modelId, versionId, {
         history: input.history,
         user_message: input.userMessage,
         mode: "ask",
-        context_refs: selectionToContextRefs(selected),
+        context_refs: input.contextRefs,
       }),
     onSuccess: (data, vars) => {
       const next: ChatItem[] = [
@@ -374,12 +377,15 @@ function ChatTab({
   const submit = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || ask.isPending) return;
+    // Capture the attached context refs + note NOW — onClearSelection() below
+    // empties `selected`, so reading it lazily inside mutationFn would race.
+    const contextRefs = selectionToContextRefs(selected);
     const note = chips.length ? chips.map((c) => c.label).join(", ") : undefined;
     setDraft("");
     // Capture pre-send history snapshot before optimistic update
     const preSendHistory = history;
     setHistory((curr) => [...curr, { role: "user", content: trimmed, contextNote: note }]);
-    ask.mutate({ history: preSendHistory, userMessage: trimmed, note });
+    ask.mutate({ history: preSendHistory, userMessage: trimmed, note, contextRefs });
     onClearSelection(); // #11: tab slides away once the prompt is sent
   };
 
@@ -419,7 +425,6 @@ function ChatTab({
           <ChatMsg
             key={i}
             turn={m}
-            contextNote={m.contextNote}
             labelById={labelById}
             sourceNameByClaim={sourceNameByClaim}
             sourceTargetByClaim={sourceTargetByClaim}
@@ -564,15 +569,13 @@ function ChatMsg({
   sourceTargetByClaim,
   onNavigate,
   onOpenSource,
-  contextNote,
 }: {
-  turn: ChatTurn;
+  turn: ChatItem;
   labelById: Map<UUID, string>;
   sourceNameByClaim: Map<UUID, string>;
   sourceTargetByClaim: Map<UUID, ViewerTarget>;
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
   onOpenSource: (t: ViewerTarget) => void;
-  contextNote?: string;
 }) {
   if (turn.role === "user") {
     return (
@@ -580,8 +583,8 @@ function ChatMsg({
         <div className="max-w-[85%] rounded-lg bg-slate-900 px-3 py-2 text-[11.5px] leading-relaxed text-white">
           {turn.content}
         </div>
-        {contextNote && (
-          <div className="text-[9.5px] text-slate-400">Context: {contextNote}</div>
+        {turn.contextNote && (
+          <div className="text-[9.5px] text-slate-400">Context: {turn.contextNote}</div>
         )}
       </div>
     );
@@ -594,6 +597,7 @@ function ChatMsg({
         <div className="poet-chat-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] leading-relaxed text-slate-800">
           <ReactMarkdown
             components={{
+              p: ({ children }) => <span className="block">{children}</span>,
               a: ({ href, children }) => {
                 const m = /^poet:\/\/(node|claim)\/(.+)$/.exec(href ?? "");
                 if (m && m[1] === "node") {
