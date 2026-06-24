@@ -67,7 +67,7 @@ export default function CanvasPage() {
   const [rightCollapsed, setRightCollapsed] = useState(false);
   // Properties panel collapse state lifted so the page can resize the
   // wrapper to a small button when collapsed.
-  const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
+  const [propertiesCollapsed, setPropertiesCollapsed] = useState(true);
   const [viewerTarget, setViewerTarget] = useState<ViewerTarget | null>(null);
   const [viewerExpanded, setViewerExpanded] = useState(true);
   const [counts, setCounts] = useState<{ lanes: number; nodes: number; edges: number } | null>(null);
@@ -158,7 +158,6 @@ export default function CanvasPage() {
 
   const handleSelectionChange = useCallback((s: CanvasSelection) => {
     setSelected(s);
-    if (s.kind === "node") setPropertiesCollapsed(false);
   }, []);
 
   const { data, isLoading, error } = useQuery({
@@ -348,6 +347,7 @@ export default function CanvasPage() {
           onSelectionChange={handleSelectionChange}
           onNodeDeleted={handleNodeDeleted}
           onCountsChange={handleCountsChange}
+          onOpenProperties={() => setPropertiesCollapsed(false)}
         />
       )}
 

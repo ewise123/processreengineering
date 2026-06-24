@@ -12,6 +12,7 @@ import {
   type MouseEvent,
 } from "react";
 
+import { ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
@@ -186,6 +187,8 @@ interface BpmnCanvasProps {
    * uses this to invalidate dependent queries like issue badges. */
   onNodeDeleted?: (id: UUID) => void;
   onCountsChange?: (counts: { lanes: number; nodes: number; edges: number }) => void;
+  /** Called when the user clicks the "Properties" pill on a selected node. */
+  onOpenProperties?: () => void;
 }
 
 export const BpmnCanvas = forwardRef<BpmnCanvasHandle, BpmnCanvasProps>(
@@ -202,6 +205,7 @@ function BpmnCanvas({
   onSelectionChange,
   onNodeDeleted,
   onCountsChange,
+  onOpenProperties,
 }, ref) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState(initialNodes);
@@ -2089,6 +2093,25 @@ function BpmnCanvas({
             })()}
         </g>
       </svg>
+
+      {/* Properties pill — anchored above the selected node in screen space */}
+      {(() => {
+        if (selectedIds.size !== 1 || !onOpenProperties) return null;
+        const id = [...selectedIds][0];
+        const n = renderNodes.find((rn) => rn.id === id);
+        if (!n) return null;
+        const left = viewport.tx + n.x * viewport.scale;
+        const top = viewport.ty + n.y * viewport.scale - 26;
+        return (
+          <button
+            onClick={onOpenProperties}
+            style={{ position: "absolute", left, top, zIndex: 20 }}
+            className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            Properties <ChevronRight size={11} />
+          </button>
+        );
+      })()}
 
       <LaneRail
         lanes={displayLanes}
