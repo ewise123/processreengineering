@@ -42,6 +42,7 @@ import { api } from "@/lib/api";
 import type {
   ChatTurn,
   InputRow,
+  MentionSource,
   NodeIssue,
   ObjectRef,
   ReviewState,
@@ -74,7 +75,10 @@ const SUGGESTED_PROMPTS = [
 
 /** A chat turn plus the (optional) "Context: …" note shown under a user
  * message recording which steps were attached when it was sent. */
-type ChatItem = ChatTurn & { contextNote?: string };
+// Each assistant turn carries its own claim→source mapping so source links
+// resolve even after a reload/remount (the mapping persists with the message
+// rather than living in ephemeral, accumulating component state).
+type ChatItem = ChatTurn & { contextNote?: string; sources?: MentionSource[] };
 
 export function RightPanel({
   projectId,
@@ -324,7 +328,6 @@ function ChatTab({
   const [showExamples, setShowExamples] = useState(false);
   const [history, setHistory] = useState<ChatItem[]>(() => sessionStore.load(versionId) as ChatItem[]);
   const [draft, setDraft] = useState("");
-  const [sourceTargetByClaim, setSourceTargetByClaim] = useState<Map<UUID, ViewerTarget>>(new Map());
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -339,12 +342,6 @@ function ChatTab({
 
   const chips = selectionChips(selected, labelById);
 
-  const sourceNameByClaim = useMemo(() => {
-    const m = new Map<UUID, string>();
-    sourceTargetByClaim.forEach((t, cid) => m.set(cid, t.inputName));
-    return m;
-  }, [sourceTargetByClaim]);
-
   const ask = useMutation({
     mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextRefs: ObjectRef[] }) =>
       api.chatSuggest(projectId, modelId, versionId, {
@@ -357,15 +354,12 @@ function ChatTab({
       const next: ChatItem[] = [
         ...vars.history,
         { role: "user", content: vars.userMessage, contextNote: vars.note },
-        { role: "assistant", content: data.message },
+        // Carry this message's source mapping ON the message so it survives
+        // reload and isn't lost when component state resets.
+        { role: "assistant", content: data.message, sources: data.mention_sources },
       ];
       sessionStore.save(versionId, next);
       setHistory(next);
-      const sm = new Map<UUID, ViewerTarget>();
-      for (const s of data.mention_sources) {
-        sm.set(s.claim_id, { inputId: s.input_id, inputName: s.input_name, sectionRef: s.section_ref, quote: s.quote });
-      }
-      setSourceTargetByClaim((prev) => new Map([...prev, ...sm]));
     },
   });
 
@@ -426,8 +420,6 @@ function ChatTab({
             key={i}
             turn={m}
             labelById={labelById}
-            sourceNameByClaim={sourceNameByClaim}
-            sourceTargetByClaim={sourceTargetByClaim}
             onNavigate={onNavigate}
             onOpenSource={onOpenSource}
           />
@@ -565,15 +557,11 @@ function ChatTab({
 function ChatMsg({
   turn,
   labelById,
-  sourceNameByClaim,
-  sourceTargetByClaim,
   onNavigate,
   onOpenSource,
 }: {
   turn: ChatItem;
   labelById: Map<UUID, string>;
-  sourceNameByClaim: Map<UUID, string>;
-  sourceTargetByClaim: Map<UUID, ViewerTarget>;
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
   onOpenSource: (t: ViewerTarget) => void;
 }) {
@@ -589,6 +577,16 @@ function ChatMsg({
       </div>
     );
   }
+  // Build this message's own claim→source maps from the sources attached to it.
+  const sourceNameByClaim = new Map<UUID, string>(
+    (turn.sources ?? []).map((s) => [s.claim_id, s.input_name])
+  );
+  const sourceTargetByClaim = new Map<UUID, ViewerTarget>(
+    (turn.sources ?? []).map((s) => [
+      s.claim_id,
+      { inputId: s.input_id, inputName: s.input_name, sectionRef: s.section_ref, quote: s.quote },
+    ])
+  );
   const md = mentionsToMarkdown(turn.content, labelById, sourceNameByClaim);
   return (
     <div className="flex items-start gap-2">
