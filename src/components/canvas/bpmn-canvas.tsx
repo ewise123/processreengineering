@@ -23,6 +23,7 @@ import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType } from "./layout";
 import { sizeForNodeType } from "./node-type";
 import { placeProposedStep } from "./ai-edit";
+import { edgeFocusCenter } from "./edge-focus";
 import { normalizeMarquee, nodesInMarquee } from "./selection";
 import {
   PALETTE_DRAG_MIME,
@@ -155,6 +156,9 @@ export interface BpmnCanvasHandle {
   /** Select a node (drives Properties panel + chat context) from outside
    * the canvas, e.g. clicking a node link in the Issues tab. */
   selectNode: (id: UUID) => void;
+  /** Pan/zoom to an object by id, select it, and flash it briefly. Handles
+   * both nodes and edges (used by chat mention links). */
+  navigateTo: (ref: { kind: "node" | "edge"; id: UUID }) => void;
   /** Delete every selected node and edge (node deletes are non-undoable). */
   deleteSelection: () => Promise<void>;
   /** Copy the current selection to the in-memory clipboard. */
@@ -608,6 +612,34 @@ function BpmnCanvas({
     });
   }, []);
 
+  const [flashId, setFlashId] = useState<UUID | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flash = useCallback((id: UUID) => {
+    setFlashId(id);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashId(null), 1400);
+  }, []);
+
+  const focusEdgeInViewport = useCallback((id: UUID) => {
+    const edge = edgesRef.current.find((e) => e.id === id);
+    if (!edge) return;
+    const center = edgeFocusCenter(
+      { from: edge.from, to: edge.to },
+      nodesRef.current,
+      displayLanesRef.current
+    );
+    const svg = svgRef.current;
+    if (!center || !svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const v = viewportRef.current;
+    setViewport({
+      scale: v.scale,
+      tx: rect.width / 2 - center.cx * v.scale,
+      ty: rect.height / 2 - center.cy * v.scale,
+    });
+  }, []);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -618,11 +650,17 @@ function BpmnCanvas({
         setSelectedIds(new Set([id]));
         focusNodeInViewport(id);
       },
+      navigateTo: (refTarget) => {
+        setSelectedIds(new Set([refTarget.id]));
+        if (refTarget.kind === "edge") focusEdgeInViewport(refTarget.id);
+        else focusNodeInViewport(refTarget.id);
+        flash(refTarget.id);
+      },
       deleteSelection: deleteSelectionImpl,
       copySelection: copySelectionImpl,
       moveSelectionToLane: moveSelectionToLaneImpl,
     }),
-    [deleteNodeImpl, updateNodeImpl, addProposedStep, focusNodeInViewport, deleteSelectionImpl]
+    [deleteNodeImpl, updateNodeImpl, addProposedStep, focusNodeInViewport, focusEdgeInViewport, flash, deleteSelectionImpl]
   );
 
   // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
@@ -1905,6 +1943,25 @@ function BpmnCanvas({
               onStartConnect={onStartConnect}
             />
           ))}
+          {flashId && (() => {
+            const fn = renderNodes.find((n) => n.id === flashId);
+            if (!fn) return null;
+            return (
+              <rect
+                x={fn.x - 4}
+                y={fn.y - 4}
+                width={fn.w + 8}
+                height={fn.h + 8}
+                rx={8}
+                fill="none"
+                stroke="#6366f1"
+                strokeWidth={3}
+                className="pointer-events-none"
+              >
+                <animate attributeName="opacity" values="1;0.2;1" dur="0.7s" repeatCount="2" />
+              </rect>
+            );
+          })()}
           {editingEdgeId &&
             (() => {
               const edge = edges.find((e) => e.id === editingEdgeId);
