@@ -132,3 +132,55 @@ def test_suggest_mode_ignores_non_list_suggestions():
         message, raw = map_chat_suggest.run_chat_suggest(
             history=[], user_message="x", map_context_text="...", mode=ChatMode.SUGGEST)
     assert raw == []
+
+
+# ---------------------------------------------------------------------------
+# Resolution helpers (Task 4)
+# ---------------------------------------------------------------------------
+
+
+def _ctx_stub():
+    """A minimal object with the resolution maps the helpers read."""
+    from uuid import uuid4
+    n1, n2, e1, l1, c1 = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
+    return SimpleNamespace(
+        node_ref_to_id={"N1": n1, "N2": n2},
+        edge_ref_to_id={"E1": e1},
+        lane_ref_to_id={"L1": l1},
+        claim_ref_to_id={"C1": c1},
+    ), (n1, n2, e1, l1, c1)
+
+
+def test_build_suggestion_resolves_node_ref_and_claims():
+    from app.api.v2 import process_maps as pm_api
+    ctx, (n1, _n2, _e1, _l1, c1) = _ctx_stub()
+    raw = {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
+           "title": "Clarify", "rationale": "C1 says so.",
+           "cited_claim_refs": ["C1", "C99"]}
+    s = pm_api._build_suggestion(raw, ctx, index=0)
+    assert s.op.node_ref == str(n1)           # short ref resolved to UUID string
+    assert s.cited_claim_ids == [c1]          # C99 dropped
+    assert s.affected_refs[0].id == n1
+    assert s.affected_refs[0].kind.value == "node"
+
+
+def test_build_suggestion_keeps_temp_ids_for_new_objects():
+    from app.api.v2 import process_maps as pm_api
+    ctx, (n1, _n2, _e1, l1, _c1) = _ctx_stub()
+    raw = {"kind": "add_node", "temp_id": "tmp:1", "lane_ref": "L1",
+           "node_type": "task", "new_label": "Verify budget", "near_node_ref": "N1",
+           "title": "Add budget check", "rationale": "needed", "cited_claim_refs": []}
+    s = pm_api._build_suggestion(raw, ctx, index=0)
+    assert s.op.temp_id == "tmp:1"            # temp id untouched
+    assert s.op.lane_ref == str(l1)           # existing lane resolved
+    assert s.op.near_node_ref == str(n1)
+    # affected_refs holds only resolvable existing objects (the lane + near node)
+    assert {r.id for r in s.affected_refs} == {l1, n1}
+
+
+def test_build_suggestion_returns_none_for_malformed_op():
+    from app.api.v2 import process_maps as pm_api
+    ctx, _ = _ctx_stub()
+    raw = {"kind": "relabel_node", "node_ref": "N1",  # missing new_label
+           "title": "x", "rationale": "y", "cited_claim_refs": []}
+    assert pm_api._build_suggestion(raw, ctx, index=0) is None

@@ -80,6 +80,17 @@ from app.services.map_ai_edit import (
 from app.services.map_chat import ChatTurn as MapChatTurn, chat as run_map_chat
 from app.services.map_context import assemble_map_context
 from app.services.process_generation import generate_structure_from_claims
+from app.schemas.version_chat_suggest import (
+    ChatMode,
+    ChatSuggestRequest,
+    ChatSuggestResponse,
+    ChatSuggestion,
+    ObjectRef,
+    RefKind,
+    SuggestionOp,
+)
+from app.services.map_chat_suggest import run_chat_suggest
+from app.schemas.version_chat_suggest import ChatTurn as SuggestChatTurn
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
 
@@ -1167,6 +1178,66 @@ def _resolve_refs(refs, claim_ref_to_id):
         if cid is not None and cid not in out:
             out.append(cid)
     return out
+
+
+# Op field -> (resolution map attname, RefKind). Fields not listed are literals.
+_OP_REF_FIELDS: dict[str, tuple[str, RefKind]] = {
+    "node_ref": ("node_ref_to_id", RefKind.NODE),
+    "near_node_ref": ("node_ref_to_id", RefKind.NODE),
+    "edge_ref": ("edge_ref_to_id", RefKind.EDGE),
+    "lane_ref": ("lane_ref_to_id", RefKind.LANE),
+    "from_ref": ("node_ref_to_id", RefKind.NODE),
+    "to_ref": ("node_ref_to_id", RefKind.NODE),
+    "temp_id": (None, None),  # never resolved; identifies a new object
+}
+
+
+def _resolve_one_ref(value, map_attr, ctx):
+    """Short ref (N1) -> UUID string. tmp:N and unknown refs pass through unchanged."""
+    if value is None or str(value).startswith("tmp:"):
+        return value, None
+    real = getattr(ctx, map_attr).get(str(value).strip())
+    if real is None:
+        return value, None  # leave unresolved; affected_refs will skip it
+    return str(real), real
+
+
+def _build_suggestion(raw: dict, ctx, index: int):
+    """Resolve a raw model suggestion into a validated ChatSuggestion, or None
+    if the op is malformed. Mirrors _resolve_refs' fabricated-ref hygiene."""
+    import uuid as _uuid
+
+    op_kwargs = {"kind": raw.get("kind")}
+    affected: list[ObjectRef] = []
+    for field, (map_attr, ref_kind) in _OP_REF_FIELDS.items():
+        if field not in raw or raw[field] is None:
+            continue
+        if field == "temp_id":
+            op_kwargs[field] = raw[field]
+            continue
+        resolved_str, real_id = _resolve_one_ref(raw[field], map_attr, ctx)
+        op_kwargs[field] = resolved_str
+        if real_id is not None:
+            affected.append(ObjectRef(kind=ref_kind, id=real_id))
+    # literal (non-ref) fields pass straight through
+    for field in ("new_label", "description", "name", "node_type", "edge_label", "sub_steps"):
+        if raw.get(field) is not None:
+            op_kwargs[field] = raw[field]
+
+    try:
+        op = SuggestionOp(**op_kwargs)
+    except (ValueError, TypeError, KeyError):
+        return None  # malformed op -> dropped, never reaches the client
+
+    return ChatSuggestion(
+        id=f"sg-{index}-{_uuid.uuid4().hex[:8]}",
+        group=raw.get("group"),
+        title=str(raw.get("title") or op.kind.value)[:300],
+        op=op,
+        affected_refs=affected,
+        rationale=str(raw.get("rationale") or "")[:2000],
+        cited_claim_ids=_resolve_refs(raw.get("cited_claim_refs"), ctx.claim_ref_to_id),
+    )
 
 
 @router.post(
