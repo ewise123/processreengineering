@@ -220,17 +220,9 @@ export default function CanvasPage() {
   const chatSelected: SelectedObject[] = useMemo(() => {
     if (selected.kind === "node")
       return [{ id: selected.id, kind: "node", name: selected.name }];
-    if (selected.kind === "edge") return [{ id: selected.id, kind: "edge" }];
     if (selected.kind === "multi") {
       const nameById = new Map((data?.nodes ?? []).map((n) => [n.id, n.name]));
-      return [
-        ...selected.nodeIds.map((id) => ({
-          id,
-          kind: "node" as const,
-          name: nameById.get(id),
-        })),
-        ...selected.edgeIds.map((id) => ({ id, kind: "edge" as const })),
-      ];
+      return selected.nodeIds.map((id) => ({ id, kind: "node" as const, name: nameById.get(id) }));
     }
     return [];
   }, [selected, data]);
