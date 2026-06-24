@@ -243,3 +243,11 @@ class ProcessModelRead(BaseModel):
     latest_version_number: int | None = None
     latest_source_segment_id: UUID | None = None
     latest_source_run_status: str | None = None
+
+
+class ConsistencyFinding(BaseModel):
+    code: str
+    severity: str
+    summary: str
+    node_ids: list[UUID] = Field(default_factory=list)
+    lane_ids: list[UUID] = Field(default_factory=list)

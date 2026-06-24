@@ -293,3 +293,17 @@ def test_chat_suggest_endpoint_502_on_runtime_error(db):
                 payload=ChatSuggestRequest(user_message="hi", mode="suggest"), db=db,
             )
     assert exc.value.status_code == 502
+
+
+def test_consistency_endpoint_reports_findings(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.models.process import ProcessNode
+    project, version, n1, claim = _seed(db)
+    # Add a duplicate-named node to trigger a finding.
+    dup = ProcessNode(version_id=version.id, lane_id=n1.lane_id, type="task",
+                      name=n1.name, position={}, properties={})
+    db.add(dup); db.commit()
+    resp = pm_api.map_consistency(
+        project=project, model_id=version.model_id, version_id=version.id, db=db,
+    )
+    assert any(f.code == "duplicate_name" for f in resp)

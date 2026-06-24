@@ -39,6 +39,7 @@ from app.schemas.process_map import (
     CitationDetail,
     ClaimSummary,
     ClaimWithCitations,
+    ConsistencyFinding,
     EdgeCreate,
     EdgeUpdate,
     LaneCreate,
@@ -91,6 +92,7 @@ from app.schemas.version_chat_suggest import (
     SuggestionOp,
 )
 from app.services.map_chat_suggest import run_chat_suggest
+from app.services.map_consistency import scan_map
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
 
@@ -1450,3 +1452,42 @@ def apply_proposed_step(
         node=ProcessNodeRead.model_validate(node),
         edge=ProcessEdgeRead.model_validate(edge),
     )
+
+
+@router.get(
+    "/process-maps/{model_id}/versions/{version_id}/consistency",
+    response_model=list[ConsistencyFinding],
+)
+def map_consistency(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ConsistencyFinding]:
+    """Deterministic structural problems in the current map version."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+
+    nodes = list(db.scalars(select(ProcessNode).where(ProcessNode.version_id == version.id)).all())
+    edges = list(db.scalars(select(ProcessEdge).where(ProcessEdge.version_id == version.id)).all())
+    lanes = list(db.scalars(select(ProcessLane).where(ProcessLane.version_id == version.id)).all())
+
+    findings = scan_map(
+        nodes=[{"id": str(n.id), "name": n.name, "type": n.type,
+                "lane_id": str(n.lane_id) if n.lane_id else None} for n in nodes],
+        edges=[{"source_node_id": str(e.source_node_id),
+                "target_node_id": str(e.target_node_id)} for e in edges],
+        lanes=[{"id": str(l.id), "name": l.name} for l in lanes],
+    )
+    return [
+        ConsistencyFinding(
+            code=f.code, severity=f.severity, summary=f.summary,
+            node_ids=[UUID(x) for x in f.node_ids],
+            lane_ids=[UUID(x) for x in f.lane_ids],
+        )
+        for f in findings
+    ]
