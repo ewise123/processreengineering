@@ -348,6 +348,65 @@ export interface ChatResponse {
   content: string;
 }
 
+export type ChatMode = "ask" | "suggest";
+export type RefKind = "node" | "edge" | "lane";
+
+export interface ObjectRef {
+  kind: RefKind;
+  id: UUID;
+}
+
+export type OpKind =
+  | "relabel_node" | "describe_node" | "add_node" | "remove_node"
+  | "add_edge" | "remove_edge" | "relabel_edge" | "reroute_edge"
+  | "move_to_lane" | "add_lane" | "rename_lane" | "decompose";
+
+export interface SuggestionSubStep {
+  proposed_name: string;
+  proposed_type: string;
+  role?: string | null;
+  edge_label?: string | null;
+}
+
+export interface SuggestionOp {
+  kind: OpKind;
+  node_ref?: string | null;
+  edge_ref?: string | null;
+  lane_ref?: string | null;
+  temp_id?: string | null;
+  from_ref?: string | null;
+  to_ref?: string | null;
+  new_label?: string | null;
+  description?: string | null;
+  name?: string | null;
+  node_type?: string | null;
+  near_node_ref?: string | null;
+  edge_label?: string | null;
+  sub_steps?: SuggestionSubStep[] | null;
+}
+
+export interface ChatSuggestion {
+  id: string;
+  group?: string | null;
+  title: string;
+  op: SuggestionOp;
+  affected_refs: ObjectRef[];
+  rationale: string;
+  cited_claim_ids: UUID[];
+}
+
+export interface ChatSuggestRequest {
+  history: ChatTurn[];
+  user_message: string;
+  mode: ChatMode;
+  context_refs: ObjectRef[];
+}
+
+export interface ChatSuggestResponse {
+  message: string;
+  suggestions: ChatSuggestion[];
+}
+
 export interface ProcessMapGenerateRequest {
   name: string;
   level: string;
