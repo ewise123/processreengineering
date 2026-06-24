@@ -5,6 +5,7 @@ reusable. Each Finding names the offending object ids and a severity. The chat
 layer can later phrase fixes; this module only detects.
 """
 from dataclasses import dataclass, field
+from typing import Literal
 
 _EXCLUSIVE_GATEWAY_TYPES = {"gateway_exclusive", "gateway_inclusive"}
 
@@ -12,7 +13,7 @@ _EXCLUSIVE_GATEWAY_TYPES = {"gateway_exclusive", "gateway_inclusive"}
 @dataclass
 class Finding:
     code: str
-    severity: str  # "low" | "medium" | "high"
+    severity: Literal["low", "medium", "high"]
     summary: str
     node_ids: list[str] = field(default_factory=list)
     edge_keys: list[str] = field(default_factory=list)
@@ -51,7 +52,10 @@ def scan_map(*, nodes: list[dict], edges: list[dict], lanes: list[dict]) -> list
     # 3. Exclusive/inclusive gateways with fewer than two outgoing branches.
     out_count: dict[str, int] = {}
     for e in edges:
-        out_count[e.get("source_node_id")] = out_count.get(e.get("source_node_id"), 0) + 1
+        src, tgt = e.get("source_node_id"), e.get("target_node_id")
+        if not (src and tgt):
+            continue
+        out_count[src] = out_count.get(src, 0) + 1
     for n in nodes:
         if n.get("type") in _EXCLUSIVE_GATEWAY_TYPES and out_count.get(n["id"], 0) < 2:
             findings.append(Finding(
@@ -63,8 +67,11 @@ def scan_map(*, nodes: list[dict], edges: list[dict], lanes: list[dict]) -> list
     # 4. Orphan nodes: no incoming or outgoing edge (ignore start/end events).
     touched: set[str] = set()
     for e in edges:
-        touched.add(e.get("source_node_id"))
-        touched.add(e.get("target_node_id"))
+        src, tgt = e.get("source_node_id"), e.get("target_node_id")
+        if not (src and tgt):
+            continue
+        touched.add(src)
+        touched.add(tgt)
     for n in nodes:
         if n["id"] not in touched and n.get("type") not in ("event_start", "event_end"):
             findings.append(Finding(

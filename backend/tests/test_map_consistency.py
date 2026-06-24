@@ -31,6 +31,13 @@ def test_single_branch_exclusive_gateway_detected():
     assert any(f.code == "single_branch_gateway" and "g" in f.node_ids for f in findings)
 
 
+def test_single_branch_inclusive_gateway_detected():
+    nodes = [_node("g", "Any?", ntype="gateway_inclusive"), _node("a", "A")]
+    edges = [_edge("g", "a")]
+    findings = scan_map(nodes=nodes, edges=edges, lanes=[{"id": "L1", "name": "Ops"}])
+    assert any(f.code == "single_branch_gateway" and "g" in f.node_ids for f in findings)
+
+
 def test_orphan_node_detected():
     nodes = [_node("a", "A"), _node("b", "B"), _node("c", "Island")]
     edges = [_edge("a", "b")]  # c has no edges
