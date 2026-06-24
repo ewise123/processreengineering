@@ -88,6 +88,7 @@ from app.schemas.version_chat_suggest import (
     ChatSuggestResponse,
     ChatSuggestion,
     ChatTurn as SuggestChatTurn,
+    MentionSource,
     ObjectRef,
     RefKind,
     SuggestionOp,
@@ -1396,9 +1397,16 @@ def chat_suggest(
         built = _build_suggestion(raw, ctx, index=i)
         if built is not None:
             suggestions.append(built)
+    resolved = _resolve_mention_refs(message, ctx)
+    cited = set(re.findall(r"\[\[claim:([0-9a-fA-F-]+)\]\]", resolved))
+    mention_sources = []
+    for cid_str in cited:
+        cid = UUID(cid_str)
+        tgt = ctx.source_target_by_claim.get(cid)
+        if tgt:
+            mention_sources.append(MentionSource(claim_id=cid, **tgt))
     return ChatSuggestResponse(
-        message=_resolve_mention_refs(message, ctx),
-        suggestions=suggestions,
+        message=resolved, suggestions=suggestions, mention_sources=mention_sources
     )
 
 

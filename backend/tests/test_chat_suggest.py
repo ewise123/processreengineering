@@ -454,3 +454,37 @@ def test_chat_suggest_focuses_on_all_context_nodes(db):
         )
     assert "N1" in captured["ctx"] and "N2" in captured["ctx"]
     assert "focus" in captured["ctx"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.1a Task 2: mention_sources on chat-suggest response
+# ---------------------------------------------------------------------------
+
+
+def test_chat_suggest_attaches_mention_sources_for_cited_claims(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    from app.models.input import Chunk, DocumentSection, Input
+    from app.models.claim import ClaimCitation
+    project, version, n1, claim = _seed(db)
+    inp = Input(project_id=project.id, name="SOP.pdf", type="document")
+    db.add(inp); db.flush()
+    sec = DocumentSection(
+        input_id=inp.id, kind="section", order_index=0,
+        ref={"page": 1}, text="The clerk receives it.",
+    )
+    db.add(sec); db.flush()
+    chunk = Chunk(section_id=sec.id, char_start=0, char_end=22, text="the clerk receives it")
+    db.add(chunk); db.flush()
+    db.add(ClaimCitation(claim_id=claim.id, chunk_id=chunk.id, quote="the clerk receives it"))
+    db.commit()
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_suggest", lambda **k: ("Per [[C1]] this is logged.", []))
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)
+    assert f"[[claim:{claim.id}]]" in resp.message
+    src = next(s for s in resp.mention_sources if s.claim_id == claim.id)
+    assert src.input_id == inp.id and src.input_name == "SOP.pdf"
+    assert src.quote == "the clerk receives it"
