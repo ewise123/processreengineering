@@ -28,6 +28,13 @@ def test_op_add_node_rejects_unknown_node_type():
                      node_type="not_a_type", new_label="X")
 
 
+def test_substep_rejects_unknown_proposed_type():
+    from app.schemas.version_chat_suggest import SubStepInput
+    with pytest.raises(ValueError):
+        SubStepInput(proposed_name="X", proposed_type="not_a_type")
+    SubStepInput(proposed_name="X", proposed_type="task")  # valid, no raise
+
+
 def test_chat_suggest_request_defaults():
     from app.schemas.version_chat_suggest import ChatSuggestRequest, ChatMode
     req = ChatSuggestRequest(user_message="hi", mode="ask")

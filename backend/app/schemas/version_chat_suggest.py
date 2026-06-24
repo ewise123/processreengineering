@@ -62,7 +62,7 @@ _REQUIRED_BY_KIND: dict[OpKind, tuple[str, ...]] = {
 
 class SubStepInput(BaseModel):
     proposed_name: str = Field(min_length=1, max_length=500)
-    proposed_type: str = "task"
+    proposed_type: str = Field(default="task", pattern=rf"^({'|'.join(sorted(_NODE_TYPE_VALUES))})$")
     role: str | None = None
     edge_label: str | None = None
 
@@ -101,7 +101,7 @@ class ObjectRef(BaseModel):
 
 
 class ChatSuggestion(BaseModel):
-    id: str
+    id: str = Field(min_length=1)
     group: str | None = None
     title: str = Field(min_length=1, max_length=300)
     op: SuggestionOp
