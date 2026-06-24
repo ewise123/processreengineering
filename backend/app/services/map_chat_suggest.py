@@ -24,7 +24,7 @@ MENTION_INSTRUCTIONS = (
     "When you reference a specific element of the map, wrap its short ref in double "
     "brackets so the UI can turn it into a link: a node as [[N3]], an edge as [[E2]], "
     "a claim as [[C1]], a lane as [[L1]]. Use the refs exactly as they appear in the "
-    "map context above; never invent one."
+    "map context below; never invent one."
 )
 
 SUGGEST_INSTRUCTIONS = """\
