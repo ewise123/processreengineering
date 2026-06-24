@@ -1366,12 +1366,26 @@ def chat_suggest(
     )
     ctx = assemble_map_context(db, version, selected_node_id=selected_node_id)
 
+    # Ground the model on EVERY attached node (not just the first). Reference
+    # them by the same short refs the map context uses.
+    focus_refs = [
+        ctx.node_ref_by_id[r.id]
+        for r in payload.context_refs
+        if r.kind == RefKind.NODE and r.id in ctx.node_ref_by_id
+    ]
+    map_text = ctx.text
+    if focus_refs:
+        map_text += (
+            "\n\nThe user has attached these steps as the focus of the question; "
+            "address all of them: " + ", ".join(focus_refs)
+        )
+
     history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
     try:
         message, raw_suggestions = run_chat_suggest(
             history=history,
             user_message=payload.user_message,
-            map_context_text=ctx.text,
+            map_context_text=map_text,
             mode=payload.mode,
         )
     except RuntimeError as exc:  # service raises only RuntimeError; _build_suggestion swallows ValueError

@@ -415,3 +415,42 @@ def test_chat_suggest_ask_message_is_mention_resolved(db):
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)
     assert f"[[node:{n1.id}]]" in resp.message
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.1a Task 1: ground on all context nodes; drop edge refs + parenthetical
+# ---------------------------------------------------------------------------
+
+
+def test_mention_instructions_drop_edges_and_parenthetical():
+    from app.services.map_chat_suggest import MENTION_INSTRUCTIONS
+    low = MENTION_INSTRUCTIONS.lower()
+    assert "[[e" not in low                      # no edge-ref instruction
+    assert "parenthes" in low or "do not repeat" in low  # tells model not to restate name
+
+
+def test_chat_suggest_focuses_on_all_context_nodes(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest, ObjectRef
+    from app.models.process import ProcessNode
+    project, version, n1, claim = _seed(db)
+    n2 = ProcessNode(version_id=version.id, lane_id=n1.lane_id, type="task", name="Approve", position={}, properties={})
+    db.add(n2); db.commit()
+    captured = {}
+
+    def fake_service(*, history, user_message, map_context_text, mode):
+        captured["ctx"] = map_context_text
+        return ("ok", [])
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_suggest", fake_service)
+        pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(
+                user_message="compare these", mode="ask",
+                context_refs=[ObjectRef(kind="node", id=n1.id), ObjectRef(kind="node", id=n2.id)],
+            ),
+            db=db,
+        )
+    assert "N1" in captured["ctx"] and "N2" in captured["ctx"]
+    assert "focus" in captured["ctx"].lower()
