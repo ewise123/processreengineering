@@ -66,7 +66,7 @@ PROPOSE_TOOL = {
                         "new_label": {"type": ["string", "null"]},
                         "description": {"type": ["string", "null"]},
                         "name": {"type": ["string", "null"]},
-                        "node_type": {"type": ["string", "null"], "enum": [*_NODE_TYPES, None]},
+                        "node_type": {"type": ["string", "null"], "enum": [*_NODE_TYPES]},
                         "near_node_ref": {"type": ["string", "null"]},
                         "edge_label": {"type": ["string", "null"]},
                         "sub_steps": {"type": ["array", "null"], "items": {"type": "object"}},
@@ -136,5 +136,7 @@ def run_chat_suggest(
         if block.type == "text":
             text_parts.append(block.text)
         elif block.type == "tool_use" and block.name == "propose_changes":
-            raw_suggestions.extend(dict(block.input).get("suggestions", []))
+            suggestions_raw = dict(block.input).get("suggestions", [])
+            if isinstance(suggestions_raw, list):
+                raw_suggestions.extend(suggestions_raw)
     return "".join(text_parts).strip(), raw_suggestions

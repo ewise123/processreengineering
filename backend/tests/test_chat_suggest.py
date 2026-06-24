@@ -122,3 +122,13 @@ def test_ask_mode_never_calls_tools():
     assert captured["called"] is True
     assert raw == []
     assert message == "A plain answer."
+
+
+def test_suggest_mode_ignores_non_list_suggestions():
+    from app.services import map_chat_suggest
+    from app.schemas.version_chat_suggest import ChatMode
+    fake = _FakeClient([_ToolBlock("propose_changes", {"suggestions": {"oops": "not a list"}})])
+    with patch.object(map_chat_suggest, "_get_client", return_value=fake):
+        message, raw = map_chat_suggest.run_chat_suggest(
+            history=[], user_message="x", map_context_text="...", mode=ChatMode.SUGGEST)
+    assert raw == []
