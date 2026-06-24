@@ -1,4 +1,5 @@
 """Phase 2.5 endpoints: generate process maps from claims, read them back."""
+import re
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -1204,6 +1205,24 @@ def _resolve_one_ref(value, map_attr, ctx):
     return str(real), real
 
 
+_MENTION_RE = re.compile(r"\[\[([NELC])(\d+)\]\]")
+_MENTION_KIND = {"N": ("node", "node_ref_to_id"), "E": ("edge", "edge_ref_to_id"),
+                 "L": ("lane", "lane_ref_to_id"), "C": ("claim", "claim_ref_to_id")}
+
+
+def _resolve_mention_refs(message: str, ctx) -> str:
+    """Rewrite short refs the model emitted ([[N3]]/[[E2]]/[[C1]]/[[L1]]) into
+    stable [[kind:uuid]] mentions the frontend can link. Unknown refs are
+    flattened to plain text so prose stays readable."""
+    def _sub(m):
+        letter, num = m.group(1), m.group(2)
+        short = f"{letter}{num}"
+        kind, attr = _MENTION_KIND[letter]
+        real = getattr(ctx, attr).get(short)
+        return f"[[{kind}:{real}]]" if real is not None else short
+    return _MENTION_RE.sub(_sub, message)
+
+
 def _build_suggestion(raw: dict, ctx, index: int):
     """Resolve a raw model suggestion into a validated ChatSuggestion, or None
     if the op is malformed. Mirrors _resolve_refs' fabricated-ref hygiene."""
@@ -1363,7 +1382,10 @@ def chat_suggest(
         built = _build_suggestion(raw, ctx, index=i)
         if built is not None:
             suggestions.append(built)
-    return ChatSuggestResponse(message=message, suggestions=suggestions)
+    return ChatSuggestResponse(
+        message=_resolve_mention_refs(message, ctx),
+        suggestions=suggestions,
+    )
 
 
 @router.post(

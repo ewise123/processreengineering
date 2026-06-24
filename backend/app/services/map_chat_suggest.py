@@ -20,6 +20,13 @@ MAX_TOKENS = 2000
 _NODE_TYPES = [t.value for t in NodeType]
 _OP_KINDS = [k.value for k in OpKind]
 
+MENTION_INSTRUCTIONS = (
+    "When you reference a specific element of the map, wrap its short ref in double "
+    "brackets so the UI can turn it into a link: a node as [[N3]], an edge as [[E2]], "
+    "a claim as [[C1]], a lane as [[L1]]. Use the refs exactly as they appear in the "
+    "map context above; never invent one."
+)
+
 SUGGEST_INSTRUCTIONS = """\
 You may propose concrete edits to the map. Call `propose_changes` ONLY when the
 sources or the map's structure actually warrant a change. A question, or a map
@@ -106,6 +113,7 @@ def run_chat_suggest(
             history=history,
             user_message=user_message,
             map_context_text=map_context_text,
+            extra_instructions=MENTION_INSTRUCTIONS,
         )
         return message, []
 
@@ -113,6 +121,8 @@ def run_chat_suggest(
         CHAT_GUARDRAILS
         + "\n\n---\n"
         + SUGGEST_INSTRUCTIONS
+        + "\n\n"
+        + MENTION_INSTRUCTIONS
         + "\n\n---\nCurrent process map (grounded source of truth):\n"
         + map_context_text
     )

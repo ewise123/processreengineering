@@ -110,8 +110,9 @@ def test_ask_mode_never_calls_tools():
     from app.schemas.version_chat_suggest import ChatMode
     captured = {}
 
-    def fake_chat(*, history, user_message, map_context_text):
+    def fake_chat(*, history, user_message, map_context_text, extra_instructions=""):
         captured["called"] = True
+        captured["extra_instructions"] = extra_instructions
         return "A plain answer."
 
     with patch.object(map_chat_suggest, "chat", fake_chat):
@@ -122,6 +123,7 @@ def test_ask_mode_never_calls_tools():
     assert captured["called"] is True
     assert raw == []
     assert message == "A plain answer."
+    assert captured["extra_instructions"]  # MENTION_INSTRUCTIONS was passed
 
 
 def test_suggest_mode_ignores_non_list_suggestions():
@@ -355,3 +357,61 @@ def test_chat_suggest_endpoint_drops_only_malformed_op_in_batch(db):
             payload=ChatSuggestRequest(user_message="x", mode="suggest"), db=db)
     assert len(resp.suggestions) == 1               # malformed dropped, good kept
     assert resp.suggestions[0].title == "Good"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 Task 1: mention ref resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_mention_refs_rewrites_known_refs_to_uuids():
+    from app.api.v2 import process_maps as pm_api
+    ctx, (n1, _n2, e1, l1, c1) = _ctx_stub()
+    msg = "Step [[N1]] feeds edge [[E1]] per claim [[C1]] in lane [[L1]]."
+    out = pm_api._resolve_mention_refs(msg, ctx)
+    assert f"[[node:{n1}]]" in out
+    assert f"[[edge:{e1}]]" in out
+    assert f"[[claim:{c1}]]" in out
+    assert f"[[lane:{l1}]]" in out
+
+
+def test_resolve_mention_refs_flattens_unknown_refs():
+    from app.api.v2 import process_maps as pm_api
+    ctx, _ = _ctx_stub()
+    out = pm_api._resolve_mention_refs("Unknown [[N9]] here.", ctx)
+    assert out == "Unknown N9 here."  # brackets stripped, plain text kept
+
+
+def test_chat_runs_extra_instructions_into_system(monkeypatch):
+    from app.services import map_chat
+    captured = {}
+
+    class _Resp:
+        content = [type("B", (), {"type": "text", "text": "ok"})()]
+
+    class _Client:
+        @property
+        def messages(self):
+            return self
+        def create(self, **kwargs):
+            captured["system"] = kwargs["system"]
+            return _Resp()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    monkeypatch.setattr(map_chat.anthropic, "Anthropic", lambda **k: _Client())
+    map_chat.chat(history=[], user_message="hi", map_context_text="M",
+                  extra_instructions="WRAP REFS LIKE [[N3]]")
+    assert "WRAP REFS LIKE [[N3]]" in captured["system"]
+
+
+def test_chat_suggest_ask_message_is_mention_resolved(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    project, version, n1, claim = _seed(db)
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_suggest",
+                   lambda **k: ("See step [[N1]].", []))
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)
+    assert f"[[node:{n1.id}]]" in resp.message

@@ -45,22 +45,27 @@ def chat(
     history: list[ChatTurn],
     user_message: str,
     map_context_text: str,
+    extra_instructions: str = "",
 ) -> str:
     """Run one turn of the chat. `history` is the prior turns (oldest first),
     `user_message` is the new message, `map_context_text` is the rendered
-    map summary the model should ground in."""
+    map summary the model should ground in. `extra_instructions` is an optional
+    block inserted between the system prompt and the map context."""
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is not set")
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    # Compose the system message: persona + the current map state. Keeping
-    # the map context in `system` (not in user messages) lets prompt caching
-    # kick in across turns — only the last user message changes.
-    full_system = (
-        SYSTEM_PROMPT
-        + "\n\n---\nCurrent process map (grounded source of truth):\n"
+    # Compose the system message: persona + optional extra instructions + the
+    # current map state. Keeping the map context in `system` (not in user
+    # messages) lets prompt caching kick in across turns — only the last user
+    # message changes.
+    full_system = SYSTEM_PROMPT
+    if extra_instructions:
+        full_system += "\n\n---\n" + extra_instructions
+    full_system += (
+        "\n\n---\nCurrent process map (grounded source of truth):\n"
         + map_context_text
     )
 
