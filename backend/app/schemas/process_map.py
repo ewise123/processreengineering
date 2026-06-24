@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -243,3 +244,13 @@ class ProcessModelRead(BaseModel):
     latest_version_number: int | None = None
     latest_source_segment_id: UUID | None = None
     latest_source_run_status: str | None = None
+
+
+class ConsistencyFinding(BaseModel):
+    """A structural problem found by scan_map. (edge_keys are retained on the
+    internal Finding for future canvas-highlight use but not yet surfaced here.)"""
+    code: str
+    severity: Literal["low", "medium", "high"]
+    summary: str
+    node_ids: list[UUID] = Field(default_factory=list)
+    lane_ids: list[UUID] = Field(default_factory=list)

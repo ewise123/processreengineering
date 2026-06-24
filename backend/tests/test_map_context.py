@@ -71,3 +71,24 @@ def test_assemble_map_context_no_selection(db):
     ctx = assemble_map_context(db, version, selected_node_id=None)
     assert ctx.selected_label is None
     assert "Approve" in ctx.text
+
+
+def test_assemble_map_context_exposes_reverse_ref_maps(db):
+    org = Organization(name="O"); db.add(org); db.flush()
+    user = User(org_id=org.id, email=f"u-{uuid4()}@x.io", name="U"); db.add(user); db.flush()
+    project = Project(org_id=org.id, name="P", created_by=user.id); db.add(project); db.flush()
+    model = ProcessModel(project_id=project.id, name="M", level="L2"); db.add(model); db.flush()
+    version = ProcessVersion(model_id=model.id, version_number=1); db.add(version); db.flush()
+    lane = ProcessLane(version_id=version.id, name="Ops", order_index=0); db.add(lane); db.flush()
+    n1 = ProcessNode(version_id=version.id, lane_id=lane.id, type="task", name="A", position={}, properties={})
+    n2 = ProcessNode(version_id=version.id, lane_id=lane.id, type="task", name="B", position={}, properties={})
+    db.add_all([n1, n2]); db.flush()
+    e1 = ProcessEdge(version_id=version.id, source_node_id=n1.id, target_node_id=n2.id, label="go")
+    db.add(e1); db.commit()
+
+    ctx = assemble_map_context(db, version)
+
+    assert ctx.node_ref_to_id["N1"] == n1.id
+    assert ctx.node_ref_to_id["N2"] == n2.id
+    assert ctx.edge_ref_to_id["E1"] == e1.id
+    assert ctx.lane_ref_to_id["L1"] == lane.id

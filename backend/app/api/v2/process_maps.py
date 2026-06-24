@@ -1,6 +1,6 @@
 """Phase 2.5 endpoints: generate process maps from claims, read them back."""
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, func, or_, select, update
@@ -39,6 +39,7 @@ from app.schemas.process_map import (
     CitationDetail,
     ClaimSummary,
     ClaimWithCitations,
+    ConsistencyFinding,
     EdgeCreate,
     EdgeUpdate,
     LaneCreate,
@@ -80,6 +81,18 @@ from app.services.map_ai_edit import (
 from app.services.map_chat import ChatTurn as MapChatTurn, chat as run_map_chat
 from app.services.map_context import assemble_map_context
 from app.services.process_generation import generate_structure_from_claims
+from app.schemas.version_chat_suggest import (
+    ChatMode,
+    ChatSuggestRequest,
+    ChatSuggestResponse,
+    ChatSuggestion,
+    ChatTurn as SuggestChatTurn,
+    ObjectRef,
+    RefKind,
+    SuggestionOp,
+)
+from app.services.map_chat_suggest import run_chat_suggest
+from app.services.map_consistency import scan_map
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
 
@@ -1169,6 +1182,64 @@ def _resolve_refs(refs, claim_ref_to_id):
     return out
 
 
+# Op field -> (resolution map attname, RefKind). Fields not listed are literals.
+_OP_REF_FIELDS: dict[str, tuple[str, RefKind]] = {
+    "node_ref": ("node_ref_to_id", RefKind.NODE),
+    "near_node_ref": ("node_ref_to_id", RefKind.NODE),
+    "edge_ref": ("edge_ref_to_id", RefKind.EDGE),
+    "lane_ref": ("lane_ref_to_id", RefKind.LANE),
+    "from_ref": ("node_ref_to_id", RefKind.NODE),
+    "to_ref": ("node_ref_to_id", RefKind.NODE),
+    "temp_id": (None, None),  # never resolved; identifies a new object
+}
+
+
+def _resolve_one_ref(value, map_attr, ctx):
+    """Short ref (N1) -> UUID string. tmp:N and unknown refs pass through unchanged."""
+    if value is None or str(value).startswith("tmp:"):
+        return value, None
+    real = getattr(ctx, map_attr).get(str(value).strip().upper())
+    if real is None:
+        return value, None  # leave unresolved; affected_refs will skip it
+    return str(real), real
+
+
+def _build_suggestion(raw: dict, ctx, index: int):
+    """Resolve a raw model suggestion into a validated ChatSuggestion, or None
+    if the op is malformed. Mirrors _resolve_refs' fabricated-ref hygiene."""
+    op_kwargs = {"kind": raw.get("kind")}
+    affected: list[ObjectRef] = []
+    for field, (map_attr, ref_kind) in _OP_REF_FIELDS.items():
+        if field not in raw or raw[field] is None:
+            continue
+        if field == "temp_id":
+            op_kwargs[field] = raw[field]
+            continue
+        resolved_str, real_id = _resolve_one_ref(raw[field], map_attr, ctx)
+        op_kwargs[field] = resolved_str
+        if real_id is not None:
+            affected.append(ObjectRef(kind=ref_kind, id=real_id))
+    # literal (non-ref) fields pass straight through
+    for field in ("new_label", "description", "name", "node_type", "edge_label", "sub_steps"):
+        if raw.get(field) is not None:
+            op_kwargs[field] = raw[field]
+
+    try:
+        op = SuggestionOp(**op_kwargs)
+    except (ValueError, TypeError, KeyError):
+        return None  # malformed op -> dropped, never reaches the client
+
+    return ChatSuggestion(
+        id=f"sg-{index}-{uuid4().hex[:8]}",
+        group=raw.get("group"),
+        title=str(raw.get("title") or op.kind.value)[:300],
+        op=op,
+        affected_refs=affected,
+        rationale=str(raw.get("rationale") or "")[:2000],
+        cited_claim_ids=_resolve_refs(raw.get("cited_claim_refs"), ctx.claim_ref_to_id),
+    )
+
+
 @router.post(
     "/process-maps/{model_id}/versions/{version_id}/nodes/{node_id}/ai-edit",
     response_model=AiEditResponse,
@@ -1246,6 +1317,53 @@ def ai_edit_node(
         raise HTTPException(status_code=422, detail=f"Unsupported action: {payload.action}")
     except (RuntimeError, ValueError) as exc:  # missing API key, bad proposal, etc.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/chat-suggest",
+    response_model=ChatSuggestResponse,
+)
+def chat_suggest(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    payload: ChatSuggestRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> ChatSuggestResponse:
+    """Word-style chat. Ask mode answers in prose; suggest mode also returns
+    structured, applyable suggested changes. Never mutates the map. Model claim
+    refs are resolved to UUIDs and fabricated ones dropped; malformed ops are
+    discarded before reaching the client."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+
+    # If a single node is attached as context, label it as the selection.
+    selected_node_id = next(
+        (r.id for r in payload.context_refs if r.kind == RefKind.NODE), None
+    )
+    ctx = assemble_map_context(db, version, selected_node_id=selected_node_id)
+
+    history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
+    try:
+        message, raw_suggestions = run_chat_suggest(
+            history=history,
+            user_message=payload.user_message,
+            map_context_text=ctx.text,
+            mode=payload.mode,
+        )
+    except RuntimeError as exc:  # service raises only RuntimeError; _build_suggestion swallows ValueError
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    suggestions = []
+    for i, raw in enumerate(raw_suggestions):
+        built = _build_suggestion(raw, ctx, index=i)
+        if built is not None:
+            suggestions.append(built)
+    return ChatSuggestResponse(message=message, suggestions=suggestions)
 
 
 @router.post(
@@ -1334,3 +1452,42 @@ def apply_proposed_step(
         node=ProcessNodeRead.model_validate(node),
         edge=ProcessEdgeRead.model_validate(edge),
     )
+
+
+@router.get(
+    "/process-maps/{model_id}/versions/{version_id}/consistency",
+    response_model=list[ConsistencyFinding],
+)
+def map_consistency(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ConsistencyFinding]:
+    """Deterministic structural problems in the current map version."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+
+    nodes = list(db.scalars(select(ProcessNode).where(ProcessNode.version_id == version.id)).all())
+    edges = list(db.scalars(select(ProcessEdge).where(ProcessEdge.version_id == version.id)).all())
+    lanes = list(db.scalars(select(ProcessLane).where(ProcessLane.version_id == version.id)).all())
+
+    findings = scan_map(
+        nodes=[{"id": str(n.id), "name": n.name, "type": n.type,
+                "lane_id": str(n.lane_id) if n.lane_id else None} for n in nodes],
+        edges=[{"source_node_id": str(e.source_node_id),
+                "target_node_id": str(e.target_node_id)} for e in edges],
+        lanes=[{"id": str(l.id), "name": l.name} for l in lanes],
+    )
+    return [
+        ConsistencyFinding(
+            code=f.code, severity=f.severity, summary=f.summary,
+            node_ids=[UUID(x) for x in f.node_ids],
+            lane_ids=[UUID(x) for x in f.lane_ids],
+        )
+        for f in findings
+    ]

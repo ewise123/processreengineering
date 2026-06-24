@@ -30,6 +30,9 @@ class MapContext:
     selected_label: str | None
     node_ref_by_id: dict[UUID, str]
     claim_ref_to_id: dict[str, UUID]
+    node_ref_to_id: dict[str, UUID]
+    edge_ref_to_id: dict[str, UUID]
+    lane_ref_to_id: dict[str, UUID]
 
 
 def assemble_map_context(
@@ -56,6 +59,10 @@ def assemble_map_context(
 
     lane_ref_by_id: dict[UUID, str] = {l.id: f"L{i + 1}" for i, l in enumerate(lanes)}
     node_ref_by_id: dict[UUID, str] = {n.id: f"N{i + 1}" for i, n in enumerate(nodes)}
+    edge_ref_by_id: dict[UUID, str] = {e.id: f"E{i + 1}" for i, e in enumerate(edges)}
+    node_ref_to_id: dict[str, UUID] = {ref: nid for nid, ref in node_ref_by_id.items()}
+    edge_ref_to_id: dict[str, UUID] = {ref: eid for eid, ref in edge_ref_by_id.items()}
+    lane_ref_to_id: dict[str, UUID] = {ref: lid for lid, ref in lane_ref_by_id.items()}
 
     lanes_ctx = [{"idx": i + 1, "name": l.name} for i, l in enumerate(lanes)]
     nodes_ctx = [
@@ -159,4 +166,7 @@ def assemble_map_context(
         selected_label=selected_label,
         node_ref_by_id=node_ref_by_id,
         claim_ref_to_id=claim_ref_to_id,
+        node_ref_to_id=node_ref_to_id,
+        edge_ref_to_id=edge_ref_to_id,
+        lane_ref_to_id=lane_ref_to_id,
     )
