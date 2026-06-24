@@ -46,6 +46,9 @@ import type {
 import { buildVersionRows, type TreeRow } from "./version-tree";
 import { diffChangeCount, isEmptyDiff } from "./version-diff";
 import { bucketNodes, reviewByNodeMap } from "./review-summary";
+import { parseMentions } from "./mentions";
+import { selectionChips, selectionToContextRefs } from "./chat-context";
+import { browserChatSessionStore } from "./chat-session";
 
 type TabId = "chat" | "versions" | "issues" | "review" | "sources";
 
@@ -78,6 +81,7 @@ export function RightPanel({
   nodes,
   selected,
   onFocusNode,
+  onNavigate,
   reviewState,
   onSendRequest,
   onNavigateVersion,
@@ -93,6 +97,8 @@ export function RightPanel({
   selected: SelectedRef | null;
   /** Sets the canvas selection. Used by Issues "→ Node" links. */
   onFocusNode: (id: UUID) => void;
+  /** Teleport + flash any object (node/edge) on the canvas. Used by chat mentions. */
+  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
   reviewState?: ReviewState;
   onSendRequest: () => void;
   onNavigateVersion?: (versionId: UUID) => void;
@@ -229,6 +235,8 @@ export function RightPanel({
             modelId={modelId}
             versionId={versionId}
             selected={selected}
+            nodes={nodes}
+            onNavigate={onNavigate}
           />
         )}
         {tab === "versions" && (
@@ -285,30 +293,51 @@ function ChatTab({
   modelId,
   versionId,
   selected,
+  nodes,
+  onNavigate,
 }: {
   projectId: UUID;
   modelId: UUID;
   versionId: UUID;
   selected: SelectedRef | null;
+  nodes: { id: UUID; name: string; type: string; lane_id: UUID | null }[];
+  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
 }) {
-  const [history, setHistory] = useState<ChatTurn[]>([]);
+  const sessionStore = useMemo(() => browserChatSessionStore(), []);
+  const [history, setHistory] = useState<ChatTurn[]>(() => sessionStore.load(versionId));
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    setHistory(sessionStore.load(versionId));
+  }, [versionId, sessionStore]);
+
+  const labelById = useMemo(() => {
+    const m = new Map<UUID, string>();
+    for (const n of nodes) m.set(n.id, n.name);
+    return m;
+  }, [nodes]);
+
+  const chips = selectionChips(selected, labelById);
+
   const ask = useMutation({
     mutationFn: (input: { history: ChatTurn[]; userMessage: string }) =>
-      api.chatWithMap(projectId, modelId, versionId, {
+      api.chatSuggest(projectId, modelId, versionId, {
         history: input.history,
         user_message: input.userMessage,
-        selected_node_id: selected?.kind === "node" ? selected.id : null,
-        selected_edge_id: selected?.kind === "edge" ? selected.id : null,
+        mode: "ask",
+        context_refs: selectionToContextRefs(selected),
       }),
     onSuccess: (data, vars) => {
-      setHistory((curr) => [
-        ...curr,
-        { role: "user", content: vars.userMessage },
-        { role: "assistant", content: data.content },
-      ]);
+      setHistory((curr) => {
+        const next: ChatTurn[] = [
+          ...curr,
+          { role: "user", content: vars.userMessage },
+          { role: "assistant", content: data.message },
+        ];
+        sessionStore.save(versionId, next);
+        return next;
+      });
     },
   });
 
@@ -324,21 +353,36 @@ function ChatTab({
     ask.mutate({ history, userMessage: trimmed });
   };
 
+  const clearChat = () => {
+    sessionStore.clear(versionId);
+    setHistory([]);
+  };
+
   return (
     <div className="flex h-full flex-col">
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-3 py-3">
-        <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2.5">
-          <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-indigo-700">
-            POET Assistant
+        <div className="flex items-start justify-between gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2.5">
+          <div>
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-indigo-700">
+              POET Assistant
+            </div>
+            <div className="text-[11.5px] leading-relaxed text-indigo-900/80">
+              Grounded in this map&apos;s claims and citations. I link the steps
+              and transitions I mention — click to jump to them.
+            </div>
           </div>
-          <div className="text-[11.5px] leading-relaxed text-indigo-900/80">
-            Grounded in this map&apos;s claims and citations. I&apos;ll push
-            back if your premise contradicts the sources.
-          </div>
+          {history.length > 0 && (
+            <button
+              onClick={clearChat}
+              className="shrink-0 rounded-full border border-indigo-200 px-2 py-0.5 text-[10px] text-indigo-700 hover:bg-indigo-100"
+            >
+              Clear
+            </button>
+          )}
         </div>
 
         {history.map((m, i) => (
-          <ChatMsg key={i} turn={m} />
+          <ChatMsg key={i} turn={m} labelById={labelById} onNavigate={onNavigate} />
         ))}
 
         {ask.isPending && (
@@ -348,21 +392,10 @@ function ChatTab({
             </div>
             <div className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="flex items-center gap-1">
-                <span
-                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400"
-                  style={{ animationDelay: "0s" }}
-                />
-                <span
-                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400"
-                  style={{ animationDelay: "0.15s" }}
-                />
-                <span
-                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400"
-                  style={{ animationDelay: "0.3s" }}
-                />
-                <span className="ml-2 text-[11px] text-slate-500">
-                  Thinking…
-                </span>
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" style={{ animationDelay: "0s" }} />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" style={{ animationDelay: "0.15s" }} />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" style={{ animationDelay: "0.3s" }} />
+                <span className="ml-2 text-[11px] text-slate-500">Thinking…</span>
               </div>
             </div>
           </div>
@@ -376,6 +409,24 @@ function ChatTab({
       </div>
 
       <div className="shrink-0 border-t border-slate-200 p-2">
+        {chips.length > 0 && (
+          <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              Context
+            </span>
+            {chips.map((c) => (
+              <button
+                key={`${c.kind}:${c.id}`}
+                onClick={() => onNavigate({ kind: c.kind as "node" | "edge", id: c.id })}
+                className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-700 hover:bg-slate-100"
+                title="Jump to this object"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
+                {c.label}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="mb-1.5 flex flex-wrap gap-1.5">
           {SUGGESTED_PROMPTS.map((s) => (
             <button
@@ -414,7 +465,15 @@ function ChatTab({
   );
 }
 
-function ChatMsg({ turn }: { turn: ChatTurn }) {
+function ChatMsg({
+  turn,
+  labelById,
+  onNavigate,
+}: {
+  turn: ChatTurn;
+  labelById: Map<UUID, string>;
+  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+}) {
   if (turn.role === "user") {
     return (
       <div className="flex items-start justify-end gap-2">
@@ -424,6 +483,7 @@ function ChatMsg({ turn }: { turn: ChatTurn }) {
       </div>
     );
   }
+  const segments = parseMentions(turn.content);
   return (
     <div className="flex items-start gap-2">
       <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md bg-slate-900 text-[10px] font-bold text-white">
@@ -431,11 +491,40 @@ function ChatMsg({ turn }: { turn: ChatTurn }) {
       </div>
       <div className="min-w-0 flex-1">
         <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] leading-relaxed text-slate-800">
-          {turn.content.split("\n").map((line, i) => (
-            <p key={i} className={i > 0 ? "mt-2" : ""}>
-              {line}
-            </p>
-          ))}
+          {segments.map((seg, i) => {
+            if (seg.type === "text") {
+              return <span key={i} className="whitespace-pre-wrap">{seg.value}</span>;
+            }
+            const isNav = seg.kind === "node" || seg.kind === "edge";
+            const label =
+              seg.kind === "node"
+                ? labelById.get(seg.id) ?? "step"
+                : seg.kind === "edge"
+                  ? "transition"
+                  : seg.kind === "claim"
+                    ? "source"
+                    : "lane";
+            if (!isNav) {
+              return (
+                <span
+                  key={i}
+                  className="mx-0.5 inline-flex items-center rounded border border-slate-300 bg-white px-1 text-[10.5px] text-slate-600"
+                >
+                  {label}
+                </span>
+              );
+            }
+            return (
+              <button
+                key={i}
+                onClick={() => onNavigate({ kind: seg.kind as "node" | "edge", id: seg.id })}
+                className="mx-0.5 inline-flex items-center rounded border border-indigo-200 bg-indigo-50 px-1 text-[10.5px] font-medium text-indigo-700 hover:bg-indigo-100"
+                title="Jump to this object"
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>

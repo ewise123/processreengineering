@@ -445,6 +445,7 @@ export default function CanvasPage() {
                   : null
             }
             onFocusNode={(id) => canvasRef.current?.selectNode(id)}
+            onNavigate={(refTarget) => canvasRef.current?.navigateTo(refTarget)}
             reviewState={reviewState}
             onSendRequest={() => requestReviewMutation.mutate()}
             onNavigateVersion={handleNavigateVersion}
