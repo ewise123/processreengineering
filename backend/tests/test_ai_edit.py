@@ -202,7 +202,7 @@ def test_update_node_writes_description_preserving_other_properties(db):
     result = pm_api.update_node(
         project=project,
         node_id=n1.id,
-        payload=NodeUpdate(description="Clerk logs the order into SAP."),
+        payload=NodeUpdate(description="Clerk logs the order into SAP.", reason="clarify step"),
         db=db,
     )
     assert result.properties["description"] == "Clerk logs the order into SAP."
@@ -266,3 +266,57 @@ def test_deleting_proposed_node_cascades_edge(db):
     pm_api.delete_node(project=project, node_id=new_id, db=db)
     assert db.get(ProcessNode, new_id) is None
     assert db.scalars(select(ProcessEdge).where(ProcessEdge.target_node_id == new_id)).first() is None
+
+
+def test_apply_proposed_step_logs_ai_create_change_event(db):
+    """After apply_proposed_step, the new node has exactly one create change_event
+    with actor_kind='ai', source='reconcile', and cited_claim_ids containing the
+    real claim id that was passed in."""
+    from app.models.change_event import ChangeEvent
+
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    bogus_id = uuid4()
+
+    result = pm_api.apply_proposed_step(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=pm_api.AiProposedStepRequest(
+            source_node_id=n1.id, name="Verify budget", type="task",
+            lane_id=n1.lane_id, x=400.0, relative_y=20.0,
+            edge_label="if over $10k", cited_claim_ids=[claim.id, bogus_id],
+        ),
+        db=db,
+    )
+
+    new_node_id = result.node.id
+    events = list(
+        db.scalars(
+            select(ChangeEvent).where(
+                ChangeEvent.target_id == new_node_id,
+                ChangeEvent.kind == "create",
+            )
+        ).all()
+    )
+    assert len(events) == 1, f"Expected 1 create event, got {len(events)}"
+    ev = events[0]
+    assert ev.actor_kind == "ai"
+    assert ev.source == "reconcile"
+    # cited_claim_ids on the event records what was passed (as strings); real claim must be present
+    assert ev.cited_claim_ids is not None
+    assert str(claim.id) in ev.cited_claim_ids
+
+    # Also assert exactly one connect event for the created edge
+    new_edge_id = result.edge.id
+    edge_events = list(
+        db.scalars(
+            select(ChangeEvent).where(
+                ChangeEvent.target_id == new_edge_id,
+                ChangeEvent.kind == "connect",
+            )
+        ).all()
+    )
+    assert len(edge_events) == 1, f"Expected 1 connect event for edge, got {len(edge_events)}"
+    edge_ev = edge_events[0]
+    assert edge_ev.actor_kind == "ai"
+    assert edge_ev.source == "reconcile"

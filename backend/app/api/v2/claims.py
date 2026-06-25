@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -11,12 +11,18 @@ from app.db.session import get_db
 from app.enums import ConflictStatus, InputStatus
 from app.models.claim import Claim, ClaimCitation, ClaimConflict
 from app.models.input import Chunk, DocumentSection, Input
+from app.models.process import NodeClaimLink, ProcessModel, ProcessNode, ProcessVersion
 from app.models.project import Project
 from app.schemas.claim import (
     ClaimConflictRead,
+    ClaimCreate,
     ClaimExtractionResult,
+    ClaimImpact,
+    ClaimImpactMap,
     ClaimRead,
+    ClaimUpdate,
     ConflictDetectionResult,
+    ConflictResolve,
 )
 from app.schemas.common import Page
 from app.services.claims_extraction import extract_claims_from_text
@@ -61,7 +67,14 @@ def extract_input_claims(
         ).all()
     )
     if prior_claim_ids:
-        db.execute(delete(Claim).where(Claim.id.in_(prior_claim_ids)))
+        # Only wipe claims this extractor produced — manual claims that happen
+        # to cite the same chunk must survive a re-extraction.
+        db.execute(
+            delete(Claim).where(
+                Claim.id.in_(prior_claim_ids),
+                Claim.source == "extracted",
+            )
+        )
     inp.status = InputStatus.EXTRACTING.value
     inp.chunks_total = len(chunks)
     inp.chunks_processed = 0
@@ -145,6 +158,105 @@ def list_claims(
     )
 
 
+@router.post(
+    "/claims", response_model=ClaimRead, status_code=status.HTTP_201_CREATED
+)
+def create_claim(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    payload: ClaimCreate,
+    db: Annotated[Session, Depends(get_db)],
+) -> Claim:
+    """Create a manual claim. No citation required; source is 'manual' so the
+    extraction wipe never deletes it."""
+    claim = Claim(
+        project_id=project.id,
+        kind=payload.kind,
+        subject=payload.subject,
+        normalized=payload.normalized,
+        confidence=None,
+        source="manual",
+    )
+    db.add(claim)
+    db.commit()
+    db.refresh(claim)
+    return claim
+
+
+def _get_project_claim_or_404(claim_id: UUID, project: Project, db: Session) -> Claim:
+    claim = db.get(Claim, claim_id)
+    if claim is None or claim.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    return claim
+
+
+@router.patch("/claims/{claim_id}", response_model=ClaimRead)
+def update_claim(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    claim_id: UUID,
+    payload: ClaimUpdate,
+    db: Annotated[Session, Depends(get_db)],
+) -> Claim:
+    claim = _get_project_claim_or_404(claim_id, project, db)
+    if payload.kind is not None:
+        claim.kind = payload.kind
+    if payload.subject is not None:
+        claim.subject = payload.subject
+    if payload.normalized is not None:
+        claim.normalized = payload.normalized
+    db.commit()
+    db.refresh(claim)
+    return claim
+
+
+@router.get("/claims/{claim_id}/impact", response_model=ClaimImpact)
+def get_claim_impact(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    claim_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> ClaimImpact:
+    """Which process maps would have node evidence emptied if this claim were
+    deleted. Drives the frontend delete-confirm dialog."""
+    claim = _get_project_claim_or_404(claim_id, project, db)
+    rows = list(
+        db.execute(
+            select(ProcessModel.id, ProcessModel.name)
+            .join(ProcessVersion, ProcessVersion.model_id == ProcessModel.id)
+            .join(ProcessNode, ProcessNode.version_id == ProcessVersion.id)
+            .join(NodeClaimLink, NodeClaimLink.node_id == ProcessNode.id)
+            .where(
+                NodeClaimLink.claim_id == claim.id,
+                ProcessModel.project_id == project.id,
+                ProcessModel.deleted_at.is_(None),
+            )
+            .distinct()
+        ).all()
+    )
+    link_count = (
+        db.scalar(
+            select(func.count(NodeClaimLink.id)).where(
+                NodeClaimLink.claim_id == claim.id
+            )
+        )
+        or 0
+    )
+    return ClaimImpact(
+        claim_id=claim.id,
+        node_link_count=link_count,
+        maps=[ClaimImpactMap(model_id=r[0], name=r[1]) for r in rows],
+    )
+
+
+@router.delete("/claims/{claim_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_claim(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    claim_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    claim = _get_project_claim_or_404(claim_id, project, db)
+    db.delete(claim)
+    db.commit()
+
+
 @router.post("/detect-conflicts", response_model=ConflictDetectionResult)
 def run_conflict_detection(
     project: Annotated[Project, Depends(get_project_or_404)],
@@ -198,7 +310,7 @@ def run_conflict_detection(
                 kind=d.kind,
                 detected_by="ai",
                 resolution_status=ConflictStatus.DETECTED.value,
-                resolution_notes=d.reason,
+                detection_reason=d.reason,
             )
         )
         new_count += 1
@@ -233,3 +345,27 @@ def list_conflicts(
         limit=limit,
         offset=offset,
     )
+
+
+@router.patch(
+    "/conflicts/{conflict_id}", response_model=ClaimConflictRead
+)
+def resolve_conflict(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    conflict_id: UUID,
+    payload: ConflictResolve,
+    db: Annotated[Session, Depends(get_db)],
+) -> ClaimConflict:
+    conflict = db.get(ClaimConflict, conflict_id)
+    if conflict is None:
+        raise HTTPException(status_code=404, detail="Conflict not found")
+    # Project scope: claim_a must belong to this project.
+    claim_a = db.get(Claim, conflict.claim_a_id)
+    if claim_a is None or claim_a.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Conflict not found")
+    conflict.resolution_status = payload.resolution_status
+    if "resolution_notes" in payload.model_fields_set:
+        conflict.resolution_notes = payload.resolution_notes
+    db.commit()
+    db.refresh(conflict)
+    return conflict

@@ -13,12 +13,17 @@ from app.api.v2.reviews import _recompute_version_status
 from app.constants import LINEAGE_KEY
 from app.db.session import get_db
 from app.enums import (
+    ChangeActorKind,
+    ChangeKind,
+    ChangeSource,
+    ChangeTargetType,
     ClaimLinkKind,
     ConflictStatus,
     NodeType,
     ProcessVersionStatus,
     ReviewTargetType,
 )
+from app.services.change_log import NODE_SEMANTIC_FIELDS, model_id_for_version, pick_kind, record_change
 from app.models.identity import User
 from app.models.process import (
     EdgeClaimLink,
@@ -29,12 +34,15 @@ from app.models.process import (
     ProcessNode,
     ProcessVersion,
 )
+from app.models.process_inventory import ProcessSuggestion
 from app.models.project import Project
 from app.models.workflow import Review
 from app.models.claim import Claim, ClaimCitation, ClaimConflict
 from app.models.input import Chunk, DocumentSection, Input
 from app.schemas.process_map import (
     AiProposedStepResult,
+    BlankMapRequest,
+    BlankMapResult,
     ChatRequest,
     ChatResponse,
     CitationDetail,
@@ -45,6 +53,8 @@ from app.schemas.process_map import (
     EdgeUpdate,
     LaneCreate,
     LaneUpdate,
+    NodeClaimLinkRequest,
+    NodeClaimLinkResult,
     NodeCitationsRead,
     NodeCreate,
     NodeIssueDetail,
@@ -54,6 +64,7 @@ from app.schemas.process_map import (
     ProcessEdgeRead,
     ProcessGraphRead,
     ProcessLaneRead,
+    ProcessMapAttachRequest,
     ProcessMapGenerateRequest,
     ProcessMapGenerateResult,
     ProcessModelRead,
@@ -72,6 +83,12 @@ from app.schemas.version_ai_edit import (
     ValidateGap,
     ValidateProposal,
 )
+from app.schemas.version_reconcile import (
+    ReconcileBatchRead,
+    ReconcileOp,
+    ReconcileRequest,
+    ReconcileSuggestionRead,
+)
 from app.services.legacy_bpmn import build_bpmn_xml, validate_xml
 from app.services.map_ai_edit import (
     propose_relabel,
@@ -81,7 +98,12 @@ from app.services.map_ai_edit import (
 )
 from app.services.map_chat import ChatTurn as MapChatTurn, chat as run_map_chat
 from app.services.map_context import assemble_map_context
-from app.services.process_generation import generate_structure_from_claims
+from app.services.map_reconcile import compute_claim_delta, propose_reconcile
+from app.services import map_reconcile as _map_reconcile_mod
+from app.services.process_generation import (
+    generate_structure_from_best_practices,
+    generate_structure_from_claims,
+)
 from app.schemas.version_chat_suggest import (
     ChatMode,
     ChatSuggestRequest,
@@ -127,6 +149,302 @@ def _level_for_prompt(level: str) -> str:
     return level.lstrip("Ll") or "2"
 
 
+def _create_model_and_version(
+    db: Session,
+    *,
+    project: Project,
+    name: str,
+    level: str,
+    created_by: UUID,
+    bpmn_xml: str | None = None,
+    notes: str | None = None,
+    default_lane_name: str | None = "Process Team",
+) -> tuple[ProcessModel, ProcessVersion, ProcessLane | None]:
+    """Find-or-create the (project, level, name) ProcessModel, create the next
+    ProcessVersion (lineage stamped from the prior top version), and one default
+    lane. Shared by AI generation and blank-map creation.
+
+    The caller is responsible for db.flush()/db.commit() and for adding nodes."""
+    canonical_level = _normalize_level(level)
+    model = db.scalars(
+        select(ProcessModel)
+        .where(
+            ProcessModel.project_id == project.id,
+            ProcessModel.level == canonical_level,
+            ProcessModel.name == name,
+            ProcessModel.deleted_at.is_(None),
+        )
+        .limit(1)
+    ).first()
+    if model is None:
+        model = ProcessModel(
+            project_id=project.id, name=name, level=canonical_level
+        )
+        db.add(model)
+        db.flush()
+
+    last_version_num = (
+        db.scalar(
+            select(func.coalesce(func.max(ProcessVersion.version_number), 0)).where(
+                ProcessVersion.model_id == model.id
+            )
+        )
+        or 0
+    )
+    parent_version = db.scalars(
+        select(ProcessVersion)
+        .where(
+            ProcessVersion.model_id == model.id,
+            ProcessVersion.version_number == last_version_num,
+        )
+        .limit(1)
+    ).first()
+
+    version = ProcessVersion(
+        model_id=model.id,
+        version_number=last_version_num + 1,
+        parent_version_id=parent_version.id if parent_version else None,
+        status=ProcessVersionStatus.DRAFT.value,
+        bpmn_xml=bpmn_xml,
+        notes=notes,
+        created_by=created_by,
+    )
+    db.add(version)
+    db.flush()
+
+    lane: ProcessLane | None = None
+    if default_lane_name is not None:
+        lane = ProcessLane(version_id=version.id, name=default_lane_name, order_index=0)
+        db.add(lane)
+        db.flush()
+    return model, version, lane
+
+
+def _persist_structure_graph(
+    db: Session,
+    *,
+    version: ProcessVersion,
+    structure,
+    claims: list[Claim],
+    create_claim_links: bool,
+    origin_reason: str,
+) -> tuple[list[str], list[dict], dict[str, list[ProcessEdge]], int]:
+    """Persist lanes/nodes/edges from an AI structure, then write the origin
+    change events. Shared by claim-based generation and best-practice seeding.
+
+    When `create_claim_links` is True, each element's claim_refs are resolved
+    against `claims` into NodeClaimLinks/EdgeClaimLinks and the origin events
+    cite them. When False (best-practice seeding, no claims), no links are
+    created and every origin event carries empty cited_claim_ids. `origin_reason`
+    is stamped as the reason on every node/edge create event.
+
+    Returns (role_order, elements, edges_by_source, node_link_count)."""
+    # Lanes: one per unique role in document order.
+    role_order: list[str] = []
+    seen: set[str] = set()
+    for step in structure.steps:
+        r = (step.get("role") or "Process Team").strip()
+        if r not in seen:
+            role_order.append(r)
+            seen.add(r)
+    if not role_order:
+        role_order = ["Process Team"]
+
+    lane_by_role: dict[str, ProcessLane] = {}
+    for idx, role in enumerate(role_order):
+        lane = ProcessLane(version_id=version.id, name=role, order_index=idx)
+        db.add(lane)
+        lane_by_role[role] = lane
+    db.flush()
+
+    # Build the ordered element list (Start, steps with gateways inserted, End).
+    gateway_by_after_step = {gw["after_step"]: gw for gw in structure.gateways}
+    elements: list[dict] = []
+    first_role = (structure.steps[0].get("role") or "Process Team").strip() if structure.steps else "Process Team"
+    last_role = (structure.steps[-1].get("role") or "Process Team").strip() if structure.steps else "Process Team"
+
+    elements.append(
+        {"id": "Start_1", "kind": "start", "name": "Start", "role": first_role, "claim_refs": []}
+    )
+    for step in structure.steps:
+        elements.append(
+            {
+                "id": step["id"],
+                "kind": "step",
+                "name": step.get("name", ""),
+                "role": (step.get("role") or "Process Team").strip(),
+                "bpmn_type": (step.get("type") or "userTask").strip(),
+                "claim_refs": step.get("claim_refs") or [],
+            }
+        )
+        if step["id"] in gateway_by_after_step:
+            gw = gateway_by_after_step[step["id"]]
+            elements.append(
+                {
+                    "id": gw["id"],
+                    "kind": "gateway",
+                    "name": gw.get("name", "Decision?"),
+                    "role": (step.get("role") or "Process Team").strip(),
+                    "gateway_kind": (gw.get("type") or "exclusive").strip(),
+                    "claim_refs": gw.get("claim_refs") or [],
+                    "yes_to": gw.get("yes_to"),
+                    "no_to": gw.get("no_to"),
+                }
+            )
+    elements.append(
+        {"id": "End_1", "kind": "end", "name": "End", "role": last_role, "claim_refs": []}
+    )
+
+    # Persist nodes.
+    node_by_external_id: dict[str, ProcessNode] = {}
+    for col, el in enumerate(elements):
+        if el["kind"] == "start":
+            ntype = NodeType.EVENT_START.value
+        elif el["kind"] == "end":
+            ntype = NodeType.EVENT_END.value
+        elif el["kind"] == "gateway":
+            ntype = _node_type_for_gateway(el["gateway_kind"])
+        else:
+            ntype = NodeType.TASK.value
+        properties = {"col": col, "external_id": el["id"]}
+        if el["kind"] == "step":
+            properties["bpmn_task_type"] = el.get("bpmn_type")
+        if el["kind"] == "gateway":
+            properties["bpmn_gateway_kind"] = el.get("gateway_kind")
+        node = ProcessNode(
+            version_id=version.id,
+            lane_id=lane_by_role[el["role"]].id,
+            type=ntype,
+            name=el["name"],
+            position={"col": col},
+            properties=properties,
+        )
+        db.add(node)
+        node_by_external_id[el["id"]] = node
+    db.flush()
+    for node in node_by_external_id.values():
+        node.properties = {**(node.properties or {}), LINEAGE_KEY: str(node.id)}
+    db.flush()
+
+    # Derive sequence edges (mirror legacy add_flow logic, logical only).
+    el_by_id = {el["id"]: el for el in elements}
+
+    def _add_edge(src_id: str, tgt_id: str, label: str | None) -> ProcessEdge | None:
+        if src_id not in node_by_external_id or tgt_id not in node_by_external_id:
+            return None
+        edge = ProcessEdge(
+            version_id=version.id,
+            source_node_id=node_by_external_id[src_id].id,
+            target_node_id=node_by_external_id[tgt_id].id,
+            label=label or None,
+        )
+        db.add(edge)
+        return edge
+
+    edges_by_source: dict[str, list[ProcessEdge]] = {}
+    for i in range(len(elements) - 1):
+        src = elements[i]
+        nxt = elements[i + 1]
+        if src["kind"] == "gateway":
+            is_parallel = src["gateway_kind"] == "parallel"
+            yes_edge = _add_edge(src["id"], nxt["id"], "" if is_parallel else "Yes")
+            if yes_edge:
+                edges_by_source.setdefault(src["id"], []).append(yes_edge)
+            no_tgt = src.get("no_to") or "End_1"
+            if no_tgt not in el_by_id or no_tgt == nxt["id"]:
+                no_tgt = "End_1"
+            if no_tgt != nxt["id"]:
+                no_edge = _add_edge(src["id"], no_tgt, "" if is_parallel else "No")
+                if no_edge:
+                    edges_by_source.setdefault(src["id"], []).append(no_edge)
+        else:
+            edge = _add_edge(src["id"], nxt["id"], None)
+            if edge:
+                edges_by_source.setdefault(src["id"], []).append(edge)
+    db.flush()
+
+    # Resolve claim_refs → node_claim_links + edge_claim_links.
+    # Build claim-id lists per element id so origin events can cite them.
+    # Resolved here (after nodes/edges have ids) so cited_claim_ids is populated
+    # on the same create event rather than requiring a subsequent link_claim event.
+    # For best-practice seeding there are no claims, so this whole pass is skipped
+    # and every event carries empty cited_claim_ids.
+    node_link_count = 0
+    cited_ids_by_el: dict[str, list] = {}
+    if create_claim_links:
+        for el in elements:
+            node = node_by_external_id.get(el["id"])
+            if node is None:
+                continue
+            valid_refs = [
+                ref for ref in el.get("claim_refs", [])
+                if isinstance(ref, int) and 0 <= ref < len(claims)
+            ]
+            el_claim_ids = [claims[ref].id for ref in valid_refs]
+            cited_ids_by_el[el["id"]] = el_claim_ids
+            for cid in el_claim_ids:
+                db.add(
+                    NodeClaimLink(
+                        node_id=node.id,
+                        claim_id=cid,
+                        link_kind=ClaimLinkKind.SUPPORTS.value,
+                    )
+                )
+                node_link_count += 1
+            # Gateway claim_refs also propagate to its outgoing edges (decision logic)
+            if el["kind"] == "gateway":
+                for edge in edges_by_source.get(el["id"], []):
+                    for cid in el_claim_ids:
+                        db.add(
+                            EdgeClaimLink(
+                                edge_id=edge.id,
+                                claim_id=cid,
+                                link_kind=ClaimLinkKind.INFERRED.value,
+                            )
+                        )
+
+    # Write origin change events (generation trail). Edges carry no direct
+    # claim_refs in the AI structure (only gateways propagate to
+    # edge_claim_links), so edge events are emitted without cited_claim_ids.
+    for el in elements:
+        node = node_by_external_id.get(el["id"])
+        if node is None:
+            continue
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=node.id,
+            model_id=version.model_id,
+            version_id=version.id,
+            kind=ChangeKind.CREATE.value,
+            reason=origin_reason,
+            actor_kind=ChangeActorKind.AI.value,
+            source=ChangeSource.GENERATION.value,
+            after={"name": node.name, "type": node.type},
+            cited_claim_ids=cited_ids_by_el.get(el["id"]) or None,
+        )
+
+    all_edges = [edge for edge_list in edges_by_source.values() for edge in edge_list]
+    for edge in all_edges:
+        record_change(
+            db,
+            target_type=ChangeTargetType.EDGE.value,
+            target_id=edge.id,
+            model_id=version.model_id,
+            version_id=version.id,
+            kind=ChangeKind.CREATE.value,
+            reason=origin_reason,
+            actor_kind=ChangeActorKind.AI.value,
+            source=ChangeSource.GENERATION.value,
+            after={
+                "source_node_id": str(edge.source_node_id),
+                "target_node_id": str(edge.target_node_id),
+            },
+        )
+
+    return role_order, elements, edges_by_source, node_link_count
+
+
 @router.post(
     "/generate-process-map",
     response_model=ProcessMapGenerateResult,
@@ -140,32 +458,19 @@ def generate_process_map(
 ) -> ProcessMapGenerateResult:
     # 1. Load claims (optionally scoped to a detection segment or input ids)
     claim_query = select(Claim).where(Claim.project_id == project.id)
-    if payload.segment_id is not None:
-        from app.enums import DetectionRunStatus
-        from app.models.process_detection import (
-            ClaimSegmentMembership,
-            DetectionRun,
-            ProcessSegment,
-        )
+    if payload.process_id is not None:
+        from app.models.process_inventory import Process, ProcessClaimLink
 
-        segment = db.get(ProcessSegment, payload.segment_id)
-        if segment is None or segment.project_id != project.id:
-            raise HTTPException(
-                status_code=404, detail="Detection segment not found"
-            )
-        run = db.get(DetectionRun, segment.detection_run_id)
-        if run is None or run.status != DetectionRunStatus.ACCEPTED.value:
-            raise HTTPException(
-                status_code=409,
-                detail="Segment belongs to a detection run that is not accepted.",
-            )
-        claim_query = (
-            claim_query.join(
-                ClaimSegmentMembership,
-                ClaimSegmentMembership.claim_id == Claim.id,
-            )
-            .where(ClaimSegmentMembership.segment_id == payload.segment_id)
-        )
+        process = db.get(Process, payload.process_id)
+        if (
+            process is None
+            or process.project_id != project.id
+            or process.deleted_at is not None
+        ):
+            raise HTTPException(status_code=404, detail="Process not found")
+        claim_query = claim_query.join(
+            ProcessClaimLink, ProcessClaimLink.claim_id == Claim.id
+        ).where(ProcessClaimLink.process_id == payload.process_id)
     elif payload.scope_input_ids:
         from app.models.claim import ClaimCitation
 
@@ -208,207 +513,30 @@ def generate_process_map(
     if not valid:
         raise HTTPException(status_code=500, detail=f"Generated BPMN XML failed validation: {err}")
 
-    # 4. Find-or-create ProcessModel for (project, level, name)
+    # 4-5. Find-or-create ProcessModel + next ProcessVersion (shared helper).
     canonical_level = _normalize_level(payload.level)
-    model = db.scalars(
-        select(ProcessModel)
-        .where(
-            ProcessModel.project_id == project.id,
-            ProcessModel.level == canonical_level,
-            ProcessModel.name == structure.process_name,
-            ProcessModel.deleted_at.is_(None),
-        )
-        .limit(1)
-    ).first()
-    if model is None:
-        model = ProcessModel(
-            project_id=project.id,
-            name=structure.process_name,
-            level=canonical_level,
-        )
-        db.add(model)
-        db.flush()
-
-    # 5. Compute next version_number for this model
-    last_version_num = db.scalar(
-        select(func.coalesce(func.max(ProcessVersion.version_number), 0)).where(
-            ProcessVersion.model_id == model.id
-        )
-    ) or 0
-
-    parent_version = db.scalars(
-        select(ProcessVersion)
-        .where(ProcessVersion.model_id == model.id, ProcessVersion.version_number == last_version_num)
-        .limit(1)
-    ).first()
-
-    version = ProcessVersion(
-        model_id=model.id,
-        version_number=last_version_num + 1,
-        parent_version_id=parent_version.id if parent_version else None,
-        status=ProcessVersionStatus.DRAFT.value,
+    model, version, _ = _create_model_and_version(
+        db,
+        project=project,
+        name=structure.process_name,
+        level=canonical_level,
+        created_by=user.id,
         bpmn_xml=bpmn_xml,
         notes=f"Generated from {len(claims)} claim(s).",
-        created_by=user.id,
-        source_segment_id=payload.segment_id,
+        default_lane_name=None,  # AI path builds one lane per role
     )
-    db.add(version)
-    db.flush()
+    if payload.process_id is not None:
+        model.process_id = payload.process_id
 
-    # 6. Persist lanes (one per unique role in document order)
-    role_order: list[str] = []
-    seen: set[str] = set()
-    for step in structure.steps:
-        r = (step.get("role") or "Process Team").strip()
-        if r not in seen:
-            role_order.append(r)
-            seen.add(r)
-    if not role_order:
-        role_order = ["Process Team"]
-
-    lane_by_role: dict[str, ProcessLane] = {}
-    for idx, role in enumerate(role_order):
-        lane = ProcessLane(version_id=version.id, name=role, order_index=idx)
-        db.add(lane)
-        lane_by_role[role] = lane
-    db.flush()
-
-    # 7. Build the ordered element list (Start, steps with gateways inserted, End)
-    gateway_by_after_step = {gw["after_step"]: gw for gw in structure.gateways}
-    elements: list[dict] = []
-    first_role = (structure.steps[0].get("role") or "Process Team").strip() if structure.steps else "Process Team"
-    last_role = (structure.steps[-1].get("role") or "Process Team").strip() if structure.steps else "Process Team"
-
-    elements.append(
-        {"id": "Start_1", "kind": "start", "name": "Start", "role": first_role, "claim_refs": []}
+    # 6-11. Persist lanes/nodes/edges + claim links + origin events (shared).
+    role_order, elements, edges_by_source, node_link_count = _persist_structure_graph(
+        db,
+        version=version,
+        structure=structure,
+        claims=claims,
+        create_claim_links=True,
+        origin_reason="Generated from source claims",
     )
-    for step in structure.steps:
-        elements.append(
-            {
-                "id": step["id"],
-                "kind": "step",
-                "name": step.get("name", ""),
-                "role": (step.get("role") or "Process Team").strip(),
-                "bpmn_type": (step.get("type") or "userTask").strip(),
-                "claim_refs": step.get("claim_refs") or [],
-            }
-        )
-        if step["id"] in gateway_by_after_step:
-            gw = gateway_by_after_step[step["id"]]
-            elements.append(
-                {
-                    "id": gw["id"],
-                    "kind": "gateway",
-                    "name": gw.get("name", "Decision?"),
-                    "role": (step.get("role") or "Process Team").strip(),
-                    "gateway_kind": (gw.get("type") or "exclusive").strip(),
-                    "claim_refs": gw.get("claim_refs") or [],
-                    "yes_to": gw.get("yes_to"),
-                    "no_to": gw.get("no_to"),
-                }
-            )
-    elements.append(
-        {"id": "End_1", "kind": "end", "name": "End", "role": last_role, "claim_refs": []}
-    )
-
-    # 8. Persist nodes
-    node_by_external_id: dict[str, ProcessNode] = {}
-    for col, el in enumerate(elements):
-        if el["kind"] == "start":
-            ntype = NodeType.EVENT_START.value
-        elif el["kind"] == "end":
-            ntype = NodeType.EVENT_END.value
-        elif el["kind"] == "gateway":
-            ntype = _node_type_for_gateway(el["gateway_kind"])
-        else:
-            ntype = NodeType.TASK.value
-        properties = {"col": col, "external_id": el["id"]}
-        if el["kind"] == "step":
-            properties["bpmn_task_type"] = el.get("bpmn_type")
-        if el["kind"] == "gateway":
-            properties["bpmn_gateway_kind"] = el.get("gateway_kind")
-        node = ProcessNode(
-            version_id=version.id,
-            lane_id=lane_by_role[el["role"]].id,
-            type=ntype,
-            name=el["name"],
-            position={"col": col},
-            properties=properties,
-        )
-        db.add(node)
-        node_by_external_id[el["id"]] = node
-    db.flush()
-    for node in node_by_external_id.values():
-        node.properties = {**(node.properties or {}), LINEAGE_KEY: str(node.id)}
-    db.flush()
-
-    # 9. Derive sequence edges (mirror legacy add_flow logic, logical only — no geometry)
-    el_by_id = {el["id"]: el for el in elements}
-
-    def _add_edge(src_id: str, tgt_id: str, label: str | None) -> ProcessEdge | None:
-        if src_id not in node_by_external_id or tgt_id not in node_by_external_id:
-            return None
-        edge = ProcessEdge(
-            version_id=version.id,
-            source_node_id=node_by_external_id[src_id].id,
-            target_node_id=node_by_external_id[tgt_id].id,
-            label=label or None,
-        )
-        db.add(edge)
-        return edge
-
-    edges_by_source: dict[str, list[ProcessEdge]] = {}
-    for i in range(len(elements) - 1):
-        src = elements[i]
-        nxt = elements[i + 1]
-        if src["kind"] == "gateway":
-            is_parallel = src["gateway_kind"] == "parallel"
-            yes_edge = _add_edge(src["id"], nxt["id"], "" if is_parallel else "Yes")
-            if yes_edge:
-                edges_by_source.setdefault(src["id"], []).append(yes_edge)
-            no_tgt = src.get("no_to") or "End_1"
-            if no_tgt not in el_by_id or no_tgt == nxt["id"]:
-                no_tgt = "End_1"
-            if no_tgt != nxt["id"]:
-                no_edge = _add_edge(src["id"], no_tgt, "" if is_parallel else "No")
-                if no_edge:
-                    edges_by_source.setdefault(src["id"], []).append(no_edge)
-        else:
-            edge = _add_edge(src["id"], nxt["id"], None)
-            if edge:
-                edges_by_source.setdefault(src["id"], []).append(edge)
-    db.flush()
-
-    # 10. Resolve claim_refs → node_claim_links + edge_claim_links
-    node_link_count = 0
-    for el in elements:
-        node = node_by_external_id.get(el["id"])
-        if node is None:
-            continue
-        for ref in el.get("claim_refs", []):
-            if not isinstance(ref, int) or ref < 0 or ref >= len(claims):
-                continue
-            db.add(
-                NodeClaimLink(
-                    node_id=node.id,
-                    claim_id=claims[ref].id,
-                    link_kind=ClaimLinkKind.SUPPORTS.value,
-                )
-            )
-            node_link_count += 1
-        # Gateway claim_refs also propagate to its outgoing edges (decision logic)
-        if el["kind"] == "gateway":
-            for edge in edges_by_source.get(el["id"], []):
-                for ref in el.get("claim_refs", []):
-                    if not isinstance(ref, int) or ref < 0 or ref >= len(claims):
-                        continue
-                    db.add(
-                        EdgeClaimLink(
-                            edge_id=edge.id,
-                            claim_id=claims[ref].id,
-                            link_kind=ClaimLinkKind.INFERRED.value,
-                        )
-                    )
 
     db.commit()
 
@@ -422,6 +550,140 @@ def generate_process_map(
         edge_count=sum(len(v) for v in edges_by_source.values()),
         node_link_count=node_link_count,
         bpmn_xml_size=len(bpmn_xml),
+    )
+
+
+@router.post(
+    "/generate-best-practices",
+    response_model=ProcessMapGenerateResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def generate_best_practices_map(
+    payload: ProcessMapGenerateRequest,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessMapGenerateResult:
+    """Seed a starter map from the LLM's GENERIC best-practice knowledge for a
+    named process — no client documents or claims required. Each node/edge gets
+    an origin change_event with source=generation, actor_kind=ai, EMPTY
+    cited_claim_ids, and reason="Best-practice assumption (no source document)".
+    No NodeClaimLinks are created (there are no claims). The existing claim-based
+    generate-process-map path is unaffected."""
+    # 1. Call Claude with the best-practice framing (name/level/focus only —
+    #    scope_input_ids/process_id are ignored here).
+    try:
+        structure = generate_structure_from_best_practices(
+            level=_level_for_prompt(payload.level),
+            process_name=payload.name,
+            focus=payload.focus,
+            map_type=payload.map_type,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    # 2. Render BPMN XML for storage / canvas.
+    structure_dict = {
+        "process_name": structure.process_name,
+        "steps": structure.steps,
+        "gateways": structure.gateways,
+    }
+    bpmn_xml = build_bpmn_xml(structure_dict)
+    valid, err = validate_xml(bpmn_xml)
+    if not valid:
+        raise HTTPException(status_code=500, detail=f"Generated BPMN XML failed validation: {err}")
+
+    # 3. Find-or-create ProcessModel + next ProcessVersion (shared helper).
+    canonical_level = _normalize_level(payload.level)
+    model, version, _ = _create_model_and_version(
+        db,
+        project=project,
+        name=structure.process_name,
+        level=canonical_level,
+        created_by=user.id,
+        bpmn_xml=bpmn_xml,
+        notes="Seeded from best-practice knowledge (no source document).",
+        default_lane_name=None,  # AI path builds one lane per role
+    )
+
+    # 4. Persist lanes/nodes/edges + origin events. No claims, no claim links;
+    #    every origin event carries the best-practice reason + empty cited ids.
+    role_order, elements, edges_by_source, node_link_count = _persist_structure_graph(
+        db,
+        version=version,
+        structure=structure,
+        claims=[],
+        create_claim_links=False,
+        origin_reason="Best-practice assumption (no source document)",
+    )
+
+    db.commit()
+
+    return ProcessMapGenerateResult(
+        model_id=model.id,
+        version_id=version.id,
+        process_name=structure.process_name,
+        level=canonical_level,
+        lane_count=len(role_order),
+        node_count=len(elements),
+        edge_count=sum(len(v) for v in edges_by_source.values()),
+        node_link_count=node_link_count,
+        bpmn_xml_size=len(bpmn_xml),
+    )
+
+
+@router.post(
+    "/process-maps",
+    response_model=BlankMapResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_blank_map(
+    payload: BlankMapRequest,
+    project: Annotated[Project, Depends(get_project_or_404)],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> BlankMapResult:
+    """Create an empty, fully editable map: model + version + one default lane +
+    Start and End nodes. No AI, no claims required."""
+    model, version, lane = _create_model_and_version(
+        db,
+        project=project,
+        name=payload.name,
+        level=payload.level,
+        created_by=user.id,
+        notes="Created as a blank map.",
+    )
+    start = ProcessNode(
+        version_id=version.id,
+        lane_id=lane.id,
+        type=NodeType.EVENT_START.value,
+        name="Start",
+        position={"col": 0},
+        properties={"col": 0, "external_id": "Start_1"},
+    )
+    end = ProcessNode(
+        version_id=version.id,
+        lane_id=lane.id,
+        type=NodeType.EVENT_END.value,
+        name="End",
+        position={"col": 1},
+        properties={"col": 1, "external_id": "End_1"},
+    )
+    db.add(start)
+    db.add(end)
+    db.flush()
+    for node in (start, end):
+        node.properties = {**(node.properties or {}), LINEAGE_KEY: str(node.id)}
+    db.flush()
+    db.commit()
+    return BlankMapResult(
+        model_id=model.id,
+        version_id=version.id,
+        name=model.name,
+        level=model.level,
+        lane_id=lane.id,
+        start_node_id=start.id,
+        end_node_id=end.id,
     )
 
 
@@ -443,42 +705,100 @@ def list_process_maps(
     if not models:
         return []
 
-    # One row per model: the highest version_number row, via DISTINCT ON.
-    model_ids = [m.id for m in models]
-    from app.models.process_detection import DetectionRun, ProcessSegment
+    from app.models.process_inventory import Process, ProcessClaimLink
 
-    rows = db.execute(
-        select(
-            ProcessVersion.model_id,
-            ProcessVersion.id,
-            ProcessVersion.version_number,
-            ProcessVersion.source_segment_id,
-            DetectionRun.status,
-        )
-        .outerjoin(ProcessSegment, ProcessSegment.id == ProcessVersion.source_segment_id)
-        .outerjoin(DetectionRun, DetectionRun.id == ProcessSegment.detection_run_id)
+    model_ids = [m.id for m in models]
+
+    # Latest version per model (highest version_number) via DISTINCT ON.
+    latest_rows = db.execute(
+        select(ProcessVersion.model_id, ProcessVersion.id, ProcessVersion.version_number)
         .where(ProcessVersion.model_id.in_(model_ids))
-        .order_by(
-            ProcessVersion.model_id,
-            ProcessVersion.version_number.desc(),
-        )
+        .order_by(ProcessVersion.model_id, ProcessVersion.version_number.desc())
         .distinct(ProcessVersion.model_id)
     ).all()
-    latest_by_model: dict = {
-        row[0]: (row[1], row[2], row[3], row[4]) for row in rows
-    }
+    latest_by_model: dict = {row[0]: (row[1], row[2]) for row in latest_rows}
+
+    # Process name per model (process_id may be NULL for unlinked maps).
+    proc_ids = [m.process_id for m in models if m.process_id is not None]
+    proc_name_by_id: dict = {}
+    if proc_ids:
+        proc_name_by_id = {
+            r[0]: r[1]
+            for r in db.execute(
+                select(Process.id, Process.name).where(Process.id.in_(proc_ids))
+            ).all()
+        }
+
+    # Unreconciled claim count per model: claims linked to the model's process
+    # but NOT cited by any node in the model's LATEST version. Computed per
+    # model because the "latest version" differs per model.
+    def _unreconciled(model: ProcessModel) -> int:
+        if model.process_id is None:
+            return 0
+        latest = latest_by_model.get(model.id)
+        if latest is None:
+            # Process has links but no version yet — all linked claims are unreconciled.
+            return db.scalar(
+                select(func.count(ProcessClaimLink.id)).where(
+                    ProcessClaimLink.process_id == model.process_id
+                )
+            ) or 0
+        version_id = latest[0]
+        cited_subq = (
+            select(NodeClaimLink.claim_id)
+            .join(ProcessNode, ProcessNode.id == NodeClaimLink.node_id)
+            .where(ProcessNode.version_id == version_id)
+        )
+        return db.scalar(
+            select(func.count(ProcessClaimLink.id))
+            .where(
+                ProcessClaimLink.process_id == model.process_id,
+                ProcessClaimLink.claim_id.notin_(cited_subq),
+            )
+        ) or 0
 
     return [
         ProcessModelRead.model_validate(m).model_copy(
             update={
-                "latest_version_id": latest_by_model.get(m.id, (None, None, None, None))[0],
-                "latest_version_number": latest_by_model.get(m.id, (None, None, None, None))[1],
-                "latest_source_segment_id": latest_by_model.get(m.id, (None, None, None, None))[2],
-                "latest_source_run_status": latest_by_model.get(m.id, (None, None, None, None))[3],
+                "latest_version_id": latest_by_model.get(m.id, (None, None))[0],
+                "latest_version_number": latest_by_model.get(m.id, (None, None))[1],
+                "process_id": m.process_id,
+                "process_name": proc_name_by_id.get(m.process_id),
+                "unreconciled_claim_count": int(_unreconciled(m)),
             }
         )
         for m in models
     ]
+
+
+@router.patch("/process-maps/{model_id}", response_model=ProcessModelRead)
+def attach_process_to_map(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    payload: ProcessMapAttachRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessModelRead:
+    """Attach (or detach, with process_id=null) a process to an existing map.
+    Used to re-home migrated 'unlinked maps' onto a process."""
+    from app.models.process_inventory import Process
+
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id or model.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Process map not found")
+    if payload.process_id is not None:
+        proc = db.get(Process, payload.process_id)
+        if proc is None or proc.project_id != project.id or proc.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Process not found")
+    model.process_id = payload.process_id
+    db.commit()
+    db.refresh(model)
+    proc_name = None
+    if model.process_id is not None:
+        proc = db.get(Process, model.process_id)
+        proc_name = proc.name if proc else None
+    return ProcessModelRead.model_validate(model).model_copy(
+        update={"process_id": model.process_id, "process_name": proc_name}
+    )
 
 
 def _check_node_in_project(
@@ -544,6 +864,19 @@ def create_node(
     db.add(node)
     db.flush()
     node.properties = {**node.properties, LINEAGE_KEY: str(node.id)}
+    db.flush()
+    record_change(
+        db,
+        target_type=ChangeTargetType.NODE.value,
+        target_id=node.id,
+        model_id=version.model_id,
+        version_id=version.id,
+        kind=ChangeKind.CREATE.value,
+        reason="Added from the shape palette",
+        after={"name": node.name, "type": node.type,
+               "lane_id": str(node.lane_id) if node.lane_id else None},
+        source=ChangeSource.MANUAL.value,
+    )
     db.commit()
     db.refresh(node)
     return node
@@ -560,6 +893,16 @@ def update_node(
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     _check_node_in_project(node, project.id, db)
+
+    def _semantic_snapshot() -> dict:
+        return {
+            "name": node.name,
+            "type": node.type,
+            "lane_id": str(node.lane_id) if node.lane_id else None,
+            "description": (node.properties or {}).get("description"),
+        }
+
+    old = _semantic_snapshot()
 
     if payload.lane_id is not None:
         target_lane = db.get(ProcessLane, payload.lane_id)
@@ -586,6 +929,29 @@ def update_node(
             new_position["relative_y"] = payload.relative_y
         node.position = new_position
         flag_modified(node, "position")
+
+    new = _semantic_snapshot()
+    changed = {f: (old[f], new[f]) for f in NODE_SEMANTIC_FIELDS if old[f] != new[f]}
+    if changed:
+        if not (payload.reason and payload.reason.strip()):
+            db.rollback()
+            raise HTTPException(
+                status_code=422,
+                detail="A reason is required when changing a step's name, description, type, or lane.",
+            )
+        kind = pick_kind({NODE_SEMANTIC_FIELDS[f] for f in changed})
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=node.id,
+            model_id=model_id_for_version(db, node.version_id),
+            version_id=node.version_id,
+            kind=kind.value,
+            reason=payload.reason.strip(),
+            before={f: changed[f][0] for f in changed},
+            after={f: changed[f][1] for f in changed},
+            source=ChangeSource.MANUAL.value,
+        )
     db.commit()
     db.refresh(node)
     return node
@@ -662,6 +1028,19 @@ def create_edge(
         label=payload.label,
     )
     db.add(edge)
+    db.flush()
+    record_change(
+        db,
+        target_type=ChangeTargetType.EDGE.value,
+        target_id=edge.id,
+        model_id=version.model_id,
+        version_id=version.id,
+        kind=ChangeKind.CONNECT.value,
+        reason="Connected two nodes",
+        after={"source_node_id": str(edge.source_node_id),
+               "target_node_id": str(edge.target_node_id)},
+        source=ChangeSource.MANUAL.value,
+    )
     db.commit()
     db.refresh(edge)
     return edge
@@ -678,13 +1057,32 @@ def update_edge(
     if edge is None:
         raise HTTPException(status_code=404, detail="Edge not found")
     _check_edge_in_project(edge, project.id, db)
+
+    old_label = edge.label
     if "label" in payload.model_fields_set:
-        # Empty string ↔ "no label" so the round-trip is consistent.
         edge.label = payload.label or None
     if "bend_x" in payload.model_fields_set:
         edge.bend_x = payload.bend_x
     if "bend_y" in payload.model_fields_set:
         edge.bend_y = payload.bend_y
+
+    label_changed = "label" in payload.model_fields_set and (payload.label or None) != old_label
+    if label_changed:
+        if not (payload.reason and payload.reason.strip()):
+            db.rollback()
+            raise HTTPException(status_code=422, detail="A reason is required to change an edge label.")
+        record_change(
+            db,
+            target_type=ChangeTargetType.EDGE.value,
+            target_id=edge.id,
+            model_id=model_id_for_version(db, edge.version_id),
+            version_id=edge.version_id,
+            kind=ChangeKind.RELABEL.value,
+            reason=payload.reason.strip(),
+            before={"label": old_label},
+            after={"label": edge.label},
+            source=ChangeSource.MANUAL.value,
+        )
     db.commit()
     db.refresh(edge)
     return edge
@@ -700,6 +1098,21 @@ def delete_edge(
     if edge is None:
         raise HTTPException(status_code=404, detail="Edge not found")
     _check_edge_in_project(edge, project.id, db)
+    record_change(
+        db,
+        target_type=ChangeTargetType.EDGE.value,
+        target_id=edge.id,
+        model_id=model_id_for_version(db, edge.version_id),
+        version_id=edge.version_id,
+        kind=ChangeKind.DELETE.value,
+        reason="Deleted",
+        before={
+            "source_node_id": str(edge.source_node_id),
+            "target_node_id": str(edge.target_node_id),
+            "label": edge.label,
+        },
+        source=ChangeSource.MANUAL.value,
+    )
     db.delete(edge)
     db.commit()
 
@@ -717,6 +1130,17 @@ def delete_node(
         raise HTTPException(status_code=404, detail="Node not found")
     _check_node_in_project(node, project.id, db)
     version_id = node.version_id
+    record_change(
+        db,
+        target_type=ChangeTargetType.NODE.value,
+        target_id=node.id,
+        model_id=model_id_for_version(db, node.version_id),
+        version_id=node.version_id,
+        kind=ChangeKind.DELETE.value,
+        reason="Deleted",
+        before={"name": node.name, "type": node.type},
+        source=ChangeSource.MANUAL.value,
+    )
     db.execute(
         delete(Review).where(
             Review.target_type == ReviewTargetType.PROCESS_NODE.value,
@@ -746,6 +1170,8 @@ def update_lane(
         raise HTTPException(status_code=404, detail="Lane not found")
     _check_lane_in_project(lane, project.id, db)
 
+    old_name = lane.name
+
     if payload.name is not None:
         lane.name = payload.name
     if payload.order_index is not None:
@@ -756,6 +1182,27 @@ def update_lane(
         lane.color = payload.color
     if payload.collapsed is not None:
         lane.collapsed = payload.collapsed
+
+    name_changed = payload.name is not None and lane.name != old_name
+    if name_changed:
+        if not (payload.reason and payload.reason.strip()):
+            db.rollback()
+            raise HTTPException(
+                status_code=422,
+                detail="A reason is required when renaming a lane.",
+            )
+        record_change(
+            db,
+            target_type=ChangeTargetType.LANE.value,
+            target_id=lane.id,
+            model_id=model_id_for_version(db, lane.version_id),
+            version_id=lane.version_id,
+            kind=ChangeKind.RELABEL.value,
+            reason=payload.reason.strip(),
+            before={"name": old_name},
+            after={"name": lane.name},
+            source=ChangeSource.MANUAL.value,
+        )
     db.commit()
     db.refresh(lane)
     return lane
@@ -798,6 +1245,18 @@ def add_lane(
         color=payload.color,
     )
     db.add(lane)
+    db.flush()
+    record_change(
+        db,
+        target_type=ChangeTargetType.LANE.value,
+        target_id=lane.id,
+        model_id=version.model_id,
+        version_id=version.id,
+        kind=ChangeKind.CREATE.value,
+        reason="Added a new swim lane",
+        after={"name": lane.name},
+        source=ChangeSource.MANUAL.value,
+    )
     db.commit()
     db.refresh(lane)
     return lane
@@ -890,6 +1349,118 @@ def get_node_citations(
     )
 
 
+@router.post(
+    "/nodes/{node_id}/claims",
+    response_model=NodeClaimLinkResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def attach_node_claims(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    node_id: UUID,
+    payload: NodeClaimLinkRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> NodeClaimLinkResult:
+    """Attach a batch of claims to a node as evidence. Idempotent on the
+    (node_id, claim_id) unique constraint — re-attaching an existing link is a
+    no-op counted in already_linked_count."""
+    node = db.get(ProcessNode, node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    _check_node_in_project(node, project.id, db)
+
+    # Every claim id must belong to this project.
+    requested_ids = list(dict.fromkeys(payload.claim_ids))  # de-dup, keep order
+    found = {
+        c.id
+        for c in db.scalars(
+            select(Claim).where(
+                Claim.id.in_(requested_ids), Claim.project_id == project.id
+            )
+        ).all()
+    }
+    missing = [cid for cid in requested_ids if cid not in found]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail="One or more claim_ids do not belong to this project",
+        )
+
+    existing = set(
+        db.scalars(
+            select(NodeClaimLink.claim_id).where(
+                NodeClaimLink.node_id == node_id,
+                NodeClaimLink.claim_id.in_(requested_ids),
+            )
+        ).all()
+    )
+    added = 0
+    newly_added_ids: list[UUID] = []
+    for cid in requested_ids:
+        if cid in existing:
+            continue
+        db.add(
+            NodeClaimLink(node_id=node_id, claim_id=cid, link_kind=payload.link_kind)
+        )
+        newly_added_ids.append(cid)
+        added += 1
+    if added > 0:
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=node.id,
+            model_id=model_id_for_version(db, node.version_id),
+            version_id=node.version_id,
+            kind=ChangeKind.LINK_CLAIM.value,
+            reason="Linked claim(s) as evidence",
+            source=ChangeSource.MANUAL.value,
+            after={"claim_ids": [str(cid) for cid in newly_added_ids]},
+            cited_claim_ids=newly_added_ids,
+        )
+    db.commit()
+    return NodeClaimLinkResult(
+        node_id=node_id,
+        linked_claim_ids=requested_ids,
+        added_count=added,
+        already_linked_count=len(requested_ids) - added,
+    )
+
+
+@router.delete(
+    "/nodes/{node_id}/claims/{claim_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def detach_node_claim(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    node_id: UUID,
+    claim_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    node = db.get(ProcessNode, node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    _check_node_in_project(node, project.id, db)
+    result = db.execute(
+        delete(NodeClaimLink).where(
+            NodeClaimLink.node_id == node_id,
+            NodeClaimLink.claim_id == claim_id,
+        )
+    )
+    if result.rowcount > 0:
+        record_change(
+            db,
+            target_type=ChangeTargetType.NODE.value,
+            target_id=node.id,
+            model_id=model_id_for_version(db, node.version_id),
+            version_id=node.version_id,
+            kind=ChangeKind.UNLINK_CLAIM.value,
+            reason="Removed claim",
+            source=ChangeSource.MANUAL.value,
+            before={"claim_id": str(claim_id)},
+            cited_claim_ids=[claim_id],
+        )
+    db.commit()
+
+
 @router.get("/nodes/{node_id}/issues", response_model=NodeIssuesDetailRead)
 def get_node_issues(
     project: Annotated[Project, Depends(get_project_or_404)],
@@ -970,6 +1541,7 @@ def get_node_issues(
             NodeIssueDetail(
                 conflict_id=c.id,
                 kind=c.kind,
+                detection_reason=c.detection_reason,
                 resolution_status=c.resolution_status,
                 detected_by=c.detected_by,
                 resolution_notes=c.resolution_notes,
@@ -1013,6 +1585,17 @@ def delete_lane(
         update(ProcessNode)
         .where(ProcessNode.lane_id == lane_id)
         .values(lane_id=fallback.id)
+    )
+    record_change(
+        db,
+        target_type=ChangeTargetType.LANE.value,
+        target_id=lane.id,
+        model_id=model_id_for_version(db, lane.version_id),
+        version_id=lane.version_id,
+        kind=ChangeKind.DELETE.value,
+        reason="Deleted",
+        before={"name": lane.name},
+        source=ChangeSource.MANUAL.value,
     )
     db.delete(lane)
     db.flush()
@@ -1260,6 +1843,37 @@ def _build_suggestion(raw: dict, ctx, index: int):
     )
 
 
+def _resolve_node_ref(ref, node_id_by_ref):
+    """Map one node short ref (N1) to its UUID; None if absent/fabricated."""
+    if ref is None:
+        return None
+    return node_id_by_ref.get(str(ref).strip().upper())
+
+
+def _reconcile_client():
+    """Thin wrapper so the endpoint resolves the Anthropic client lazily and
+    tests can patch it without a real key."""
+    return _map_reconcile_mod._get_client()
+
+
+def _render_delta(delta, ctx) -> str:
+    """Compact, ref-anchored rendering of the delta for the prompt."""
+    lines: list[str] = []
+    ref_by_claim = {cid: ref for ref, cid in ctx.claim_ref_to_id.items()}
+    if delta.new_evidence:
+        lines.append("New evidence (claims in the process, cited by no step):")
+        for c in delta.new_evidence:
+            ref = ref_by_claim.get(c.id, "?")
+            lines.append(f"  {ref}: [{c.kind}] {c.subject}")
+    if any(delta.vanished_evidence.values()):
+        lines.append("Vanished evidence (claims a step cites but that left the process):")
+        for node_id, claim_ids in delta.vanished_evidence.items():
+            node_ref = ctx.node_ref_by_id.get(node_id, "?")
+            for cid in claim_ids:
+                lines.append(f"  {node_ref} still cites {ref_by_claim.get(cid, '?')}")
+    return "\n".join(lines) if lines else "(no drift)"
+
+
 @router.post(
     "/process-maps/{model_id}/versions/{version_id}/nodes/{node_id}/ai-edit",
     response_model=AiEditResponse,
@@ -1337,6 +1951,65 @@ def ai_edit_node(
         raise HTTPException(status_code=422, detail=f"Unsupported action: {payload.action}")
     except (RuntimeError, ValueError) as exc:  # missing API key, bad proposal, etc.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def _create_proposed_step(
+    db: Session,
+    *,
+    version_id: UUID,
+    source: ProcessNode,
+    lane_id: UUID,
+    name: str,
+    node_type: str,
+    x: float,
+    relative_y: float,
+    edge_label: str | None,
+    cited_claim_ids: list[UUID],
+    project_id: UUID,
+) -> tuple[ProcessNode, ProcessEdge]:
+    """Create one ai_proposed node downstream of ``source`` plus the connecting
+    edge and AI_PROPOSED NodeClaimLinks for cited claims that genuinely belong to
+    ``project_id``. Caller owns the transaction (no commit here). Shared by the
+    ai-proposed-step endpoint and the SP-7c reconcile ``add_step`` accept."""
+    node = ProcessNode(
+        version_id=version_id,
+        type=node_type,
+        name=name,
+        lane_id=lane_id,
+        position={"x": x, "relative_y": relative_y},
+        properties={},
+    )
+    db.add(node)
+    db.flush()
+    node.properties = {**node.properties, LINEAGE_KEY: str(node.id), "ai_proposed": True}
+    flag_modified(node, "properties")
+
+    edge = ProcessEdge(
+        version_id=version_id,
+        source_node_id=source.id,
+        target_node_id=node.id,
+        label=edge_label or None,
+    )
+    db.add(edge)
+
+    if cited_claim_ids:
+        real_claims = list(
+            db.scalars(
+                select(Claim).where(
+                    Claim.id.in_(cited_claim_ids),
+                    Claim.project_id == project_id,
+                )
+            ).all()
+        )
+        for claim in real_claims:
+            db.add(
+                NodeClaimLink(
+                    node_id=node.id,
+                    claim_id=claim.id,
+                    link_kind=ClaimLinkKind.AI_PROPOSED.value,
+                )
+            )
+    return node, edge
 
 
 @router.post(
@@ -1455,49 +2128,46 @@ def apply_proposed_step(
             status_code=422, detail="lane_id must reference a lane in this version"
         )
 
-    # Create the new node; flush to obtain its id before we stamp the lineage key.
-    node = ProcessNode(
+    node, edge = _create_proposed_step(
+        db,
         version_id=version.id,
-        type=payload.type,
-        name=payload.name,
+        source=source,
         lane_id=payload.lane_id,
-        position={"x": payload.x, "relative_y": payload.relative_y},
-        properties={},
+        name=payload.name,
+        node_type=payload.type,
+        x=payload.x,
+        relative_y=payload.relative_y,
+        edge_label=payload.edge_label,
+        cited_claim_ids=payload.cited_claim_ids,
+        project_id=project.id,
     )
-    db.add(node)
-    db.flush()
 
-    node.properties = {**node.properties, LINEAGE_KEY: str(node.id), "ai_proposed": True}
-    flag_modified(node, "properties")
-
-    # Create the edge from the source node to the new node.
-    edge = ProcessEdge(
+    db.flush()  # ensure edge.id is assigned before logging
+    record_change(
+        db,
+        target_type=ChangeTargetType.NODE.value,
+        target_id=node.id,
+        model_id=version.model_id,
         version_id=version.id,
-        source_node_id=source.id,
-        target_node_id=node.id,
-        label=payload.edge_label or None,
+        kind=ChangeKind.CREATE.value,
+        actor_kind=ChangeActorKind.AI.value,
+        source=ChangeSource.RECONCILE.value,
+        cited_claim_ids=payload.cited_claim_ids,
+        reason="AI-proposed step accepted",
+        reasoning_trace=None,
     )
-    db.add(edge)
-
-    # Resolve cited claim ids: only create links for claims that genuinely
-    # belong to this project; silently ignore any bogus/foreign ids.
-    if payload.cited_claim_ids:
-        real_claims = list(
-            db.scalars(
-                select(Claim).where(
-                    Claim.id.in_(payload.cited_claim_ids),
-                    Claim.project_id == project.id,
-                )
-            ).all()
-        )
-        for claim in real_claims:
-            db.add(
-                NodeClaimLink(
-                    node_id=node.id,
-                    claim_id=claim.id,
-                    link_kind=ClaimLinkKind.AI_PROPOSED.value,
-                )
-            )
+    record_change(
+        db,
+        target_type=ChangeTargetType.EDGE.value,
+        target_id=edge.id,
+        model_id=version.model_id,
+        version_id=version.id,
+        kind=ChangeKind.CONNECT.value,
+        actor_kind=ChangeActorKind.AI.value,
+        source=ChangeSource.RECONCILE.value,
+        reason="AI-proposed step accepted",
+        after={"source_node_id": str(edge.source_node_id), "target_node_id": str(edge.target_node_id)},
+    )
 
     db.commit()
     db.refresh(node)
@@ -1545,3 +2215,137 @@ def map_consistency(
         )
         for f in findings
     ]
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/reconcile",
+    response_model=ReconcileBatchRead,
+)
+def reconcile_map(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    payload: ReconcileRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> ReconcileBatchRead:
+    """Refresh a map from its process's claims. Computes the claim delta in
+    plain code; if it is empty, returns an empty batch with NO LLM call. Else
+    asks Claude for reconcile ops, resolves their refs to real UUIDs (dropping
+    fabrications), and persists one map_reconcile suggestion batch. LLM failure
+    -> 503 with nothing persisted."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+    if model.process_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This map is not linked to a process; attach it before reconciling.",
+        )
+
+    delta = compute_claim_delta(db, version, model.process_id)
+    if delta.is_empty():
+        return ReconcileBatchRead(
+            batch_id=None, version_id=version.id, empty=True, suggestions=[]
+        )
+
+    ctx = assemble_map_context(db, version, selected_node_id=None)
+    node_id_by_ref = {ref: nid for nid, ref in ctx.node_ref_by_id.items()}
+    delta_block = _render_delta(delta, ctx)
+
+    try:
+        client = _reconcile_client()  # raises RuntimeError if no key
+        raw = propose_reconcile(
+            client=client,
+            model=_map_reconcile_mod.RECONCILE_MODEL,
+            context_block=ctx.text,
+            delta_block=delta_block,
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    batch_id = uuid4()
+    rows: list[ProcessSuggestion] = []
+    for op in raw.get("ops", []):
+        kind = op.get("op")
+        payload_out: dict | None = None
+        if kind == ReconcileOp.ADD_STEP.value:
+            after_id = _resolve_node_ref(op.get("after_node_ref"), node_id_by_ref)
+            if after_id is None:
+                continue  # fabricated anchor -> drop
+            payload_out = {
+                "name": (op.get("name") or "").strip(),
+                "type": op.get("type") or "task",
+                "after_node_id": str(after_id),
+                "lane_ref": op.get("lane_ref"),
+                "lane_name": op.get("lane_name"),
+                "edge_label": op.get("edge_label"),
+                "cited_claim_ids": [str(c) for c in _resolve_refs(op.get("cited_claim_refs"), ctx.claim_ref_to_id)],
+            }
+            if not payload_out["name"]:
+                continue
+        elif kind == ReconcileOp.RECITE_NODE.value:
+            node_id = _resolve_node_ref(op.get("node_ref"), node_id_by_ref)
+            if node_id is None:
+                continue
+            payload_out = {
+                "node_id": str(node_id),
+                "add_claim_ids": [str(c) for c in _resolve_refs(op.get("add_claim_refs"), ctx.claim_ref_to_id)],
+                "remove_claim_ids": [str(c) for c in _resolve_refs(op.get("remove_claim_refs"), ctx.claim_ref_to_id)],
+            }
+        elif kind == ReconcileOp.FLAG_STALE_NODE.value:
+            node_id = _resolve_node_ref(op.get("node_ref"), node_id_by_ref)
+            if node_id is None:
+                continue
+            payload_out = {
+                "node_id": str(node_id),
+                "vanished_claim_ids": [str(c) for c in _resolve_refs(op.get("vanished_claim_refs"), ctx.claim_ref_to_id)],
+            }
+        elif kind == ReconcileOp.RELABEL_NODE.value:
+            node_id = _resolve_node_ref(op.get("node_ref"), node_id_by_ref)
+            proposed = (op.get("proposed_name") or "").strip()
+            if node_id is None or not proposed:
+                continue
+            payload_out = {"node_id": str(node_id), "proposed_name": proposed}
+        else:
+            continue  # unknown op -> drop
+
+        rows.append(
+            ProcessSuggestion(
+                batch_id=batch_id,
+                project_id=project.id,
+                kind="map_reconcile",
+                process_id=model.process_id,
+                version_id=version.id,
+                op=kind,
+                payload=payload_out,
+                rationale=op.get("rationale", ""),
+                status="pending",
+            )
+        )
+
+    for r in rows:
+        db.add(r)
+    db.commit()
+    for r in rows:
+        db.refresh(r)
+
+    return ReconcileBatchRead(
+        batch_id=batch_id,
+        version_id=version.id,
+        empty=False,
+        suggestions=[
+            ReconcileSuggestionRead(
+                id=r.id,
+                batch_id=r.batch_id,
+                op=ReconcileOp(r.op),
+                payload=r.payload,
+                rationale=r.rationale or "",
+                confidence=r.confidence,
+                status=r.status,
+            )
+            for r in rows
+        ],
+    )

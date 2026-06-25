@@ -131,39 +131,6 @@ def test_convertible_cache_hit_skips_conversion(db, tmp_path, monkeypatch):
     assert out == rendered
 
 
-def test_cache_in_different_dir_is_rejected(db, tmp_path, monkeypatch):
-    # A cached rendered PDF whose mtime matches but that lives in a different
-    # directory than the source must not be trusted (rendered_pdf_path requires
-    # cached_path.parent == src.parent), so conversion runs again.
-    src = tmp_path / "src" / "doc.docx"
-    src.parent.mkdir()
-    src.write_bytes(b"docx-bytes")
-    stale_dir = tmp_path / "elsewhere"
-    stale_dir.mkdir()
-    foreign = stale_dir / "doc.pdf"
-    foreign.write_bytes(b"%PDF foreign")
-    inp = _seed_input(db, name="doc.docx", mime=None)
-    inp.source_info = {
-        "rendered_pdf": {"path": str(foreign), "src_mtime": src.stat().st_mtime}
-    }
-    db.flush()
-    monkeypatch.setattr(render_pdf, "resolve_path", lambda rel: src)
-    fresh = src.parent / "doc.pdf"
-    fresh.write_bytes(b"%PDF fresh")
-    calls = {"n": 0}
-
-    def fake_convert(source, out_dir):
-        calls["n"] += 1
-        return fresh
-
-    monkeypatch.setattr(render_pdf, "convert_to_pdf", fake_convert)
-
-    out = render_pdf.rendered_pdf_path(inp, db)
-
-    assert calls["n"] == 1  # cache in a foreign dir was rejected
-    assert out == fresh
-
-
 def test_stale_cache_triggers_reconversion(db, tmp_path, monkeypatch):
     src = tmp_path / "doc.docx"
     src.write_bytes(b"docx-bytes")

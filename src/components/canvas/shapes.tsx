@@ -346,6 +346,15 @@ export function NodeShape({
           </text>
         </g>
       )}
+      {node.evidenceStale && (
+        <g transform={`translate(${w - 8}, ${h + 8})`} style={{ pointerEvents: "none" }}>
+          <circle r={8} fill="#f59e0b" stroke="#fff" strokeWidth={2} />
+          <text textAnchor="middle" y={3.5} fontSize="10" fontWeight="700" fill="#fff">
+            !
+          </text>
+          <title>Evidence stale — refresh from claims</title>
+        </g>
+      )}
       {handlesVisible && (
         <>
           <ConnectHandle cx={w / 2} cy={0} onMouseDown={(e) => onStartConnect!(e, id, "top")} />

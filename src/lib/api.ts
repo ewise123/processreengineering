@@ -1,20 +1,26 @@
 import type {
-  AcceptDetectionRunResult,
+  AcceptSuggestionResult,
   AiEditAction,
   AiEditResponse,
   AiProposedStepRequest,
   AiProposedStepResult,
+  BatchAcceptResult,
+  BlankMapRequest,
+  BlankMapResult,
+  ChangeEvent,
+  ChangeLogPage,
   ChatRequest,
   ChatResponse,
   ChatSuggestRequest,
   ChatSuggestResponse,
   Claim,
   ClaimConflict,
+  ClaimCreate,
   ClaimExtractionResult,
+  ClaimImpact,
+  ClaimUpdate,
   ConflictDetectionResult,
-  DetectProcessesRequest,
-  DetectionRunDetail,
-  DetectionRunListRow,
+  ConflictResolve,
   EmbedResult,
   InputParseResult,
   InputRow,
@@ -23,12 +29,15 @@ import type {
   LaneCreate,
   LaneUpdate,
   NodeCitations,
+  NodeClaimLinkRequest,
+  NodeClaimLinkResult,
   NodeCreate,
   NodeIssue,
   NodeIssuesDetail,
   NodeReview,
   NodeReviewUpdate,
   NodeUpdate,
+  Process,
   ProcessEdge,
   Page,
   ProcessGraph,
@@ -37,12 +46,16 @@ import type {
   ProcessMapGenerateResult,
   ProcessModel,
   ProcessNode,
-  ProcessSegment,
+  ProcessSuggestion,
   ProcessVersion,
   Project,
   ProjectCreate,
   ProjectUpdate,
+  ReconcileBatch,
   ReviewState,
+  SuggestBatchResult,
+  SuggestClaimsResult,
+  TriageClaim,
   UUID,
   VersionDiff,
   VersionSummary,
@@ -167,6 +180,24 @@ export const api = {
     const suffix = qs.toString() ? `?${qs}` : "";
     return request<Page<Claim>>(`/api/v2/projects/${projectId}/claims${suffix}`);
   },
+  createClaim: (projectId: UUID, body: ClaimCreate) =>
+    request<Claim>(`/api/v2/projects/${projectId}/claims`, {
+      method: "POST",
+      json: body,
+    }),
+  updateClaim: (projectId: UUID, claimId: UUID, body: ClaimUpdate) =>
+    request<Claim>(`/api/v2/projects/${projectId}/claims/${claimId}`, {
+      method: "PATCH",
+      json: body,
+    }),
+  deleteClaim: (projectId: UUID, claimId: UUID) =>
+    request<void>(`/api/v2/projects/${projectId}/claims/${claimId}`, {
+      method: "DELETE",
+    }),
+  getClaimImpact: (projectId: UUID, claimId: UUID) =>
+    request<ClaimImpact>(
+      `/api/v2/projects/${projectId}/claims/${claimId}/impact`
+    ),
   detectConflicts: (projectId: UUID) =>
     request<ConflictDetectionResult>(
       `/api/v2/projects/${projectId}/detect-conflicts`,
@@ -185,6 +216,11 @@ export const api = {
       `/api/v2/projects/${projectId}/conflicts${suffix}`
     );
   },
+  resolveConflict: (projectId: UUID, conflictId: UUID, body: ConflictResolve) =>
+    request<ClaimConflict>(
+      `/api/v2/projects/${projectId}/conflicts/${conflictId}`,
+      { method: "PATCH", json: body }
+    ),
 
   // Process maps
   listProcessMaps: (projectId: UUID) =>
@@ -194,6 +230,16 @@ export const api = {
       `/api/v2/projects/${projectId}/generate-process-map`,
       { method: "POST", json: payload }
     ),
+  generateBestPractices: (projectId: UUID, body: ProcessMapGenerateRequest) =>
+    request<ProcessMapGenerateResult>(
+      `/api/v2/projects/${projectId}/generate-best-practices`,
+      { method: "POST", json: body }
+    ),
+  createBlankMap: (projectId: UUID, body: BlankMapRequest) =>
+    request<BlankMapResult>(`/api/v2/projects/${projectId}/process-maps`, {
+      method: "POST",
+      json: body,
+    }),
   getProcessGraph: (projectId: UUID, modelId: UUID, versionId: UUID) =>
     request<ProcessGraph>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}`
@@ -300,6 +346,20 @@ export const api = {
     request<NodeCitations>(
       `/api/v2/projects/${projectId}/nodes/${nodeId}/citations`
     ),
+  attachNodeClaims: (
+    projectId: UUID,
+    nodeId: UUID,
+    body: NodeClaimLinkRequest
+  ) =>
+    request<NodeClaimLinkResult>(
+      `/api/v2/projects/${projectId}/nodes/${nodeId}/claims`,
+      { method: "POST", json: body }
+    ),
+  detachNodeClaim: (projectId: UUID, nodeId: UUID, claimId: UUID) =>
+    request<void>(
+      `/api/v2/projects/${projectId}/nodes/${nodeId}/claims/${claimId}`,
+      { method: "DELETE" }
+    ),
   getNodeIssues: (projectId: UUID, nodeId: UUID) =>
     request<NodeIssuesDetail>(
       `/api/v2/projects/${projectId}/nodes/${nodeId}/issues`
@@ -346,70 +406,123 @@ export const api = {
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/ai-proposed-step`,
       { method: "POST", json: body }
     ),
+  reconcileMap: (projectId: UUID, modelId: UUID, versionId: UUID) =>
+    request<ReconcileBatch>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/reconcile`,
+      { method: "POST", json: {} }
+    ),
 
-  // Process detection
-  detectProcesses: (projectId: UUID, body: DetectProcessesRequest = {}) =>
-    request<DetectionRunDetail>(
-      `/api/v2/projects/${projectId}/detect-processes`,
-      { method: "POST", json: body }
-    ),
-  listDetectionRuns: (projectId: UUID) =>
-    request<DetectionRunListRow[]>(
-      `/api/v2/projects/${projectId}/detection-runs`
-    ),
-  getDetectionRun: (projectId: UUID, runId: UUID) =>
-    request<DetectionRunDetail>(
-      `/api/v2/projects/${projectId}/detection-runs/${runId}`
-    ),
-  updateSegment: (
+  // Process inventory
+  listProcesses: (projectId: UUID) =>
+    request<Process[]>(`/api/v2/projects/${projectId}/processes`),
+  createProcess: (projectId: UUID, body: { name: string; description?: string }) =>
+    request<Process>(`/api/v2/projects/${projectId}/processes`, {
+      method: "POST",
+      json: body,
+    }),
+  updateProcess: (
     projectId: UUID,
-    segmentId: UUID,
-    body: { name?: string | null; description?: string | null }
+    processId: UUID,
+    body: { name?: string; description?: string; order_index?: number; status?: string }
   ) =>
-    request<ProcessSegment>(
-      `/api/v2/projects/${projectId}/segments/${segmentId}`,
-      { method: "PATCH", json: body }
+    request<Process>(`/api/v2/projects/${projectId}/processes/${processId}`, {
+      method: "PATCH",
+      json: body,
+    }),
+  deleteProcess: (projectId: UUID, processId: UUID) =>
+    request<void>(`/api/v2/projects/${projectId}/processes/${processId}`, {
+      method: "DELETE",
+    }),
+  assignClaims: (projectId: UUID, processId: UUID, claimIds: UUID[]) =>
+    request<{ process_id: UUID; linked: number; already_linked: number }>(
+      `/api/v2/projects/${projectId}/processes/${processId}/claims`,
+      { method: "POST", json: { claim_ids: claimIds } }
     ),
-  createSegment: (
+  unassignClaims: (projectId: UUID, processId: UUID, claimIds: UUID[]) =>
+    request<{ process_id: UUID; removed: number }>(
+      `/api/v2/projects/${projectId}/processes/${processId}/claims`,
+      { method: "DELETE", json: { claim_ids: claimIds } }
+    ),
+  suggestClaimsForProcess: (projectId: UUID, processId: UUID) =>
+    request<SuggestClaimsResult>(
+      `/api/v2/projects/${projectId}/processes/${processId}/suggest-claims`,
+      { method: "POST", json: {} }
+    ),
+  listUnassignedClaims: (projectId: UUID) =>
+    request<TriageClaim[]>(`/api/v2/projects/${projectId}/claims/unassigned`),
+
+  // AI suggestions
+  suggestProcesses: (projectId: UUID, body: { scope_input_ids?: UUID[] | null } = {}) =>
+    request<SuggestBatchResult>(`/api/v2/projects/${projectId}/suggest-processes`, {
+      method: "POST",
+      json: body,
+    }),
+  listSuggestions: (
     projectId: UUID,
-    runId: UUID,
-    body: { name: string }
-  ) =>
-    request<ProcessSegment>(
-      `/api/v2/projects/${projectId}/detection-runs/${runId}/segments`,
-      { method: "POST", json: body }
-    ),
-  mergeSegment: (
-    projectId: UUID,
-    segmentId: UUID,
-    body: { into_segment_id: UUID }
-  ) =>
-    request<ProcessSegment>(
-      `/api/v2/projects/${projectId}/segments/${segmentId}/merge`,
-      { method: "POST", json: body }
-    ),
-  deleteSegment: (projectId: UUID, segmentId: UUID) =>
-    request<void>(
-      `/api/v2/projects/${projectId}/segments/${segmentId}`,
-      { method: "DELETE" }
-    ),
-  moveClaimToSegment: (
-    projectId: UUID,
-    segmentId: UUID,
-    body: { claim_id: UUID }
-  ) =>
-    request<ProcessSegment>(
-      `/api/v2/projects/${projectId}/segments/${segmentId}/claims`,
-      { method: "POST", json: body }
-    ),
-  acceptDetectionRun: (projectId: UUID, runId: UUID) =>
-    request<AcceptDetectionRunResult>(
-      `/api/v2/projects/${projectId}/detection-runs/${runId}/accept`,
+    params: { status?: string; kind?: string } = {}
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set("status", params.status);
+    if (params.kind) qs.set("kind", params.kind);
+    const suffix = qs.toString() ? `?${qs}` : "";
+    return request<ProcessSuggestion[]>(
+      `/api/v2/projects/${projectId}/process-suggestions${suffix}`
+    );
+  },
+  acceptSuggestion: (projectId: UUID, suggestionId: UUID) =>
+    request<AcceptSuggestionResult>(
+      `/api/v2/projects/${projectId}/process-suggestions/${suggestionId}/accept`,
       { method: "POST" }
     ),
-  discardDetectionRun: (projectId: UUID, runId: UUID) =>
-    request<void>(
-      `/api/v2/projects/${projectId}/detection-runs/${runId}`,
-      { method: "DELETE" }
+  rejectSuggestion: (projectId: UUID, suggestionId: UUID) =>
+    request<AcceptSuggestionResult>(
+      `/api/v2/projects/${projectId}/process-suggestions/${suggestionId}/reject`,
+      { method: "POST" }
     ),
+  acceptSuggestionBatch: (projectId: UUID, batchId: UUID) =>
+    request<BatchAcceptResult>(
+      `/api/v2/projects/${projectId}/process-suggestion-batches/${batchId}/accept`,
+      { method: "POST" }
+    ),
+
+  // Map ↔ process wiring
+  attachMapToProcess: (projectId: UUID, modelId: UUID, processId: UUID | null) =>
+    request<ProcessModel>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}`,
+      { method: "PATCH", json: { process_id: processId } }
+    ),
+
+  // Change history
+  getNodeHistory: (projectId: UUID, nodeId: UUID) =>
+    request<ChangeEvent[]>(
+      `/api/v2/projects/${projectId}/nodes/${nodeId}/history`
+    ),
+  getEdgeHistory: (projectId: UUID, edgeId: UUID) =>
+    request<ChangeEvent[]>(
+      `/api/v2/projects/${projectId}/edges/${edgeId}/history`
+    ),
+  getChangeLog: (
+    projectId: UUID,
+    modelId: UUID,
+    params: {
+      target_id?: UUID;
+      actor_kind?: string;
+      source?: string;
+      since?: string;
+      cursor?: string;
+      limit?: number;
+    } = {}
+  ) => {
+    const qs = new URLSearchParams();
+    if (params.target_id !== undefined) qs.set("target_id", params.target_id);
+    if (params.actor_kind !== undefined) qs.set("actor_kind", params.actor_kind);
+    if (params.source !== undefined) qs.set("source", params.source);
+    if (params.since !== undefined) qs.set("since", params.since);
+    if (params.cursor !== undefined) qs.set("cursor", params.cursor);
+    if (params.limit !== undefined) qs.set("limit", String(params.limit));
+    const suffix = qs.toString() ? `?${qs}` : "";
+    return request<ChangeLogPage>(
+      `/api/v2/projects/${projectId}/models/${modelId}/log${suffix}`
+    );
+  },
 };
