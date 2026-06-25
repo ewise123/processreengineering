@@ -1,7 +1,7 @@
 "use client";
 
-import { Check, RotateCcw, X } from "lucide-react";
-import { useState } from "react";
+import { Check, RotateCcw } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import type { ChatSuggestion, ObjectRef, UUID } from "@/lib/types";
 import type { Bundle } from "./suggestion-apply";
@@ -36,6 +36,7 @@ export function SuggestionList({
         </span>
         {pending.length > 1 && (
           <button
+            type="button"
             onClick={() => pending.forEach((b) => onApply(b))}
             className="rounded-full border border-violet-200 px-2 py-0.5 text-[10px] font-semibold text-violet-700 hover:bg-violet-50"
           >
@@ -81,6 +82,10 @@ function SuggestionCard({
   const head = bundle.suggestions[0];
   const extra = bundle.suggestions.length - 1;
 
+  useEffect(() => {
+    if (status !== "pending") setConfirming(false);
+  }, [status]);
+
   return (
     <div
       className={
@@ -102,8 +107,10 @@ function SuggestionCard({
         )}
       </div>
 
-      {bundle.suggestions.map(
-        (s) => s.rationale && <p key={s.id} className="mt-0.5 text-[10px] text-slate-500">{s.rationale}</p>
+      {bundle.suggestions.map((s) =>
+        s.rationale ? (
+          <p key={s.id} className="mt-0.5 text-[10px] text-slate-500">{s.rationale}</p>
+        ) : null
       )}
 
       <AffectedRefs suggestions={bundle.suggestions} onNavigate={onNavigate} />
@@ -112,7 +119,7 @@ function SuggestionCard({
         <div className="mt-2 flex items-center gap-2 text-[10px] font-semibold text-emerald-700">
           <Check size={12} /> Applied
           {canUndo && (
-            <button onClick={onUndo} className="flex items-center gap-1 text-slate-500 hover:text-slate-800">
+            <button type="button" onClick={onUndo} className="flex items-center gap-1 text-slate-500 hover:text-slate-800">
               <RotateCcw size={11} /> Undo
             </button>
           )}
@@ -122,22 +129,23 @@ function SuggestionCard({
       ) : confirming ? (
         <div className="mt-2 flex items-center gap-1.5">
           <span className="text-[10px] text-rose-700">Can&apos;t be undone.</span>
-          <button onClick={onApply} className="rounded bg-rose-600 px-2 py-1 text-[10px] font-semibold text-white">
+          <button type="button" onClick={onApply} className="rounded bg-rose-600 px-2 py-1 text-[10px] font-semibold text-white">
             Apply anyway
           </button>
-          <button onClick={() => setConfirming(false)} className="rounded border border-slate-300 px-2 py-1 text-[10px] text-slate-600">
+          <button type="button" onClick={() => setConfirming(false)} className="rounded border border-slate-300 px-2 py-1 text-[10px] text-slate-600">
             Cancel
           </button>
         </div>
       ) : (
         <div className="mt-2 flex gap-1.5">
           <button
+            type="button"
             onClick={() => (isDelete ? setConfirming(true) : onApply())}
             className="rounded bg-slate-800 px-2 py-1 text-[10px] font-semibold text-white hover:bg-slate-700"
           >
             Apply
           </button>
-          <button onClick={onDismiss} className="rounded border border-slate-300 px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-100">
+          <button type="button" onClick={onDismiss} className="rounded border border-slate-300 px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-100">
             Dismiss
           </button>
           {status === "failed" && <span className="self-center text-[10px] text-rose-600">Failed — try again</span>}
@@ -161,6 +169,7 @@ function AffectedRefs({
       {refs.map((r) => (
         <button
           key={`${r.kind}:${r.id}`}
+          type="button"
           onClick={() => onNavigate({ kind: r.kind as "node" | "edge", id: r.id })}
           className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[9px] text-slate-600 hover:bg-slate-100"
           title="Jump to this object"
