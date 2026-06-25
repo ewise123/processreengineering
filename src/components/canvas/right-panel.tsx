@@ -21,6 +21,8 @@ import {
   GitCompare,
   Link2,
   MessageSquare,
+  Pause,
+  Play,
   RotateCcw,
   ShieldCheck,
   Sparkles,
@@ -55,6 +57,7 @@ import { bucketNodes, reviewByNodeMap } from "./review-summary";
 import { mentionsToMarkdown } from "./mention-markdown";
 import { selectionChips, selectionToContextRefs, type SelectedObject } from "./chat-context";
 import { browserChatSessionStore } from "./chat-session";
+import { restoreAfterCancel, type PendingSend } from "./chat-cancel";
 
 type TabId = "chat" | "versions" | "issues" | "review" | "sources";
 
@@ -333,6 +336,10 @@ function ChatTab({
   // it was sent under; a reply whose generation is stale is dropped so a
   // cleared conversation can't be rebuilt by a late-resolving request.
   const genRef = useRef(0);
+  // The in-flight request's controller, so Pause can abort it.
+  const abortRef = useRef<AbortController | null>(null);
+  // Snapshot of what Pause must restore (pre-send transcript + the user's text).
+  const pendingRef = useRef<PendingSend<ChatItem> | null>(null);
 
   useEffect(() => {
     setHistory(sessionStore.load(versionId) as ChatItem[]);
@@ -347,15 +354,21 @@ function ChatTab({
   const chips = selectionChips(selected, labelById);
 
   const ask = useMutation({
-    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextRefs: ObjectRef[]; gen: number }) =>
-      api.chatSuggest(projectId, modelId, versionId, {
-        // Send only the backend contract fields (ChatTurn = role + content);
-        // client-only metadata like contextNote/sources must not be resent.
-        history: input.history.map(({ role, content }) => ({ role, content })),
-        user_message: input.userMessage,
-        mode: "ask",
-        context_refs: input.contextRefs,
-      }),
+    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal }) =>
+      api.chatSuggest(
+        projectId,
+        modelId,
+        versionId,
+        {
+          // Send only the backend contract fields (ChatTurn = role + content);
+          // client-only metadata like contextNote/sources must not be resent.
+          history: input.history.map(({ role, content }) => ({ role, content })),
+          user_message: input.userMessage,
+          mode: "ask",
+          context_refs: input.contextRefs,
+        },
+        input.signal
+      ),
     onSuccess: (data, vars) => {
       // Drop replies that resolve after the thread was cleared.
       if (vars.gen !== genRef.current) return;
@@ -386,9 +399,36 @@ function ChatTab({
     setDraft("");
     // Capture pre-send history snapshot before optimistic update
     const preSendHistory = history;
+    // Snapshot what Pause needs to undo this send, and open an abort channel.
+    pendingRef.current = { priorHistory: preSendHistory, text: trimmed };
+    const controller = new AbortController();
+    abortRef.current = controller;
     setHistory((curr) => [...curr, { role: "user", content: trimmed, contextNote: note }]);
-    ask.mutate({ history: preSendHistory, userMessage: trimmed, note, contextRefs, gen: genRef.current });
+    ask.mutate({
+      history: preSendHistory,
+      userMessage: trimmed,
+      note,
+      contextRefs,
+      gen: genRef.current,
+      signal: controller.signal,
+    });
     onClearSelection(); // #11: tab slides away once the prompt is sent
+  };
+
+  const pause = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    // Bump the generation so any reply that still resolves after the abort is
+    // dropped by onSuccess, and reset the mutation to clear the pending state.
+    genRef.current += 1;
+    ask.reset();
+    const pending = pendingRef.current;
+    if (pending) {
+      const restored = restoreAfterCancel(pending);
+      setHistory(restored.history);
+      setDraft(restored.draft);
+    }
+    pendingRef.current = null;
   };
 
   const clearChat = () => {
@@ -451,11 +491,12 @@ function ChatTab({
           </div>
         )}
 
-        {ask.isError && (
-          <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] text-rose-700">
-            {(ask.error as Error).message}
-          </div>
-        )}
+        {ask.isError &&
+          !(ask.error instanceof DOMException && ask.error.name === "AbortError") && (
+            <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] text-rose-700">
+              {(ask.error as Error).message}
+            </div>
+          )}
       </div>
 
       <div className="relative shrink-0">
@@ -553,11 +594,13 @@ function ChatTab({
               className="flex-1 resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs focus:border-slate-500 focus:outline-none"
             />
             <button
-              onClick={() => submit(draft)}
-              disabled={!draft.trim() || ask.isPending}
-              className="h-8 rounded-md bg-slate-900 px-3 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300"
+              onClick={() => (ask.isPending ? pause() : submit(draft))}
+              disabled={!ask.isPending && !draft.trim()}
+              title={ask.isPending ? "Stop" : "Send"}
+              aria-label={ask.isPending ? "Stop generating" : "Send message"}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-300"
             >
-              Send
+              {ask.isPending ? <Pause size={14} /> : <Play size={14} />}
             </button>
           </div>
         </div>
