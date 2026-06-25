@@ -29,6 +29,7 @@ import { LevelBreadcrumb } from "@/components/canvas/level-breadcrumb";
 import { buildBreadcrumb } from "@/components/canvas/decompose-nav";
 import { api } from "@/lib/api";
 import type { IssueSeverity, NodeReviewUpdate, ReviewDecision, SubStep, UUID, ViewerTarget } from "@/lib/types";
+import type { BundlePlan } from "@/components/canvas/suggestion-apply";
 
 // react-pdf / pdfjs reference browser-only globals at module eval, which crash
 // server-side rendering. Load the viewer client-only so the page route never
@@ -183,6 +184,18 @@ export default function CanvasPage() {
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Couldn't remove the sub-process.");
       }
+    },
+    [queryClient, params.id, params.modelId, params.versionId]
+  );
+
+  const handleApplySuggestions = useCallback(
+    async (plan: BundlePlan) => {
+      if (!canvasRef.current) return { ok: false, error: "Canvas not ready." } as const;
+      const res = await canvasRef.current.applySuggestionBatch(plan);
+      if (res.ok) {
+        queryClient.invalidateQueries({ queryKey: ["graph", params.id, params.modelId, params.versionId] });
+      }
+      return res;
     },
     [queryClient, params.id, params.modelId, params.versionId]
   );
@@ -539,6 +552,8 @@ export default function CanvasPage() {
             }}
             collapsed={rightCollapsed}
             onCollapsedChange={setRightCollapsed}
+            onApplySuggestions={handleApplySuggestions}
+            graph={data}
           />
         </div>
       )}
