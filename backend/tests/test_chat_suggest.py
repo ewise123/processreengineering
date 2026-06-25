@@ -488,3 +488,21 @@ def test_chat_suggest_attaches_mention_sources_for_cited_claims(db):
     src = next(s for s in resp.mention_sources if s.claim_id == claim.id)
     assert src.input_id == inp.id and src.input_name == "SOP.pdf"
     assert src.quote == "the clerk receives it"
+
+
+def test_chat_suggest_skips_malformed_claim_token_without_crashing(db):
+    """A non-UUID [[claim:...]] token (e.g. echoed user text) must be skipped,
+    not raise ValueError and turn the endpoint into a 500."""
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    project, version, _n1, _claim = _seed(db)
+
+    with _pytest.MonkeyPatch.context() as mp:
+        # "abc" is hex-ish (matches the regex) but not a valid UUID.
+        mp.setattr(pm_api, "run_chat_suggest", lambda **k: ("See [[claim:abc]] here.", []))
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)
+    # No crash; the malformed token simply produces no source.
+    assert resp.mention_sources == []
+    assert "[[claim:abc]]" in resp.message

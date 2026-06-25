@@ -29,10 +29,10 @@ describe("mentionsToMarkdown", () => {
   it("renders any stray edge mention as plain endpoint-less text (edges dropped)", () => {
     expect(mentionsToMarkdown(`[[edge:z]] gone`, labels, sources)).toBe("gone");
   });
-  it("escapes ] in a label so the link stays valid", () => {
+  it("escapes both [ and ] in a label so the link stays valid", () => {
     const l = new Map([[N, "Step [final]"]]);
     expect(mentionsToMarkdown(`[[node:${N}]]`, l, sources)).toBe(
-      `[Step [final\\]](poet://node/${N})`
+      `[Step \\[final\\]](poet://node/${N})`
     );
   });
 });

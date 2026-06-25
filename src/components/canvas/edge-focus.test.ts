@@ -18,11 +18,23 @@ describe("edgeFocusCenter", () => {
     expect(edgeFocusCenter({ from: "a", to: "ghost" }, nodes, lanes)).toBeNull();
   });
 
-  it("treats a missing lane as y=0 (relativeY only)", () => {
+  it("treats a null lane as y=0 (relativeY only)", () => {
     const c = edgeFocusCenter(
       { from: "a", to: "b" },
       [{ id: "a", laneId: null, x: 0, relativeY: 10, w: 100, h: 60 },
        { id: "b", laneId: null, x: 0, relativeY: 10, w: 100, h: 60 }],
+      lanes
+    );
+    expect(c).toEqual({ cx: 50, cy: 40 });
+  });
+
+  it("falls back to y=0 when a node points at a lane missing from the list", () => {
+    // laneId "L9" is not in `lanes`, so lanes.find(...)?.y is undefined and the
+    // `?? 0` fallback must kick in (laneY = 0 + relativeY).
+    const c = edgeFocusCenter(
+      { from: "a", to: "b" },
+      [{ id: "a", laneId: "L9", x: 0, relativeY: 10, w: 100, h: 60 },
+       { id: "b", laneId: "L9", x: 0, relativeY: 10, w: 100, h: 60 }],
       lanes
     );
     expect(c).toEqual({ cx: 50, cy: 40 });

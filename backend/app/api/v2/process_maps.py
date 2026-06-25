@@ -1398,10 +1398,20 @@ def chat_suggest(
         if built is not None:
             suggestions.append(built)
     resolved = _resolve_mention_refs(message, ctx)
-    cited = set(re.findall(r"\[\[claim:([0-9a-fA-F-]+)\]\]", resolved))
+    # Guard against malformed tokens: the regex matches hex-ish strings that are
+    # not valid UUIDs (e.g. an echoed "[[claim:abc]]"), so UUID() can raise.
+    # Skip those instead of turning the endpoint into a 500. Dedupe while
+    # preserving first-seen order.
     mention_sources = []
-    for cid_str in cited:
-        cid = UUID(cid_str)
+    seen_claim_ids: set[UUID] = set()
+    for cid_str in re.findall(r"\[\[claim:([0-9a-fA-F-]+)\]\]", resolved):
+        try:
+            cid = UUID(cid_str)
+        except ValueError:
+            continue
+        if cid in seen_claim_ids:
+            continue
+        seen_claim_ids.add(cid)
         tgt = ctx.source_target_by_claim.get(cid)
         if tgt:
             mention_sources.append(MentionSource(claim_id=cid, **tgt))

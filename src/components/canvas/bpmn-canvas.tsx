@@ -653,35 +653,9 @@ function BpmnCanvas({
     });
   }, []);
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      deleteNode: deleteNodeImpl,
-      updateNode: updateNodeImpl,
-      addProposedStep,
-      selectNode: (id) => {
-        setSelectedIds(new Set([id]));
-        focusNodeInViewport(id);
-      },
-      clearSelection,
-      deselectId: (id) =>
-        setSelectedIds((prev) => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        }),
-      navigateTo: (refTarget) => {
-        setSelectedIds(new Set([refTarget.id]));
-        if (refTarget.kind === "edge") focusEdgeInViewport(refTarget.id);
-        else focusNodeInViewport(refTarget.id);
-        flash(refTarget.id);
-      },
-      deleteSelection: deleteSelectionImpl,
-      copySelection: copySelectionImpl,
-      moveSelectionToLane: moveSelectionToLaneImpl,
-    }),
-    [deleteNodeImpl, updateNodeImpl, addProposedStep, focusNodeInViewport, focusEdgeInViewport, flash, clearSelection, deleteSelectionImpl]
-  );
+  // NOTE: useImperativeHandle is defined further down, after copySelectionImpl
+  // and moveSelectionToLaneImpl, so those callbacks can be listed in its
+  // dependency array without a temporal-dead-zone reference.
 
   // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
   // Cmd/Ctrl+Shift+Z (or Cmd/Ctrl+Y) for undo/redo. All of them no-op
@@ -697,6 +671,9 @@ function BpmnCanvas({
       if (inEditable) return;
 
       if (e.code === "Space") {
+        // Only hijack Space for pan when the pointer is over the canvas;
+        // elsewhere leave it for scrolling and button/menu activation.
+        if (!pointerOverCanvasRef.current) return;
         e.preventDefault(); // stop the page from scrolling
         spaceHeld.current = true;
         return;
@@ -763,6 +740,9 @@ function BpmnCanvas({
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
   const spaceHeld = useRef(false);
+  // True while the pointer is over the canvas. Space-to-pan only engages then,
+  // so we don't swallow Space (scroll / button activation) page-wide.
+  const pointerOverCanvasRef = useRef(false);
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const lanesRef = useRef(lanes);
@@ -1491,6 +1471,49 @@ function BpmnCanvas({
     clipboard.copy({ nodes, edges });
   }, [clipboard]);
 
+  // Placed here (not with the other hooks above) so copySelectionImpl and
+  // moveSelectionToLaneImpl are already defined and can be real dependencies.
+  useImperativeHandle(
+    ref,
+    () => ({
+      deleteNode: deleteNodeImpl,
+      updateNode: updateNodeImpl,
+      addProposedStep,
+      selectNode: (id) => {
+        setSelectedIds(new Set([id]));
+        focusNodeInViewport(id);
+      },
+      clearSelection,
+      deselectId: (id) =>
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        }),
+      navigateTo: (refTarget) => {
+        setSelectedIds(new Set([refTarget.id]));
+        if (refTarget.kind === "edge") focusEdgeInViewport(refTarget.id);
+        else focusNodeInViewport(refTarget.id);
+        flash(refTarget.id);
+      },
+      deleteSelection: deleteSelectionImpl,
+      copySelection: copySelectionImpl,
+      moveSelectionToLane: moveSelectionToLaneImpl,
+    }),
+    [
+      deleteNodeImpl,
+      updateNodeImpl,
+      addProposedStep,
+      focusNodeInViewport,
+      focusEdgeInViewport,
+      flash,
+      clearSelection,
+      deleteSelectionImpl,
+      copySelectionImpl,
+      moveSelectionToLaneImpl,
+    ]
+  );
+
   const pasteClipboardImpl = useCallback(async () => {
     const snap = clipboard.get();
     if (!snap || snap.nodes.length === 0) return;
@@ -1892,6 +1915,11 @@ function BpmnCanvas({
         onContextMenu={openCanvasMenu}
         onDragOver={onCanvasDragOver}
         onDrop={onCanvasDrop}
+        onPointerEnter={() => { pointerOverCanvasRef.current = true; }}
+        onPointerLeave={() => {
+          pointerOverCanvasRef.current = false;
+          spaceHeld.current = false; // don't strand pan mode if Space is released off-canvas
+        }}
         style={{
           width: "100%",
           height: "100%",
@@ -2007,23 +2035,52 @@ function BpmnCanvas({
             />
           ))}
           {flashId && (() => {
-            const fn = renderNodes.find((n) => n.id === flashId);
-            if (!fn) return null;
-            return (
-              <rect
-                x={fn.x - 4}
-                y={fn.y - 4}
-                width={fn.w + 8}
-                height={fn.h + 8}
-                rx={8}
-                fill="none"
-                stroke="#6366f1"
-                strokeWidth={3}
-                className="pointer-events-none"
-              >
-                <animate attributeName="opacity" values="1;0.2;1" dur="0.7s" repeatCount="2" />
-              </rect>
+            const pulse = (
+              <animate attributeName="opacity" values="1;0.2;1" dur="0.7s" repeatCount="2" />
             );
+            const fn = renderNodes.find((n) => n.id === flashId);
+            if (fn) {
+              return (
+                <rect
+                  x={fn.x - 4}
+                  y={fn.y - 4}
+                  width={fn.w + 8}
+                  height={fn.h + 8}
+                  rx={8}
+                  fill="none"
+                  stroke="#6366f1"
+                  strokeWidth={3}
+                  className="pointer-events-none"
+                >
+                  {pulse}
+                </rect>
+              );
+            }
+            // Edge flash: pulse a marker at the edge midpoint so navigateTo to an
+            // edge gives the same visual confirmation a node does.
+            const fe = edges.find((e) => e.id === flashId);
+            if (fe) {
+              const from = renderNodes.find((n) => n.id === fe.from);
+              const to = renderNodes.find((n) => n.id === fe.to);
+              if (!from || !to) return null;
+              const { midX, midY } = buildEdgePath(from, to);
+              return (
+                <rect
+                  x={midX - 22}
+                  y={midY - 14}
+                  width={44}
+                  height={28}
+                  rx={8}
+                  fill="none"
+                  stroke="#6366f1"
+                  strokeWidth={3}
+                  className="pointer-events-none"
+                >
+                  {pulse}
+                </rect>
+              );
+            }
+            return null;
           })()}
           {editingEdgeId &&
             (() => {

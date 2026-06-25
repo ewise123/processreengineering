@@ -36,9 +36,11 @@ This is **Phase 2 of 4** of the chat-suggest rebuild. Phase 1 (backend suggestio
 
 ### The mention contract (how teleport-able links flow end-to-end)
 
-1. Ask-mode system prompt tells the model to wrap references as `[[N3]]` (node), `[[E2]]` (edge), `[[C1]]` (claim) using the refs from the map context.
-2. The endpoint post-processes the returned `message`, rewriting each `[[N3]]`→`[[node:<uuid>]]`, `[[E2]]`→`[[edge:<uuid>]]`, `[[C1]]`→`[[claim:<uuid>]]` via the Phase 1 ctx maps. Unresolvable refs are flattened to plain text (`[[N9]]`→`N9`).
-3. The frontend `parseMentions` splits the message into text/ref segments; node/edge refs render as clickable chips that teleport via the canvas handle; claim refs render as a non-clickable styled chip (claim navigation is a later phase).
+> **Implementation note (shipped):** the contract narrowed during the 2.1a polish pass. Edges are **not** chat objects, so the model is instructed not to emit edge refs in prose, and any `[[edge:…]]` that slips through is dropped to plain text on the frontend. Claim refs **are** clickable (they open the Source Viewer), and the response additionally returns `mention_sources` (per-claim source targets). The numbered steps below reflect the original plan; treat this note as the source of truth where they differ.
+
+1. Ask-mode system prompt tells the model to wrap references as `[[N3]]` (node) and `[[C1]]` (claim) using the refs from the map context (edge refs are not requested).
+2. The endpoint post-processes the returned `message`, rewriting each `[[N3]]`→`[[node:<uuid>]]`, `[[C1]]`→`[[claim:<uuid>]]` via the Phase 1 ctx maps, and collects each cited claim's source target into `mention_sources`. Unresolvable refs are flattened to plain text (`[[N9]]`→`N9`).
+3. The frontend `mentionsToMarkdown` converts the message into `poet://node|claim/<id>` markdown links; node links teleport + flash via the canvas handle, and claim links open the Source Viewer for that citation.
 
 ---
 
@@ -162,7 +164,7 @@ The legacy `/chat` endpoint calls `chat()` without `extra_instructions`, so its 
 
 - [ ] **Step 3b: Pass the mention instruction in ask mode** in `backend/app/services/map_chat_suggest.py`.
 
-Add the instruction constant near `SUGGEST_INSTRUCTIONS`:
+Add the instruction constant near `SUGGEST_INSTRUCTIONS` (the **shipped** wording drops edge/lane refs — see the implementation note in "The mention contract" above):
 ```python
 MENTION_INSTRUCTIONS = (
     "When you reference a specific element of the map, wrap its short ref in double "
@@ -307,6 +309,9 @@ export interface ChatSuggestRequest {
 export interface ChatSuggestResponse {
   message: string;
   suggestions: ChatSuggestion[];
+  // Added during 2.1a: per-claim source targets for the citations referenced in
+  // `message`, so claim links can open the Source Viewer.
+  mention_sources: MentionSource[];
 }
 ```
 

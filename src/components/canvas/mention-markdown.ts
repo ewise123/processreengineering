@@ -12,14 +12,17 @@ export function mentionsToMarkdown(
   labelById: Map<UUID, string>,
   sourceNameByClaimId: Map<UUID, string>
 ): string {
+  // Escape both brackets so a label containing "[" or "]" can't break out of
+  // the markdown link text.
+  const escapeLabel = (s: string) => s.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
   return text.replace(MENTION_RE, (matched: string, kind: string, id: string) => {
     const trailing = /\s$/.test(matched) ? " " : "";
     if (kind === "node") {
-      const label = (labelById.get(id) ?? "step").replace(/\]/g, "\\]");
+      const label = escapeLabel(labelById.get(id) ?? "step");
       return `[${label}](poet://node/${id})${trailing}`;
     }
     if (kind === "claim") {
-      const label = (sourceNameByClaimId.get(id) ?? "source").replace(/\]/g, "\\]");
+      const label = escapeLabel(sourceNameByClaimId.get(id) ?? "source");
       return `[${label}](poet://claim/${id})${trailing}`;
     }
     // edge / lane: not a chat object — drop the token entirely (including any

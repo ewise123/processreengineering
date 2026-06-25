@@ -36,7 +36,7 @@ import {
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 
 import { api } from "@/lib/api";
 import type {
@@ -329,6 +329,10 @@ function ChatTab({
   const [history, setHistory] = useState<ChatItem[]>(() => sessionStore.load(versionId) as ChatItem[]);
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Bumped whenever the thread is cleared. Each request carries the generation
+  // it was sent under; a reply whose generation is stale is dropped so a
+  // cleared conversation can't be rebuilt by a late-resolving request.
+  const genRef = useRef(0);
 
   useEffect(() => {
     setHistory(sessionStore.load(versionId) as ChatItem[]);
@@ -343,14 +347,18 @@ function ChatTab({
   const chips = selectionChips(selected, labelById);
 
   const ask = useMutation({
-    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextRefs: ObjectRef[] }) =>
+    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextRefs: ObjectRef[]; gen: number }) =>
       api.chatSuggest(projectId, modelId, versionId, {
-        history: input.history,
+        // Send only the backend contract fields (ChatTurn = role + content);
+        // client-only metadata like contextNote/sources must not be resent.
+        history: input.history.map(({ role, content }) => ({ role, content })),
         user_message: input.userMessage,
         mode: "ask",
         context_refs: input.contextRefs,
       }),
     onSuccess: (data, vars) => {
+      // Drop replies that resolve after the thread was cleared.
+      if (vars.gen !== genRef.current) return;
       const next: ChatItem[] = [
         ...vars.history,
         { role: "user", content: vars.userMessage, contextNote: vars.note },
@@ -379,11 +387,15 @@ function ChatTab({
     // Capture pre-send history snapshot before optimistic update
     const preSendHistory = history;
     setHistory((curr) => [...curr, { role: "user", content: trimmed, contextNote: note }]);
-    ask.mutate({ history: preSendHistory, userMessage: trimmed, note, contextRefs });
+    ask.mutate({ history: preSendHistory, userMessage: trimmed, note, contextRefs, gen: genRef.current });
     onClearSelection(); // #11: tab slides away once the prompt is sent
   };
 
   const clearChat = () => {
+    // Invalidate any in-flight reply so it isn't restored after the clear, and
+    // reset the mutation so the "Thinking…" indicator stops immediately.
+    genRef.current += 1;
+    ask.reset();
     sessionStore.clear(versionId);
     setHistory([]);
   };
@@ -594,11 +606,17 @@ function ChatMsg({
       <div className="min-w-0 flex-1">
         <div className="poet-chat-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] leading-relaxed text-slate-800">
           <ReactMarkdown
-            // react-markdown's default urlTransform strips non-standard URL
-            // schemes; keep poet:// intact so the custom link renderer fires.
-            urlTransform={(url) => url}
+            // Keep poet:// intact (the default transform would strip it) but run
+            // every other URL through react-markdown's default sanitizer so we
+            // don't reintroduce javascript:/data: link injection.
+            urlTransform={(url) =>
+              url.startsWith("poet://") ? url : defaultUrlTransform(url)
+            }
             components={{
               p: ({ children }) => <span className="block">{children}</span>,
+              // Assistant prose is grounded text, never remote media — block all
+              // images so a model-supplied <img> can't beacon out.
+              img: () => null,
               a: ({ href, children }) => {
                 const m = /^poet:\/\/(node|claim)\/(.+)$/.exec(href ?? "");
                 if (m && m[1] === "node") {
