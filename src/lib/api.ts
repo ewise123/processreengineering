@@ -6,6 +6,8 @@ import type {
   AiProposedStepResult,
   ChatRequest,
   ChatResponse,
+  ChatSuggestRequest,
+  ChatSuggestResponse,
   Claim,
   ClaimConflict,
   ClaimExtractionResult,
@@ -310,6 +312,16 @@ export const api = {
   ) =>
     request<ChatResponse>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/chat`,
+      { method: "POST", json: body }
+    ),
+  chatSuggest: (
+    projectId: UUID,
+    modelId: UUID,
+    versionId: UUID,
+    body: ChatSuggestRequest
+  ) =>
+    request<ChatSuggestResponse>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/chat-suggest`,
       { method: "POST", json: body }
     ),
   aiEditNode: (

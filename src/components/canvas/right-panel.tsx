@@ -23,7 +23,9 @@ import {
   MessageSquare,
   RotateCcw,
   ShieldCheck,
+  Sparkles,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import {
   useEffect,
@@ -34,11 +36,15 @@ import {
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+
 import { api } from "@/lib/api";
 import type {
   ChatTurn,
   InputRow,
+  MentionSource,
   NodeIssue,
+  ObjectRef,
   ReviewState,
   UUID,
   ViewerTarget,
@@ -46,6 +52,9 @@ import type {
 import { buildVersionRows, type TreeRow } from "./version-tree";
 import { diffChangeCount, isEmptyDiff } from "./version-diff";
 import { bucketNodes, reviewByNodeMap } from "./review-summary";
+import { mentionsToMarkdown } from "./mention-markdown";
+import { selectionChips, selectionToContextRefs, type SelectedObject } from "./chat-context";
+import { browserChatSessionStore } from "./chat-session";
 
 type TabId = "chat" | "versions" | "issues" | "review" | "sources";
 
@@ -64,12 +73,12 @@ const SUGGESTED_PROMPTS = [
   "Compare this against typical processes",
 ];
 
-interface SelectedRef {
-  id: UUID;
-  kind: "node" | "edge";
-  name?: string;
-  nodeKind?: string;
-}
+/** A chat turn plus the (optional) "Context: …" note shown under a user
+ * message recording which steps were attached when it was sent. */
+// Each assistant turn carries its own claim→source mapping so source links
+// resolve even after a reload/remount (the mapping persists with the message
+// rather than living in ephemeral, accumulating component state).
+type ChatItem = ChatTurn & { contextNote?: string; sources?: MentionSource[] };
 
 export function RightPanel({
   projectId,
@@ -78,6 +87,9 @@ export function RightPanel({
   nodes,
   selected,
   onFocusNode,
+  onNavigate,
+  onClearSelection,
+  onRemoveContext,
   reviewState,
   onSendRequest,
   onNavigateVersion,
@@ -90,9 +102,15 @@ export function RightPanel({
   modelId: UUID;
   versionId: UUID;
   nodes: { id: UUID; name: string; type: string; lane_id: UUID | null }[];
-  selected: SelectedRef | null;
+  selected: SelectedObject[];
   /** Sets the canvas selection. Used by Issues "→ Node" links. */
   onFocusNode: (id: UUID) => void;
+  /** Teleport + flash any object (node/edge) on the canvas. Used by chat mentions. */
+  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+  /** Clear the canvas selection. Used by the chat context tab's ✕. */
+  onClearSelection: () => void;
+  /** Remove a single id from the canvas selection (per-chip ✕ in context tab). */
+  onRemoveContext: (id: UUID) => void;
   reviewState?: ReviewState;
   onSendRequest: () => void;
   onNavigateVersion?: (versionId: UUID) => void;
@@ -229,6 +247,11 @@ export function RightPanel({
             modelId={modelId}
             versionId={versionId}
             selected={selected}
+            nodes={nodes}
+            onNavigate={onNavigate}
+            onClearSelection={onClearSelection}
+            onRemoveContext={onRemoveContext}
+            onOpenSource={onOpenSource}
           />
         )}
         {tab === "versions" && (
@@ -285,30 +308,66 @@ function ChatTab({
   modelId,
   versionId,
   selected,
+  nodes,
+  onNavigate,
+  onClearSelection,
+  onRemoveContext,
+  onOpenSource,
 }: {
   projectId: UUID;
   modelId: UUID;
   versionId: UUID;
-  selected: SelectedRef | null;
+  selected: SelectedObject[];
+  nodes: { id: UUID; name: string; type: string; lane_id: UUID | null }[];
+  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+  onClearSelection: () => void;
+  onRemoveContext: (id: UUID) => void;
+  onOpenSource: (t: ViewerTarget) => void;
 }) {
-  const [history, setHistory] = useState<ChatTurn[]>([]);
+  const sessionStore = useMemo(() => browserChatSessionStore(), []);
+  const [showExamples, setShowExamples] = useState(false);
+  const [history, setHistory] = useState<ChatItem[]>(() => sessionStore.load(versionId) as ChatItem[]);
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Bumped whenever the thread is cleared. Each request carries the generation
+  // it was sent under; a reply whose generation is stale is dropped so a
+  // cleared conversation can't be rebuilt by a late-resolving request.
+  const genRef = useRef(0);
+
+  useEffect(() => {
+    setHistory(sessionStore.load(versionId) as ChatItem[]);
+  }, [versionId, sessionStore]);
+
+  const labelById = useMemo(() => {
+    const m = new Map<UUID, string>();
+    for (const n of nodes) m.set(n.id, n.name);
+    return m;
+  }, [nodes]);
+
+  const chips = selectionChips(selected, labelById);
 
   const ask = useMutation({
-    mutationFn: (input: { history: ChatTurn[]; userMessage: string }) =>
-      api.chatWithMap(projectId, modelId, versionId, {
-        history: input.history,
+    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextRefs: ObjectRef[]; gen: number }) =>
+      api.chatSuggest(projectId, modelId, versionId, {
+        // Send only the backend contract fields (ChatTurn = role + content);
+        // client-only metadata like contextNote/sources must not be resent.
+        history: input.history.map(({ role, content }) => ({ role, content })),
         user_message: input.userMessage,
-        selected_node_id: selected?.kind === "node" ? selected.id : null,
-        selected_edge_id: selected?.kind === "edge" ? selected.id : null,
+        mode: "ask",
+        context_refs: input.contextRefs,
       }),
     onSuccess: (data, vars) => {
-      setHistory((curr) => [
-        ...curr,
-        { role: "user", content: vars.userMessage },
-        { role: "assistant", content: data.content },
-      ]);
+      // Drop replies that resolve after the thread was cleared.
+      if (vars.gen !== genRef.current) return;
+      const next: ChatItem[] = [
+        ...vars.history,
+        { role: "user", content: vars.userMessage, contextNote: vars.note },
+        // Carry this message's source mapping ON the message so it survives
+        // reload and isn't lost when component state resets.
+        { role: "assistant", content: data.message, sources: data.mention_sources },
+      ];
+      sessionStore.save(versionId, next);
+      setHistory(next);
     },
   });
 
@@ -320,49 +379,73 @@ function ChatTab({
   const submit = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || ask.isPending) return;
+    // Capture the attached context refs + note NOW — onClearSelection() below
+    // empties `selected`, so reading it lazily inside mutationFn would race.
+    const contextRefs = selectionToContextRefs(selected);
+    const note = chips.length ? chips.map((c) => c.label).join(", ") : undefined;
     setDraft("");
-    ask.mutate({ history, userMessage: trimmed });
+    // Capture pre-send history snapshot before optimistic update
+    const preSendHistory = history;
+    setHistory((curr) => [...curr, { role: "user", content: trimmed, contextNote: note }]);
+    ask.mutate({ history: preSendHistory, userMessage: trimmed, note, contextRefs, gen: genRef.current });
+    onClearSelection(); // #11: tab slides away once the prompt is sent
+  };
+
+  const clearChat = () => {
+    // Invalidate any in-flight reply so it isn't restored after the clear, and
+    // reset the mutation so the "Thinking…" indicator stops immediately.
+    genRef.current += 1;
+    ask.reset();
+    sessionStore.clear(versionId);
+    setHistory([]);
   };
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-3 py-3">
-        <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2.5">
-          <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-indigo-700">
-            POET Assistant
+      <div
+        ref={scrollRef}
+        className="flex-1 space-y-3 overflow-y-auto px-3 py-3"
+        style={{ paddingBottom: chips.length ? 44 : undefined }}
+      >
+        <div className="flex items-start justify-between gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2.5">
+          <div>
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-indigo-700">
+              POET Assistant
+            </div>
+            <div className="text-[11.5px] leading-relaxed text-indigo-900/80">
+              Grounded in this map&apos;s claims and citations. I link the steps
+              and transitions I mention — click to jump to them.
+            </div>
           </div>
-          <div className="text-[11.5px] leading-relaxed text-indigo-900/80">
-            Grounded in this map&apos;s claims and citations. I&apos;ll push
-            back if your premise contradicts the sources.
-          </div>
+          {history.length > 0 && (
+            <button
+              onClick={clearChat}
+              className="shrink-0 rounded-full border border-indigo-200 px-2 py-0.5 text-[10px] text-indigo-700 hover:bg-indigo-100"
+            >
+              Clear
+            </button>
+          )}
         </div>
 
         {history.map((m, i) => (
-          <ChatMsg key={i} turn={m} />
+          <ChatMsg
+            key={i}
+            turn={m}
+            labelById={labelById}
+            onNavigate={onNavigate}
+            onOpenSource={onOpenSource}
+          />
         ))}
 
         {ask.isPending && (
           <div className="flex items-start gap-2">
-            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-slate-900 text-[10px] font-bold text-white">
-              AI
-            </div>
+            <Sparkles size={16} className="mt-1 flex-shrink-0 text-indigo-500" />
             <div className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="flex items-center gap-1">
-                <span
-                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400"
-                  style={{ animationDelay: "0s" }}
-                />
-                <span
-                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400"
-                  style={{ animationDelay: "0.15s" }}
-                />
-                <span
-                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400"
-                  style={{ animationDelay: "0.3s" }}
-                />
-                <span className="ml-2 text-[11px] text-slate-500">
-                  Thinking…
-                </span>
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" style={{ animationDelay: "0s" }} />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" style={{ animationDelay: "0.15s" }} />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" style={{ animationDelay: "0.3s" }} />
+                <span className="ml-2 text-[11px] text-slate-500">Thinking…</span>
               </div>
             </div>
           </div>
@@ -375,67 +458,198 @@ function ChatTab({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-slate-200 p-2">
-        <div className="mb-1.5 flex flex-wrap gap-1.5">
-          {SUGGESTED_PROMPTS.map((s) => (
-            <button
-              key={s}
-              onClick={() => submit(s)}
-              className="rounded-full border border-slate-200 bg-slate-100 px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-200"
-            >
-              {s}
-            </button>
-          ))}
+      <div className="relative shrink-0">
+        {/* Context tab — sits behind the composer and slides up when objects
+            are selected; tucks back down (hidden) when the selection clears. */}
+        <div
+          className={
+            "absolute inset-x-2 bottom-full z-0 transition-transform duration-200 ease-out " +
+            (chips.length > 0
+              ? "translate-y-0"
+              : "translate-y-full pointer-events-none")
+          }
+        >
+          <div className="rounded-t-lg border border-b-0 border-slate-200 bg-slate-50 px-2 pb-3 pt-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">
+                Context
+              </span>
+              {chips.map((c) => (
+                <span key={`${c.kind}:${c.id}`} className="group relative inline-flex">
+                  <button
+                    onClick={() => onNavigate({ kind: c.kind, id: c.id })}
+                    className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white py-0.5 pl-2 pr-5 text-[10px] text-slate-700 hover:bg-slate-100"
+                    title="Jump to this step"
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
+                    {c.label}
+                  </button>
+                  <button
+                    onClick={() => onRemoveContext(c.id)}
+                    title="Remove from context"
+                    className="absolute right-0.5 top-1/2 hidden -translate-y-1/2 rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 group-hover:block"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+              <button
+                onClick={onClearSelection}
+                title="Clear context"
+                className="ml-auto flex h-4 w-4 items-center justify-center rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+              >
+                <X size={11} />
+              </button>
+            </div>
+          </div>
         </div>
-        <div className="flex items-end gap-1.5">
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                submit(draft);
+
+        {/* Composer — in front (z-10), casts a soft shadow up onto the tab. */}
+        <div
+          className="relative z-10 border-t border-slate-200 bg-white p-2"
+          style={{ boxShadow: "0 -6px 14px -8px rgba(15, 23, 42, 0.18)" }}
+        >
+          {showExamples && (
+            <div className="mb-1.5 flex flex-wrap gap-1.5">
+              {SUGGESTED_PROMPTS.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => {
+                    setShowExamples(false);
+                    submit(s);
+                  }}
+                  className="rounded-full border border-slate-200 bg-slate-100 px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-200"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex items-end gap-1.5">
+            <button
+              onClick={() => setShowExamples((v) => !v)}
+              title="Example prompts"
+              aria-label="Toggle example prompts"
+              className={
+                "flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition " +
+                (showExamples
+                  ? "border-indigo-300 bg-indigo-50 text-indigo-600"
+                  : "border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-700")
               }
-            }}
-            rows={2}
-            placeholder="Ask about any node, or describe a change…"
-            className="flex-1 resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs focus:border-slate-500 focus:outline-none"
-          />
-          <button
-            onClick={() => submit(draft)}
-            disabled={!draft.trim() || ask.isPending}
-            className="h-8 rounded-md bg-slate-900 px-3 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300"
-          >
-            Send
-          </button>
+            >
+              <Sparkles size={14} />
+            </button>
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submit(draft);
+                }
+              }}
+              rows={2}
+              placeholder="Ask about any node, or describe a change…"
+              className="flex-1 resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs focus:border-slate-500 focus:outline-none"
+            />
+            <button
+              onClick={() => submit(draft)}
+              disabled={!draft.trim() || ask.isPending}
+              className="h-8 rounded-md bg-slate-900 px-3 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300"
+            >
+              Send
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function ChatMsg({ turn }: { turn: ChatTurn }) {
+function ChatMsg({
+  turn,
+  labelById,
+  onNavigate,
+  onOpenSource,
+}: {
+  turn: ChatItem;
+  labelById: Map<UUID, string>;
+  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+  onOpenSource: (t: ViewerTarget) => void;
+}) {
   if (turn.role === "user") {
     return (
-      <div className="flex items-start justify-end gap-2">
+      <div className="flex flex-col items-end gap-1">
         <div className="max-w-[85%] rounded-lg bg-slate-900 px-3 py-2 text-[11.5px] leading-relaxed text-white">
           {turn.content}
         </div>
+        {turn.contextNote && (
+          <div className="text-[9.5px] text-slate-400">Context: {turn.contextNote}</div>
+        )}
       </div>
     );
   }
+  // Build this message's own claim→source maps from the sources attached to it.
+  const sourceNameByClaim = new Map<UUID, string>(
+    (turn.sources ?? []).map((s) => [s.claim_id, s.input_name])
+  );
+  const sourceTargetByClaim = new Map<UUID, ViewerTarget>(
+    (turn.sources ?? []).map((s) => [
+      s.claim_id,
+      { inputId: s.input_id, inputName: s.input_name, sectionRef: s.section_ref, quote: s.quote },
+    ])
+  );
+  const md = mentionsToMarkdown(turn.content, labelById, sourceNameByClaim);
   return (
     <div className="flex items-start gap-2">
-      <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md bg-slate-900 text-[10px] font-bold text-white">
-        AI
-      </div>
+      <Sparkles size={16} className="mt-1 flex-shrink-0 text-indigo-500" />
       <div className="min-w-0 flex-1">
-        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] leading-relaxed text-slate-800">
-          {turn.content.split("\n").map((line, i) => (
-            <p key={i} className={i > 0 ? "mt-2" : ""}>
-              {line}
-            </p>
-          ))}
+        <div className="poet-chat-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] leading-relaxed text-slate-800">
+          <ReactMarkdown
+            // Keep poet:// intact (the default transform would strip it) but run
+            // every other URL through react-markdown's default sanitizer so we
+            // don't reintroduce javascript:/data: link injection.
+            urlTransform={(url) =>
+              url.startsWith("poet://") ? url : defaultUrlTransform(url)
+            }
+            components={{
+              p: ({ children }) => <span className="block">{children}</span>,
+              // Assistant prose is grounded text, never remote media — block all
+              // images so a model-supplied <img> can't beacon out.
+              img: () => null,
+              a: ({ href, children }) => {
+                const m = /^poet:\/\/(node|claim)\/(.+)$/.exec(href ?? "");
+                if (m && m[1] === "node") {
+                  const id = m[2];
+                  return (
+                    <button
+                      onClick={() => onNavigate({ kind: "node", id })}
+                      className="mx-0.5 inline rounded border border-indigo-200 bg-indigo-50 px-1 font-medium text-indigo-700 hover:bg-indigo-100"
+                      title="Jump to this step"
+                    >
+                      {children}
+                    </button>
+                  );
+                }
+                if (m && m[1] === "claim") {
+                  const id = m[2];
+                  const tgt = sourceTargetByClaim.get(id);
+                  return (
+                    <button
+                      onClick={() => tgt && onOpenSource(tgt)}
+                      className="mx-0.5 inline rounded border border-slate-300 bg-white px-1 text-slate-600 hover:bg-slate-100"
+                      title={tgt ? `Open ${tgt.inputName}` : "Source"}
+                    >
+                      {children}
+                    </button>
+                  );
+                }
+                return <span>{children}</span>;
+              },
+            }}
+          >
+            {md}
+          </ReactMarkdown>
         </div>
       </div>
     </div>

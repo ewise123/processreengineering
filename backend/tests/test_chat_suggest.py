@@ -110,8 +110,9 @@ def test_ask_mode_never_calls_tools():
     from app.schemas.version_chat_suggest import ChatMode
     captured = {}
 
-    def fake_chat(*, history, user_message, map_context_text):
+    def fake_chat(*, history, user_message, map_context_text, extra_instructions=""):
         captured["called"] = True
+        captured["extra_instructions"] = extra_instructions
         return "A plain answer."
 
     with patch.object(map_chat_suggest, "chat", fake_chat):
@@ -122,6 +123,7 @@ def test_ask_mode_never_calls_tools():
     assert captured["called"] is True
     assert raw == []
     assert message == "A plain answer."
+    assert captured["extra_instructions"]  # MENTION_INSTRUCTIONS was passed
 
 
 def test_suggest_mode_ignores_non_list_suggestions():
@@ -355,3 +357,152 @@ def test_chat_suggest_endpoint_drops_only_malformed_op_in_batch(db):
             payload=ChatSuggestRequest(user_message="x", mode="suggest"), db=db)
     assert len(resp.suggestions) == 1               # malformed dropped, good kept
     assert resp.suggestions[0].title == "Good"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 Task 1: mention ref resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_mention_refs_rewrites_known_refs_to_uuids():
+    from app.api.v2 import process_maps as pm_api
+    ctx, (n1, _n2, e1, l1, c1) = _ctx_stub()
+    msg = "Step [[N1]] feeds edge [[E1]] per claim [[C1]] in lane [[L1]]."
+    out = pm_api._resolve_mention_refs(msg, ctx)
+    assert f"[[node:{n1}]]" in out
+    assert f"[[edge:{e1}]]" in out
+    assert f"[[claim:{c1}]]" in out
+    assert f"[[lane:{l1}]]" in out
+
+
+def test_resolve_mention_refs_flattens_unknown_refs():
+    from app.api.v2 import process_maps as pm_api
+    ctx, _ = _ctx_stub()
+    out = pm_api._resolve_mention_refs("Unknown [[N9]] here.", ctx)
+    assert out == "Unknown N9 here."  # brackets stripped, plain text kept
+
+
+def test_chat_runs_extra_instructions_into_system(monkeypatch):
+    from app.services import map_chat
+    captured = {}
+
+    class _Resp:
+        content = [type("B", (), {"type": "text", "text": "ok"})()]
+
+    class _Client:
+        @property
+        def messages(self):
+            return self
+        def create(self, **kwargs):
+            captured["system"] = kwargs["system"]
+            return _Resp()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    monkeypatch.setattr(map_chat.anthropic, "Anthropic", lambda **k: _Client())
+    map_chat.chat(history=[], user_message="hi", map_context_text="M",
+                  extra_instructions="WRAP REFS LIKE [[N3]]")
+    assert "WRAP REFS LIKE [[N3]]" in captured["system"]
+
+
+def test_chat_suggest_ask_message_is_mention_resolved(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    project, version, n1, claim = _seed(db)
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_suggest",
+                   lambda **k: ("See step [[N1]].", []))
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)
+    assert f"[[node:{n1.id}]]" in resp.message
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.1a Task 1: ground on all context nodes; drop edge refs + parenthetical
+# ---------------------------------------------------------------------------
+
+
+def test_mention_instructions_drop_edges_and_parenthetical():
+    from app.services.map_chat_suggest import MENTION_INSTRUCTIONS
+    low = MENTION_INSTRUCTIONS.lower()
+    assert "[[e" not in low                      # no edge-ref instruction
+    assert "parenthes" in low or "do not repeat" in low  # tells model not to restate name
+
+
+def test_chat_suggest_focuses_on_all_context_nodes(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest, ObjectRef
+    from app.models.process import ProcessNode
+    project, version, n1, claim = _seed(db)
+    n2 = ProcessNode(version_id=version.id, lane_id=n1.lane_id, type="task", name="Approve", position={}, properties={})
+    db.add(n2); db.commit()
+    captured = {}
+
+    def fake_service(*, history, user_message, map_context_text, mode):
+        captured["ctx"] = map_context_text
+        return ("ok", [])
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_suggest", fake_service)
+        pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(
+                user_message="compare these", mode="ask",
+                context_refs=[ObjectRef(kind="node", id=n1.id), ObjectRef(kind="node", id=n2.id)],
+            ),
+            db=db,
+        )
+    assert "N1" in captured["ctx"] and "N2" in captured["ctx"]
+    assert "focus" in captured["ctx"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.1a Task 2: mention_sources on chat-suggest response
+# ---------------------------------------------------------------------------
+
+
+def test_chat_suggest_attaches_mention_sources_for_cited_claims(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    from app.models.input import Chunk, DocumentSection, Input
+    from app.models.claim import ClaimCitation
+    project, version, n1, claim = _seed(db)
+    inp = Input(project_id=project.id, name="SOP.pdf", type="document")
+    db.add(inp); db.flush()
+    sec = DocumentSection(
+        input_id=inp.id, kind="section", order_index=0,
+        ref={"page": 1}, text="The clerk receives it.",
+    )
+    db.add(sec); db.flush()
+    chunk = Chunk(section_id=sec.id, char_start=0, char_end=22, text="the clerk receives it")
+    db.add(chunk); db.flush()
+    db.add(ClaimCitation(claim_id=claim.id, chunk_id=chunk.id, quote="the clerk receives it"))
+    db.commit()
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_suggest", lambda **k: ("Per [[C1]] this is logged.", []))
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)
+    assert f"[[claim:{claim.id}]]" in resp.message
+    src = next(s for s in resp.mention_sources if s.claim_id == claim.id)
+    assert src.input_id == inp.id and src.input_name == "SOP.pdf"
+    assert src.quote == "the clerk receives it"
+
+
+def test_chat_suggest_skips_malformed_claim_token_without_crashing(db):
+    """A non-UUID [[claim:...]] token (e.g. echoed user text) must be skipped,
+    not raise ValueError and turn the endpoint into a 500."""
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    project, version, _n1, _claim = _seed(db)
+
+    with _pytest.MonkeyPatch.context() as mp:
+        # "abc" is hex-ish (matches the regex) but not a valid UUID.
+        mp.setattr(pm_api, "run_chat_suggest", lambda **k: ("See [[claim:abc]] here.", []))
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)
+    # No crash; the malformed token simply produces no source.
+    assert resp.mention_sources == []
+    assert "[[claim:abc]]" in resp.message

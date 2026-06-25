@@ -122,6 +122,15 @@ class ChatSuggestRequest(BaseModel):
     context_refs: list[ObjectRef] = Field(default_factory=list)
 
 
+class MentionSource(BaseModel):
+    claim_id: UUID
+    input_id: UUID
+    input_name: str
+    section_ref: dict | None = None
+    quote: str | None = None
+
+
 class ChatSuggestResponse(BaseModel):
     message: str
     suggestions: list[ChatSuggestion] = Field(default_factory=list)
+    mention_sources: list[MentionSource] = Field(default_factory=list)

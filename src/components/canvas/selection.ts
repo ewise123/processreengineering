@@ -46,3 +46,23 @@ export function nodesInMarquee(nodes: PositionedNode[], marquee: Rect): string[]
     .filter((n) => rectsIntersect(marquee, n))
     .map((n) => n.id);
 }
+
+/** Minimal edge for marquee hit-testing. */
+export interface MarqueeEdge {
+  id: string;
+  from: string;
+  to: string;
+}
+
+/** Ids of edges whose BOTH endpoint nodes are inside the marquee (i.e. in
+ * `nodeIdsInMarquee`). Keeps the lasso clean — no edges dangling to nodes
+ * outside the box. */
+export function edgesInMarquee(
+  edges: MarqueeEdge[],
+  nodeIdsInMarquee: string[]
+): string[] {
+  const inside = new Set(nodeIdsInMarquee);
+  return edges
+    .filter((e) => inside.has(e.from) && inside.has(e.to))
+    .map((e) => e.id);
+}

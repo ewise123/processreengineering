@@ -1,4 +1,5 @@
 """Phase 2.5 endpoints: generate process maps from claims, read them back."""
+import re
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -87,6 +88,7 @@ from app.schemas.version_chat_suggest import (
     ChatSuggestResponse,
     ChatSuggestion,
     ChatTurn as SuggestChatTurn,
+    MentionSource,
     ObjectRef,
     RefKind,
     SuggestionOp,
@@ -1204,6 +1206,24 @@ def _resolve_one_ref(value, map_attr, ctx):
     return str(real), real
 
 
+_MENTION_RE = re.compile(r"\[\[([NELC])(\d+)\]\]")
+_MENTION_KIND = {"N": ("node", "node_ref_to_id"), "E": ("edge", "edge_ref_to_id"),
+                 "L": ("lane", "lane_ref_to_id"), "C": ("claim", "claim_ref_to_id")}
+
+
+def _resolve_mention_refs(message: str, ctx) -> str:
+    """Rewrite short refs the model emitted ([[N3]]/[[E2]]/[[C1]]/[[L1]]) into
+    stable [[kind:uuid]] mentions the frontend can link. Unknown refs are
+    flattened to plain text so prose stays readable."""
+    def _sub(m):
+        letter, num = m.group(1), m.group(2)
+        short = f"{letter}{num}"
+        kind, attr = _MENTION_KIND[letter]
+        real = getattr(ctx, attr).get(short)
+        return f"[[{kind}:{real}]]" if real is not None else short
+    return _MENTION_RE.sub(_sub, message)
+
+
 def _build_suggestion(raw: dict, ctx, index: int):
     """Resolve a raw model suggestion into a validated ChatSuggestion, or None
     if the op is malformed. Mirrors _resolve_refs' fabricated-ref hygiene."""
@@ -1347,12 +1367,26 @@ def chat_suggest(
     )
     ctx = assemble_map_context(db, version, selected_node_id=selected_node_id)
 
+    # Ground the model on EVERY attached node (not just the first). Reference
+    # them by the same short refs the map context uses.
+    focus_refs = [
+        ctx.node_ref_by_id[r.id]
+        for r in payload.context_refs
+        if r.kind == RefKind.NODE and r.id in ctx.node_ref_by_id
+    ]
+    map_text = ctx.text
+    if focus_refs:
+        map_text += (
+            "\n\nThe user has attached these steps as the focus of the question; "
+            "address all of them: " + ", ".join(focus_refs)
+        )
+
     history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
     try:
         message, raw_suggestions = run_chat_suggest(
             history=history,
             user_message=payload.user_message,
-            map_context_text=ctx.text,
+            map_context_text=map_text,
             mode=payload.mode,
         )
     except RuntimeError as exc:  # service raises only RuntimeError; _build_suggestion swallows ValueError
@@ -1363,7 +1397,27 @@ def chat_suggest(
         built = _build_suggestion(raw, ctx, index=i)
         if built is not None:
             suggestions.append(built)
-    return ChatSuggestResponse(message=message, suggestions=suggestions)
+    resolved = _resolve_mention_refs(message, ctx)
+    # Guard against malformed tokens: the regex matches hex-ish strings that are
+    # not valid UUIDs (e.g. an echoed "[[claim:abc]]"), so UUID() can raise.
+    # Skip those instead of turning the endpoint into a 500. Dedupe while
+    # preserving first-seen order.
+    mention_sources = []
+    seen_claim_ids: set[UUID] = set()
+    for cid_str in re.findall(r"\[\[claim:([0-9a-fA-F-]+)\]\]", resolved):
+        try:
+            cid = UUID(cid_str)
+        except ValueError:
+            continue
+        if cid in seen_claim_ids:
+            continue
+        seen_claim_ids.add(cid)
+        tgt = ctx.source_target_by_claim.get(cid)
+        if tgt:
+            mention_sources.append(MentionSource(claim_id=cid, **tgt))
+    return ChatSuggestResponse(
+        message=resolved, suggestions=suggestions, mention_sources=mention_sources
+    )
 
 
 @router.post(

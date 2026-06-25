@@ -1,5 +1,6 @@
 "use client";
 
+import { Hand } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type { Viewport } from "./types";
@@ -76,9 +77,7 @@ export function FloatingToolbar({
           onClick={() => onToolChange("pan")}
           title="Pan (H)"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path d="M5 12l7 7 7-7M12 19V5" />
-          </svg>
+          <Hand size={14} />
         </ToolButton>
         <ToolButton
           active={tool === "connect"}

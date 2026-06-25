@@ -23,7 +23,8 @@ import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType } from "./layout";
 import { sizeForNodeType } from "./node-type";
 import { placeProposedStep } from "./ai-edit";
-import { normalizeMarquee, nodesInMarquee } from "./selection";
+import { edgeFocusCenter } from "./edge-focus";
+import { normalizeMarquee, nodesInMarquee, edgesInMarquee } from "./selection";
 import {
   PALETTE_DRAG_MIME,
   PALETTE_SHAPES,
@@ -155,6 +156,13 @@ export interface BpmnCanvasHandle {
   /** Select a node (drives Properties panel + chat context) from outside
    * the canvas, e.g. clicking a node link in the Issues tab. */
   selectNode: (id: UUID) => void;
+  /** Clear the current selection (used by the chat context tab's ✕). */
+  clearSelection: () => void;
+  /** Remove a single object id from the current selection (chat context ✕). */
+  deselectId: (id: UUID) => void;
+  /** Pan/zoom to an object by id, select it, and flash it briefly. Handles
+   * both nodes and edges (used by chat mention links). */
+  navigateTo: (ref: { kind: "node" | "edge"; id: UUID }) => void;
   /** Delete every selected node and edge (node deletes are non-undoable). */
   deleteSelection: () => Promise<void>;
   /** Copy the current selection to the in-memory clipboard. */
@@ -178,6 +186,8 @@ interface BpmnCanvasProps {
    * uses this to invalidate dependent queries like issue badges. */
   onNodeDeleted?: (id: UUID) => void;
   onCountsChange?: (counts: { lanes: number; nodes: number; edges: number }) => void;
+  /** Called when the user clicks the "Properties" pill on a selected node. */
+  onOpenProperties?: () => void;
 }
 
 export const BpmnCanvas = forwardRef<BpmnCanvasHandle, BpmnCanvasProps>(
@@ -194,6 +204,7 @@ function BpmnCanvas({
   onSelectionChange,
   onNodeDeleted,
   onCountsChange,
+  onOpenProperties,
 }, ref) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState(initialNodes);
@@ -608,22 +619,43 @@ function BpmnCanvas({
     });
   }, []);
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      deleteNode: deleteNodeImpl,
-      updateNode: updateNodeImpl,
-      addProposedStep,
-      selectNode: (id) => {
-        setSelectedIds(new Set([id]));
-        focusNodeInViewport(id);
-      },
-      deleteSelection: deleteSelectionImpl,
-      copySelection: copySelectionImpl,
-      moveSelectionToLane: moveSelectionToLaneImpl,
-    }),
-    [deleteNodeImpl, updateNodeImpl, addProposedStep, focusNodeInViewport, deleteSelectionImpl]
-  );
+  const [flashId, setFlashId] = useState<UUID | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flash = useCallback((id: UUID) => {
+    setFlashId(id);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashId(null), 1400);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    };
+  }, []);
+
+  const focusEdgeInViewport = useCallback((id: UUID) => {
+    const edge = edgesRef.current.find((e) => e.id === id);
+    if (!edge) return;
+    const center = edgeFocusCenter(
+      { from: edge.from, to: edge.to },
+      nodesRef.current,
+      displayLanesRef.current
+    );
+    const svg = svgRef.current;
+    if (!center || !svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const v = viewportRef.current;
+    setViewport({
+      scale: v.scale,
+      tx: rect.width / 2 - center.cx * v.scale,
+      ty: rect.height / 2 - center.cy * v.scale,
+    });
+  }, []);
+
+  // NOTE: useImperativeHandle is defined further down, after copySelectionImpl
+  // and moveSelectionToLaneImpl, so those callbacks can be listed in its
+  // dependency array without a temporal-dead-zone reference.
 
   // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
   // Cmd/Ctrl+Shift+Z (or Cmd/Ctrl+Y) for undo/redo. All of them no-op
@@ -637,6 +669,15 @@ function BpmnCanvas({
           target.tagName === "TEXTAREA" ||
           target.isContentEditable);
       if (inEditable) return;
+
+      if (e.code === "Space") {
+        // Only hijack Space for pan when the pointer is over the canvas;
+        // elsewhere leave it for scrolling and button/menu activation.
+        if (!pointerOverCanvasRef.current) return;
+        e.preventDefault(); // stop the page from scrolling
+        spaceHeld.current = true;
+        return;
+      }
 
       const mod = e.metaKey || e.ctrlKey;
       if (mod && (e.key === "z" || e.key === "Z")) {
@@ -685,12 +726,23 @@ function BpmnCanvas({
         void deleteSelectionImpl();
       }
     };
+    const upHandler = (e: KeyboardEvent) => {
+      if (e.code === "Space") spaceHeld.current = false;
+    };
     document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    document.addEventListener("keyup", upHandler);
+    return () => {
+      document.removeEventListener("keydown", handler);
+      document.removeEventListener("keyup", upHandler);
+    };
   }, [deleteSelectionImpl, undo, redo, clearSelection]);
 
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
+  const spaceHeld = useRef(false);
+  // True while the pointer is over the canvas. Space-to-pan only engages then,
+  // so we don't swallow Space (scroll / button activation) page-wide.
+  const pointerOverCanvasRef = useRef(false);
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const lanesRef = useRef(lanes);
@@ -855,6 +907,17 @@ function BpmnCanvas({
   }, []);
 
   const onNodeMouseDown = (e: MouseEvent, id: string) => {
+    if (e.button === 1 || spaceHeld.current) {
+      e.preventDefault();
+      setDrag({
+        type: "pan",
+        startX: e.clientX,
+        startY: e.clientY,
+        tx0: viewportRef.current.tx,
+        ty0: viewportRef.current.ty,
+      });
+      return;
+    }
     if (e.button !== 0) return;
     setContextMenu(null);
     e.stopPropagation();
@@ -981,6 +1044,17 @@ function BpmnCanvas({
   );
 
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
+    if (e.button === 1 || spaceHeld.current) {
+      e.preventDefault();
+      setDrag({
+        type: "pan",
+        startX: e.clientX,
+        startY: e.clientY,
+        tx0: viewportRef.current.tx,
+        ty0: viewportRef.current.ty,
+      });
+      return;
+    }
     if (e.button !== 0) return;
     setContextMenu(null);
     const target = e.target as SVGElement;
@@ -1224,8 +1298,12 @@ function BpmnCanvas({
             w: n.w,
             h: n.h,
           }));
-          const hit = nodesInMarquee(positioned, rect);
-          setSelection(hit, drag.additive);
+          const hitNodes = nodesInMarquee(positioned, rect);
+          const hitEdges = edgesInMarquee(
+            edgesRef.current.map((e) => ({ id: e.id, from: e.from, to: e.to })),
+            hitNodes
+          );
+          setSelection([...hitNodes, ...hitEdges], drag.additive);
         }
         setDrag(null);
         return;
@@ -1393,6 +1471,49 @@ function BpmnCanvas({
     clipboard.copy({ nodes, edges });
   }, [clipboard]);
 
+  // Placed here (not with the other hooks above) so copySelectionImpl and
+  // moveSelectionToLaneImpl are already defined and can be real dependencies.
+  useImperativeHandle(
+    ref,
+    () => ({
+      deleteNode: deleteNodeImpl,
+      updateNode: updateNodeImpl,
+      addProposedStep,
+      selectNode: (id) => {
+        setSelectedIds(new Set([id]));
+        focusNodeInViewport(id);
+      },
+      clearSelection,
+      deselectId: (id) =>
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        }),
+      navigateTo: (refTarget) => {
+        setSelectedIds(new Set([refTarget.id]));
+        if (refTarget.kind === "edge") focusEdgeInViewport(refTarget.id);
+        else focusNodeInViewport(refTarget.id);
+        flash(refTarget.id);
+      },
+      deleteSelection: deleteSelectionImpl,
+      copySelection: copySelectionImpl,
+      moveSelectionToLane: moveSelectionToLaneImpl,
+    }),
+    [
+      deleteNodeImpl,
+      updateNodeImpl,
+      addProposedStep,
+      focusNodeInViewport,
+      focusEdgeInViewport,
+      flash,
+      clearSelection,
+      deleteSelectionImpl,
+      copySelectionImpl,
+      moveSelectionToLaneImpl,
+    ]
+  );
+
   const pasteClipboardImpl = useCallback(async () => {
     const snap = clipboard.get();
     if (!snap || snap.nodes.length === 0) return;
@@ -1509,6 +1630,9 @@ function BpmnCanvas({
         x: e.clientX,
         y: e.clientY,
         items: [
+          ...(count <= 1 && onOpenProperties
+            ? [{ label: "Properties", onSelect: () => onOpenProperties() }]
+            : []),
           { label: `Copy${suffix}`, onSelect: copySelectionImpl },
           {
             label: "Duplicate",
@@ -1521,7 +1645,7 @@ function BpmnCanvas({
         ],
       });
     },
-    [selectOnly, copySelectionImpl, pasteClipboardImpl, deleteSelectionImpl]
+    [selectOnly, copySelectionImpl, pasteClipboardImpl, deleteSelectionImpl, onOpenProperties]
   );
 
   const openEdgeMenu = useCallback(
@@ -1791,6 +1915,11 @@ function BpmnCanvas({
         onContextMenu={openCanvasMenu}
         onDragOver={onCanvasDragOver}
         onDrop={onCanvasDrop}
+        onPointerEnter={() => { pointerOverCanvasRef.current = true; }}
+        onPointerLeave={() => {
+          pointerOverCanvasRef.current = false;
+          spaceHeld.current = false; // don't strand pan mode if Space is released off-canvas
+        }}
         style={{
           width: "100%",
           height: "100%",
@@ -1905,6 +2034,54 @@ function BpmnCanvas({
               onStartConnect={onStartConnect}
             />
           ))}
+          {flashId && (() => {
+            const pulse = (
+              <animate attributeName="opacity" values="1;0.2;1" dur="0.7s" repeatCount="2" />
+            );
+            const fn = renderNodes.find((n) => n.id === flashId);
+            if (fn) {
+              return (
+                <rect
+                  x={fn.x - 4}
+                  y={fn.y - 4}
+                  width={fn.w + 8}
+                  height={fn.h + 8}
+                  rx={8}
+                  fill="none"
+                  stroke="#6366f1"
+                  strokeWidth={3}
+                  className="pointer-events-none"
+                >
+                  {pulse}
+                </rect>
+              );
+            }
+            // Edge flash: pulse a marker at the edge midpoint so navigateTo to an
+            // edge gives the same visual confirmation a node does.
+            const fe = edges.find((e) => e.id === flashId);
+            if (fe) {
+              const from = renderNodes.find((n) => n.id === fe.from);
+              const to = renderNodes.find((n) => n.id === fe.to);
+              if (!from || !to) return null;
+              const { midX, midY } = buildEdgePath(from, to);
+              return (
+                <rect
+                  x={midX - 22}
+                  y={midY - 14}
+                  width={44}
+                  height={28}
+                  rx={8}
+                  fill="none"
+                  stroke="#6366f1"
+                  strokeWidth={3}
+                  className="pointer-events-none"
+                >
+                  {pulse}
+                </rect>
+              );
+            }
+            return null;
+          })()}
           {editingEdgeId &&
             (() => {
               const edge = edges.find((e) => e.id === editingEdgeId);

@@ -20,6 +20,7 @@ import { AiEditCacheProvider } from "@/components/canvas/ai-edit-cache";
 import { BpmnCanvas, type BpmnCanvasHandle, type CanvasSelection } from "@/components/canvas/bpmn-canvas";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
 import { RightPanel } from "@/components/canvas/right-panel";
+import type { SelectedObject } from "@/components/canvas/chat-context";
 import { buildCanvasState } from "@/components/canvas/layout";
 import { reviewByNodeMap } from "@/components/canvas/review-summary";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
@@ -66,7 +67,7 @@ export default function CanvasPage() {
   const [rightCollapsed, setRightCollapsed] = useState(false);
   // Properties panel collapse state lifted so the page can resize the
   // wrapper to a small button when collapsed.
-  const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
+  const [propertiesCollapsed, setPropertiesCollapsed] = useState(true);
   const [viewerTarget, setViewerTarget] = useState<ViewerTarget | null>(null);
   const [viewerExpanded, setViewerExpanded] = useState(true);
   const [counts, setCounts] = useState<{ lanes: number; nodes: number; edges: number } | null>(null);
@@ -157,7 +158,6 @@ export default function CanvasPage() {
 
   const handleSelectionChange = useCallback((s: CanvasSelection) => {
     setSelected(s);
-    if (s.kind === "node") setPropertiesCollapsed(false);
   }, []);
 
   const { data, isLoading, error } = useQuery({
@@ -213,6 +213,18 @@ export default function CanvasPage() {
   );
 
   const selectedNode = selected.kind === "node" ? selected : null;
+
+  // Every selected object, flattened for the chat context tab (supports
+  // multi-select; node labels resolved from the loaded graph).
+  const chatSelected: SelectedObject[] = useMemo(() => {
+    if (selected.kind === "node")
+      return [{ id: selected.id, kind: "node", name: selected.name }];
+    if (selected.kind === "multi") {
+      const nameById = new Map((data?.nodes ?? []).map((n) => [n.id, n.name]));
+      return selected.nodeIds.map((id) => ({ id, kind: "node" as const, name: nameById.get(id) }));
+    }
+    return [];
+  }, [selected, data]);
 
   return (
     <AiEditCacheProvider>
@@ -335,6 +347,7 @@ export default function CanvasPage() {
           onSelectionChange={handleSelectionChange}
           onNodeDeleted={handleNodeDeleted}
           onCountsChange={handleCountsChange}
+          onOpenProperties={() => setPropertiesCollapsed(false)}
         />
       )}
 
@@ -437,14 +450,11 @@ export default function CanvasPage() {
               type: n.type,
               lane_id: n.lane_id,
             }))}
-            selected={
-              selected.kind === "node"
-                ? { id: selected.id, kind: "node", name: selected.name, nodeKind: selected.nodeKind }
-                : selected.kind === "edge"
-                  ? { id: selected.id, kind: "edge" }
-                  : null
-            }
+            selected={chatSelected}
             onFocusNode={(id) => canvasRef.current?.selectNode(id)}
+            onNavigate={(refTarget) => canvasRef.current?.navigateTo(refTarget)}
+            onClearSelection={() => canvasRef.current?.clearSelection()}
+            onRemoveContext={(id) => canvasRef.current?.deselectId(id)}
             reviewState={reviewState}
             onSendRequest={() => requestReviewMutation.mutate()}
             onNavigateVersion={handleNavigateVersion}

@@ -20,6 +20,15 @@ MAX_TOKENS = 2000
 _NODE_TYPES = [t.value for t in NodeType]
 _OP_KINDS = [k.value for k in OpKind]
 
+MENTION_INSTRUCTIONS = (
+    "When you reference a specific step or a source claim, wrap its short ref in "
+    "double brackets so the UI can turn it into a link: a node (step) as [[N3]], a "
+    "claim as [[C1]]. Refer to a transition by linking its endpoint STEPS — e.g. "
+    "\"from [[N1]] to [[N2]]\" — never emit an edge ref. Use the refs exactly as they "
+    "appear in the map context below; never invent one. Do NOT repeat the element's "
+    "name in parentheses after a bracketed ref — the link already shows its name."
+)
+
 SUGGEST_INSTRUCTIONS = """\
 You may propose concrete edits to the map. Call `propose_changes` ONLY when the
 sources or the map's structure actually warrant a change. A question, or a map
@@ -106,6 +115,7 @@ def run_chat_suggest(
             history=history,
             user_message=user_message,
             map_context_text=map_context_text,
+            extra_instructions=MENTION_INSTRUCTIONS,
         )
         return message, []
 
@@ -113,6 +123,8 @@ def run_chat_suggest(
         CHAT_GUARDRAILS
         + "\n\n---\n"
         + SUGGEST_INSTRUCTIONS
+        + "\n\n"
+        + MENTION_INSTRUCTIONS
         + "\n\n---\nCurrent process map (grounded source of truth):\n"
         + map_context_text
     )

@@ -33,6 +33,7 @@ class MapContext:
     node_ref_to_id: dict[str, UUID]
     edge_ref_to_id: dict[str, UUID]
     lane_ref_to_id: dict[str, UUID]
+    source_target_by_claim: dict[UUID, dict]
 
 
 def assemble_map_context(
@@ -117,10 +118,17 @@ def assemble_map_context(
 
     quote_by_claim: dict[UUID, str] = {}
     source_by_claim: dict[UUID, str] = {}
+    source_target_by_claim: dict[UUID, dict] = {}
     if project_claim_ids:
         cit_rows = list(
             db.execute(
-                select(ClaimCitation.claim_id, ClaimCitation.quote, Input.name)
+                select(
+                    ClaimCitation.claim_id,
+                    ClaimCitation.quote,
+                    Input.name,
+                    Input.id,
+                    DocumentSection.ref,
+                )
                 .join(Chunk, Chunk.id == ClaimCitation.chunk_id)
                 .join(DocumentSection, DocumentSection.id == Chunk.section_id)
                 .join(Input, Input.id == DocumentSection.input_id)
@@ -128,10 +136,16 @@ def assemble_map_context(
                 .order_by(ClaimCitation.created_at)
             ).all()
         )
-        for claim_id, quote, input_name in cit_rows:
+        for claim_id, quote, input_name, input_id, section_ref in cit_rows:
             if claim_id not in quote_by_claim:
                 quote_by_claim[claim_id] = quote
                 source_by_claim[claim_id] = input_name
+                source_target_by_claim[claim_id] = {
+                    "input_id": input_id,
+                    "input_name": input_name,
+                    "section_ref": section_ref or None,
+                    "quote": quote,
+                }
 
     claims_ctx = [
         {
@@ -169,4 +183,5 @@ def assemble_map_context(
         node_ref_to_id=node_ref_to_id,
         edge_ref_to_id=edge_ref_to_id,
         lane_ref_to_id=lane_ref_to_id,
+        source_target_by_claim=source_target_by_claim,
     )
