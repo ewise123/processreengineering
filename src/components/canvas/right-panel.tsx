@@ -285,7 +285,7 @@ export function RightPanel({
           <ChangeLogTab
             projectId={projectId}
             modelId={modelId}
-            selected={selected}
+            selected={selected.length === 1 ? selected[0] : null}
             onFocusNode={onFocusNode}
           />
         )}
