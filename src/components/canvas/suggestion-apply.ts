@@ -107,6 +107,7 @@ export interface BatchResult {
   error?: string;
   undo?: () => Promise<void>;
 }
+/** Build an O(n) lookup index from a ProcessGraph for planBundle's stale-ref checks. */
 export function indexGraph(graph: ProcessGraph): GraphIndex {
   const laneNameToId = new Map<string, UUID>();
   for (const l of graph.lanes) laneNameToId.set(l.name, l.id);
@@ -175,4 +176,102 @@ export function bundleSuggestions(suggestions: ChatSuggestion[]): Bundle[] {
       undoable: members.every((m) => !isDeleteOp(m.op.kind)),
     };
   });
+}
+
+/** Which id-set a given step field must exist in (for stale-ref checks). */
+function stepRealRefs(step: MutationStep): { ref: string; set: "node" | "edge" | "lane" }[] {
+  switch (step.kind) {
+    case "update_node":
+      return [
+        { ref: step.nodeRef, set: "node" },
+        ...(step.laneRef ? [{ ref: step.laneRef, set: "lane" as const }] : []),
+      ];
+    case "delete_node":
+      return [{ ref: step.nodeRef, set: "node" }];
+    case "create_node":
+      return [
+        ...(step.laneRef ? [{ ref: step.laneRef, set: "lane" as const }] : []),
+        ...(step.nearNodeRef ? [{ ref: step.nearNodeRef, set: "node" as const }] : []),
+      ];
+    case "create_edge":
+      return [
+        { ref: step.fromRef, set: "node" },
+        { ref: step.toRef, set: "node" },
+      ];
+    case "delete_edge":
+      return [{ ref: step.edgeRef, set: "edge" }];
+    case "update_edge_label":
+      return [{ ref: step.edgeRef, set: "edge" }];
+    case "reroute_edge":
+      return [
+        { ref: step.edgeRef, set: "edge" },
+        ...(step.fromRef ? [{ ref: step.fromRef, set: "node" as const }] : []),
+        ...(step.toRef ? [{ ref: step.toRef, set: "node" as const }] : []),
+      ];
+    case "update_lane":
+      return [{ ref: step.laneRef, set: "lane" }];
+    case "create_lane":
+      return [];
+  }
+}
+
+const SET_BY_KIND: Record<"node" | "edge" | "lane", keyof Pick<GraphIndex, "nodeIds" | "edgeIds" | "laneIds">> = {
+  node: "nodeIds",
+  edge: "edgeIds",
+  lane: "laneIds",
+};
+
+/** Order a bundle's suggestions so a tmp_id producer always precedes any
+ * suggestion that consumes it. `bundleSuggestions` preserves document order,
+ * and the backend usually emits producer-first — but we must not rely on it,
+ * because the executor resolves tmp refs at run time as create-steps execute.
+ * Stable DFS topological order; cycles (shouldn't happen) are broken safely. */
+function orderByDependency(suggestions: ChatSuggestion[]): ChatSuggestion[] {
+  const producerOf = new Map<string, ChatSuggestion>();
+  for (const s of suggestions) if (s.op.temp_id) producerOf.set(s.op.temp_id, s);
+  const out: ChatSuggestion[] = [];
+  const done = new Set<string>();
+  const onStack = new Set<string>();
+  const visit = (s: ChatSuggestion) => {
+    if (done.has(s.id) || onStack.has(s.id)) return; // skip finished / break cycles
+    onStack.add(s.id);
+    for (const ref of consumedRefs(s.op)) {
+      const producer = producerOf.get(ref);
+      if (producer && producer.id !== s.id) visit(producer);
+    }
+    onStack.delete(s.id);
+    done.add(s.id);
+    out.push(s);
+  };
+  for (const s of suggestions) visit(s);
+  return out;
+}
+
+/** Build an ordered, validated plan for one bundle. Suggestions are reordered so
+ * tmp producers precede consumers; a tmp ref produced ANYWHERE in the plan counts
+ * as in-plan (order-independent), and every other ref must exist in the current
+ * graph index, else the bundle is marked unapplyable. */
+export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
+  const steps = orderByDependency(bundle.suggestions).flatMap((s) => opToSteps(s.op));
+  // Every tmp produced anywhere in this plan — validation is order-independent.
+  const producedAll = new Set<string>();
+  for (const step of steps) {
+    if ("tempId" in step && step.tempId) producedAll.add(step.tempId);
+  }
+  let applyable = true;
+  let reason: string | undefined;
+
+  for (const step of steps) {
+    for (const { ref, set } of stepRealRefs(step)) {
+      if (producedAll.has(ref)) continue; // created within this plan
+      if (!index[SET_BY_KIND[set]].has(ref)) {
+        applyable = false;
+        reason = `A referenced ${set} no longer exists on the map.`;
+        break;
+      }
+    }
+    if (!applyable) break;
+  }
+
+  return { bundleId: bundle.id, steps, undoable: bundle.undoable, applyable, reason };
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { opToSteps, isDeleteOp, bundleSuggestions, indexGraph } from "./suggestion-apply";
+import { opToSteps, isDeleteOp, bundleSuggestions, indexGraph, planBundle } from "./suggestion-apply";
 import type { SuggestionOp, ChatSuggestion, ProcessGraph } from "@/lib/types";
+import type { GraphIndex } from "./suggestion-apply";
 
 const op = (o: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }): SuggestionOp => ({
   kind: o.kind,
@@ -160,5 +161,53 @@ describe("indexGraph", () => {
     expect(idx.nodeIds.has("n1")).toBe(true);
     expect(idx.edgeIds.has("e1")).toBe(true);
     expect(idx.laneNameToId.get("Ops")).toBe("l1");
+  });
+});
+
+const idx = (over?: Partial<GraphIndex>): GraphIndex => ({
+  nodeIds: new Set(["N1", "N2"]),
+  edgeIds: new Set(["E1"]),
+  laneIds: new Set(["L1"]),
+  laneNameToId: new Map(),
+  ...over,
+});
+
+describe("planBundle", () => {
+  it("produces ordered steps for a tmp-linked bundle and stays applyable", () => {
+    const bundle = bundleSuggestions([
+      sg("a", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "New" }),
+      sg("b", { kind: "add_edge", from_ref: "N1", to_ref: "t1" }),
+    ])[0];
+    const plan = planBundle(bundle, idx());
+    expect(plan.applyable).toBe(true);
+    expect(plan.undoable).toBe(true);
+    expect(plan.steps.map((s) => s.kind)).toEqual(["create_node", "create_edge"]);
+  });
+  it("reorders so a tmp producer precedes its consumer even when emitted consumer-first", () => {
+    // Backend emits the add_edge (consumer of t1) BEFORE the add_node (producer).
+    const bundle = bundleSuggestions([
+      sg("b", { kind: "add_edge", from_ref: "N1", to_ref: "t1" }),
+      sg("a", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "New" }),
+    ])[0];
+    const plan = planBundle(bundle, idx());
+    expect(plan.applyable).toBe(true);
+    expect(plan.steps.map((s) => s.kind)).toEqual(["create_node", "create_edge"]);
+  });
+  it("marks a bundle unapplyable when a real ref no longer exists", () => {
+    const bundle = bundleSuggestions([sg("a", { kind: "relabel_node", node_ref: "GONE", new_label: "X" })])[0];
+    const plan = planBundle(bundle, idx());
+    expect(plan.applyable).toBe(false);
+    expect(plan.reason).toMatch(/no longer/i);
+  });
+  it("marks a bundle unapplyable when a consumed tmp is never produced", () => {
+    const bundle = bundleSuggestions([sg("a", { kind: "add_edge", from_ref: "N1", to_ref: "ghost" })])[0];
+    const plan = planBundle(bundle, idx());
+    expect(plan.applyable).toBe(false);
+  });
+  it("classifies a delete bundle as non-undoable but applyable", () => {
+    const bundle = bundleSuggestions([sg("a", { kind: "remove_edge", edge_ref: "E1" })])[0];
+    const plan = planBundle(bundle, idx());
+    expect(plan.applyable).toBe(true);
+    expect(plan.undoable).toBe(false);
   });
 });
