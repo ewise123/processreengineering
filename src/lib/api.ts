@@ -318,11 +318,12 @@ export const api = {
     projectId: UUID,
     modelId: UUID,
     versionId: UUID,
-    body: ChatSuggestRequest
+    body: ChatSuggestRequest,
+    signal?: AbortSignal
   ) =>
     request<ChatSuggestResponse>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/chat-suggest`,
-      { method: "POST", json: body }
+      { method: "POST", json: body, signal }
     ),
   aiEditNode: (
     projectId: UUID,
