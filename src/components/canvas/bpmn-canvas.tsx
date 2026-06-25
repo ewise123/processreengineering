@@ -15,7 +15,8 @@ import {
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
-import type { IssueSeverity, UUID } from "@/lib/types";
+import type { IssueSeverity, NodeUpdate, UUID } from "@/lib/types";
+import type { BundlePlan, BatchResult, MutationStep } from "./suggestion-apply";
 
 import { CanvasContextMenu, type ContextMenuItem } from "./canvas-context-menu";
 import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
@@ -169,6 +170,10 @@ export interface BpmnCanvasHandle {
   copySelection: () => void;
   /** Reassign every selected node to a lane (grouped undo). */
   moveSelectionToLane: (laneId: UUID) => void;
+  /** Apply a validated suggestion bundle plan to the canvas. Runs every step,
+   * rolling back on failure. Undoable plans record a single grouped undo entry
+   * (Cmd+Z) and return an inline `undo`; delete-containing plans do neither. */
+  applySuggestionBatch: (plan: BundlePlan) => Promise<BatchResult>;
 }
 
 interface BpmnCanvasProps {
@@ -188,6 +193,17 @@ interface BpmnCanvasProps {
   onCountsChange?: (counts: { lanes: number; nodes: number; edges: number }) => void;
   /** Called when the user clicks the "Properties" pill on a selected node. */
   onOpenProperties?: () => void;
+}
+
+/** Pure helper: recompute `y` offsets for a lane list after insertions/deletions.
+ * Module-level (not a hook) so both the canvas body and `runStep` can call it. */
+function recomputeY(ls: CanvasLane[]): CanvasLane[] {
+  let y = 0;
+  return ls.map((l) => {
+    const out = { ...l, y };
+    y += l.h;
+    return out;
+  });
 }
 
 export const BpmnCanvas = forwardRef<BpmnCanvasHandle, BpmnCanvasProps>(
@@ -476,6 +492,24 @@ function BpmnCanvas({
     [projectId, modelId, versionId, record, deleteNodeImpl, selectOnly]
   );
 
+  // Pick a world position for a newly-created suggestion node: offset from the
+  // anchor node when one is given, else a default slot in the target lane.
+  const placeNewNode = useCallback(
+    (laneId: UUID | null, nearNodeId: UUID | null): { laneId: UUID; x: number; relativeY: number } | null => {
+      const near = nearNodeId ? nodesRef.current.find((n) => n.id === nearNodeId) : null;
+      const resolvedLane = laneId ?? near?.laneId ?? lanesRef.current[0]?.id ?? null;
+      if (!resolvedLane) return null;
+      if (near) {
+        const pos = placeProposedStep({ x: near.x, relativeY: near.relativeY, w: near.w });
+        return { laneId: resolvedLane, x: pos.x, relativeY: pos.relativeY };
+      }
+      const inLane = nodesRef.current.filter((n) => n.laneId === resolvedLane);
+      const x = inLane.length ? Math.max(...inLane.map((n) => n.x + n.w)) + 60 : 80;
+      return { laneId: resolvedLane, x, relativeY: 40 };
+    },
+    []
+  );
+
   const deleteEdgeImpl = useCallback(
     async (id: UUID) => {
       const edge = edgesRef.current.find((e) => e.id === id);
@@ -596,6 +630,236 @@ function BpmnCanvas({
       });
     },
     [projectId, modelId, versionId, record, deselect]
+  );
+
+  // Per-step executor for applySuggestionBatch. Declared before
+  // applySuggestionBatch so it can appear in that callback's dep array.
+  const runStep = useCallback(
+    async (
+      step: MutationStep,
+      tmp: Record<string, UUID>,
+      resolve: (ref: string) => UUID,
+      inverses: Array<() => Promise<void>>
+    ) => {
+      switch (step.kind) {
+        case "update_node": {
+          const id = resolve(step.nodeRef);
+          const before = nodesRef.current.find((n) => n.id === id);
+          if (!before) throw new Error("Node no longer exists.");
+          const apiPatch: NodeUpdate = {};
+          const localPatch: Partial<CanvasNode> = {};
+          if (step.name !== undefined) {
+            apiPatch.name = step.name;
+            localPatch.label = step.name;
+          }
+          if (step.description !== undefined) {
+            apiPatch.description = step.description;
+            localPatch.description = step.description;
+          }
+          if (step.laneRef !== undefined) {
+            const laneId = resolve(step.laneRef);
+            apiPatch.lane_id = laneId;
+            localPatch.laneId = laneId;
+          }
+          setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...localPatch } : n)));
+          await api.updateNode(projectId, id, apiPatch);
+          const prev = { label: before.label, description: before.description, laneId: before.laneId };
+          inverses.push(async () => {
+            setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...prev } : n)));
+            await api.updateNode(projectId, id, {
+              name: prev.label,
+              description: prev.description,
+              lane_id: prev.laneId ?? undefined,
+            });
+          });
+          break;
+        }
+        case "delete_node": {
+          const id = resolve(step.nodeRef);
+          await deleteNodeImpl(id);
+          // delete-containing plans aren't undoable; no inverse pushed.
+          break;
+        }
+        case "create_node": {
+          const place = placeNewNode(
+            step.laneRef ? resolve(step.laneRef) : null,
+            step.nearNodeRef ? resolve(step.nearNodeRef) : null
+          );
+          if (!place) throw new Error("No lane available to place the new step.");
+          const created = await api.createNode(projectId, modelId, versionId, {
+            type: step.nodeType,
+            name: step.label,
+            lane_id: place.laneId,
+            x: place.x,
+            relative_y: place.relativeY,
+          });
+          const size = sizeForNodeType(created.type);
+          const newNode: CanvasNode = {
+            id: created.id,
+            type: created.type,
+            kind: nodeKindFromType(created.type),
+            label: created.name,
+            laneId: place.laneId,
+            x: place.x,
+            relativeY: place.relativeY,
+            w: size.w,
+            h: size.h,
+            aiProposed: true,
+          };
+          tmp[step.tempId] = created.id;
+          setNodes((curr) => [...curr, newNode]);
+          inverses.push(async () => {
+            await api.deleteNode(projectId, created.id);
+            setNodes((curr) => curr.filter((n) => n.id !== created.id));
+            setEdges((curr) => curr.filter((e) => e.from !== created.id && e.to !== created.id));
+          });
+          break;
+        }
+        case "create_edge": {
+          const created = await api.createEdge(projectId, modelId, versionId, {
+            source_node_id: resolve(step.fromRef),
+            target_node_id: resolve(step.toRef),
+            label: step.label,
+          });
+          if (step.tempId) tmp[step.tempId] = created.id;
+          setEdges((curr) => [
+            ...curr,
+            { id: created.id, from: created.source_node_id, to: created.target_node_id, label: created.label ?? null },
+          ]);
+          inverses.push(async () => {
+            await api.deleteEdge(projectId, created.id);
+            setEdges((curr) => curr.filter((e) => e.id !== created.id));
+          });
+          break;
+        }
+        case "delete_edge": {
+          const id = resolve(step.edgeRef);
+          await api.deleteEdge(projectId, id);
+          setEdges((curr) => curr.filter((e) => e.id !== id));
+          // delete-containing plan: no inverse.
+          break;
+        }
+        case "update_edge_label": {
+          const id = resolve(step.edgeRef);
+          const before = edgesRef.current.find((e) => e.id === id);
+          if (!before) throw new Error("Edge no longer exists.");
+          const oldLabel = before.label;
+          setEdges((curr) => curr.map((e) => (e.id === id ? { ...e, label: step.label } : e)));
+          await api.updateEdge(projectId, id, { label: step.label });
+          inverses.push(async () => {
+            setEdges((curr) => curr.map((e) => (e.id === id ? { ...e, label: oldLabel } : e)));
+            await api.updateEdge(projectId, id, { label: oldLabel });
+          });
+          break;
+        }
+        case "reroute_edge": {
+          const id = resolve(step.edgeRef);
+          const before = edgesRef.current.find((e) => e.id === id);
+          if (!before) throw new Error("Edge no longer exists.");
+          const newFrom = step.fromRef ? resolve(step.fromRef) : before.from;
+          const newTo = step.toRef ? resolve(step.toRef) : before.to;
+          await api.deleteEdge(projectId, id);
+          setEdges((curr) => curr.filter((e) => e.id !== id));
+          const created = await api.createEdge(projectId, modelId, versionId, {
+            source_node_id: newFrom,
+            target_node_id: newTo,
+            label: before.label,
+          });
+          setEdges((curr) => [
+            ...curr,
+            { id: created.id, from: created.source_node_id, to: created.target_node_id, label: created.label ?? null },
+          ]);
+          // delete-containing plan: no inverse.
+          break;
+        }
+        case "create_lane": {
+          const created = await api.createLane(projectId, modelId, versionId, {
+            name: step.name,
+            order_index: lanesRef.current.length,
+            height_px: LANE_HEIGHT,
+          });
+          tmp[step.tempId] = created.id;
+          const newLane: CanvasLane = {
+            id: created.id,
+            label: created.name,
+            color: LANE_PALETTE[lanesRef.current.length % LANE_PALETTE.length],
+            collapsed: false,
+            y: 0,
+            h: created.height_px,
+          };
+          setLanes((curr) => recomputeY([...curr, newLane]));
+          inverses.push(async () => {
+            await api.deleteLane(projectId, created.id);
+            setLanes((curr) => recomputeY(curr.filter((l) => l.id !== created.id)));
+          });
+          break;
+        }
+        case "update_lane": {
+          const id = resolve(step.laneRef);
+          const before = lanesRef.current.find((l) => l.id === id);
+          if (!before) throw new Error("Lane no longer exists.");
+          const oldName = before.label;
+          setLanes((curr) => curr.map((l) => (l.id === id ? { ...l, label: step.name } : l)));
+          await api.updateLane(projectId, id, { name: step.name });
+          inverses.push(async () => {
+            setLanes((curr) => curr.map((l) => (l.id === id ? { ...l, label: oldName } : l)));
+            await api.updateLane(projectId, id, { name: oldName });
+          });
+          break;
+        }
+      }
+    },
+    [projectId, modelId, versionId, deleteNodeImpl, placeNewNode]
+  );
+
+  const applySuggestionBatch = useCallback(
+    async (plan: BundlePlan): Promise<BatchResult> => {
+      if (!plan.applyable) {
+        return { ok: false, error: plan.reason ?? "This change can no longer be applied." };
+      }
+
+      // tmp placeholder -> real id, populated as create-steps run.
+      const tmp: Record<string, UUID> = {};
+      const resolve = (ref: string): UUID => (tmp[ref] as UUID) ?? (ref as UUID);
+      let inverses: Array<() => Promise<void>> = [];
+      let applied = false;
+
+      const runSteps = async () => {
+        inverses = [];
+        for (const step of plan.steps) {
+          await runStep(step, tmp, resolve, inverses);
+        }
+        applied = true;
+      };
+
+      try {
+        await runSteps();
+      } catch (err) {
+        for (const inv of [...inverses].reverse()) {
+          try {
+            await inv();
+          } catch {
+            /* best-effort rollback */
+          }
+        }
+        return { ok: false, error: err instanceof Error ? err.message : "Couldn't apply the change." };
+      }
+
+      if (!plan.undoable) return { ok: true };
+
+      const revert = async () => {
+        if (!applied) return;
+        for (const inv of [...inverses].reverse()) await inv();
+        applied = false;
+      };
+      const reapply = async () => {
+        if (applied) return;
+        await runSteps();
+      };
+      record({ description: "Apply suggestion", do: reapply, undo: revert });
+      return { ok: true, undo: revert };
+    },
+    [record, runStep]
   );
 
   // Recenter the viewport on a node so it's actually visible after a remote
@@ -1499,6 +1763,7 @@ function BpmnCanvas({
       deleteSelection: deleteSelectionImpl,
       copySelection: copySelectionImpl,
       moveSelectionToLane: moveSelectionToLaneImpl,
+      applySuggestionBatch,
     }),
     [
       deleteNodeImpl,
@@ -1511,6 +1776,7 @@ function BpmnCanvas({
       deleteSelectionImpl,
       copySelectionImpl,
       moveSelectionToLaneImpl,
+      applySuggestionBatch,
     ]
   );
 
@@ -1688,15 +1954,6 @@ function BpmnCanvas({
     },
     [clipboard, pasteClipboardImpl, fitToWorld]
   );
-
-  const recomputeY = (ls: CanvasLane[]): CanvasLane[] => {
-    let y = 0;
-    return ls.map((l) => {
-      const out = { ...l, y };
-      y += l.h;
-      return out;
-    });
-  };
 
   const moveLaneLocal = useCallback(
     (laneId: string, targetIdx: number) => {
