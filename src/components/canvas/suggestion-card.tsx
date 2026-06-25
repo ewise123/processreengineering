@@ -16,6 +16,7 @@ export function SuggestionList({
   onUndo,
   onDismiss,
   onNavigate,
+  nodeLabel,
 }: {
   bundles: Bundle[];
   statusById: Record<string, CardStatus>;
@@ -24,6 +25,7 @@ export function SuggestionList({
   onUndo: (bundleId: string) => void;
   onDismiss: (bundleId: string) => void;
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+  nodeLabel?: (id: UUID) => string | undefined;
 }) {
   const visible = bundles.filter((b) => statusById[b.id] !== "dismissed");
   if (visible.length === 0) return null;
@@ -54,6 +56,7 @@ export function SuggestionList({
           onUndo={() => onUndo(b.id)}
           onDismiss={() => onDismiss(b.id)}
           onNavigate={onNavigate}
+          nodeLabel={nodeLabel}
         />
       ))}
     </div>
@@ -68,6 +71,7 @@ function SuggestionCard({
   onUndo,
   onDismiss,
   onNavigate,
+  nodeLabel,
 }: {
   bundle: Bundle;
   status: CardStatus;
@@ -76,6 +80,7 @@ function SuggestionCard({
   onUndo: () => void;
   onDismiss: () => void;
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+  nodeLabel?: (id: UUID) => string | undefined;
 }) {
   const [confirming, setConfirming] = useState(false);
   const isDelete = !bundle.undoable;
@@ -113,7 +118,7 @@ function SuggestionCard({
         ) : null
       )}
 
-      <AffectedRefs suggestions={bundle.suggestions} onNavigate={onNavigate} />
+      <AffectedRefs suggestions={bundle.suggestions} onNavigate={onNavigate} nodeLabel={nodeLabel} />
 
       {status === "applied" ? (
         <div className="mt-2 flex items-center gap-2 text-[10px] font-semibold text-emerald-700">
@@ -158,9 +163,11 @@ function SuggestionCard({
 function AffectedRefs({
   suggestions,
   onNavigate,
+  nodeLabel,
 }: {
   suggestions: ChatSuggestion[];
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+  nodeLabel?: (id: UUID) => string | undefined;
 }) {
   const refs: ObjectRef[] = suggestions.flatMap((s) => s.affected_refs).filter((r) => r.kind !== "lane");
   if (refs.length === 0) return null;
@@ -174,7 +181,7 @@ function AffectedRefs({
           className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[9px] text-slate-600 hover:bg-slate-100"
           title="Jump to this object"
         >
-          {r.kind}
+          {r.kind === "node" ? (nodeLabel?.(r.id) ?? "node") : "edge"}
         </button>
       ))}
     </div>

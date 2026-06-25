@@ -7,9 +7,11 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 
 import { api } from "@/lib/api";
 import type {
+  ChatSuggestion,
   ChatTurn,
   MentionSource,
   ObjectRef,
+  ProcessGraph,
   UUID,
   ViewerTarget,
 } from "@/lib/types";
@@ -21,15 +23,28 @@ import {
 } from "./chat-context";
 import { browserChatSessionStore } from "./chat-session";
 import { restoreAfterCancel, type PendingSend } from "./chat-cancel";
+import { bundleSuggestions, indexGraph, planBundle, type Bundle, type BundlePlan, type BatchResult } from "./suggestion-apply";
+import { SuggestionList, type CardStatus } from "./suggestion-card";
 
-export type ChatItem = ChatTurn & { contextNote?: string; sources?: MentionSource[] };
+export type ChatItem = ChatTurn & {
+  contextNote?: string;
+  sources?: MentionSource[];
+  suggestions?: ChatSuggestion[];
+  suggestionStatus?: Record<string, CardStatus>;
+};
 
-const SUGGESTED_PROMPTS = [
-  "Find any gaps in this flow",
-  "Should this step come before its predecessor?",
-  "Which steps lack source citations?",
-  "Compare this against typical processes",
-];
+const SUGGESTED_PROMPTS: Record<"ask" | "suggest", string[]> = {
+  ask: [
+    "Find any gaps in this flow",
+    "Which steps lack source citations?",
+    "Compare this against typical processes",
+  ],
+  suggest: [
+    "Add the missing approval step",
+    "Fix the order of these two steps",
+    "Split this step into its sub-steps",
+  ],
+};
 
 export function ChatTab({
   projectId,
@@ -41,6 +56,8 @@ export function ChatTab({
   onClearSelection,
   onRemoveContext,
   onOpenSource,
+  onApplySuggestions,
+  graph,
 }: {
   projectId: UUID;
   modelId: UUID;
@@ -51,9 +68,12 @@ export function ChatTab({
   onClearSelection: () => void;
   onRemoveContext: (id: UUID) => void;
   onOpenSource: (t: ViewerTarget) => void;
+  onApplySuggestions: (plan: BundlePlan) => Promise<BatchResult>;
+  graph: ProcessGraph;
 }) {
   const sessionStore = useMemo(() => browserChatSessionStore(), []);
   const [showExamples, setShowExamples] = useState(false);
+  const [mode, setMode] = useState<"ask" | "suggest">("ask");
   const [history, setHistory] = useState<ChatItem[]>(() => sessionStore.load(versionId) as ChatItem[]);
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -65,6 +85,9 @@ export function ChatTab({
   const abortRef = useRef<AbortController | null>(null);
   // Snapshot of what Pause must restore (pre-send transcript + the user's text).
   const pendingRef = useRef<PendingSend<ChatItem> | null>(null);
+  // In-memory undo handles, keyed by bundle id. Not persisted — reloaded applied
+  // cards won't show an inline Undo, by design.
+  const undoHandles = useRef<Map<string, () => Promise<void>>>(new Map());
 
   useEffect(() => {
     setHistory(sessionStore.load(versionId) as ChatItem[]);
@@ -76,10 +99,12 @@ export function ChatTab({
     return m;
   }, [nodes]);
 
+  const graphIndex = useMemo(() => indexGraph(graph), [graph]);
+
   const chips = selectionChips(selected, labelById);
 
   const ask = useMutation({
-    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal }) =>
+    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal; mode: "ask" | "suggest" }) =>
       api.chatSuggest(
         projectId,
         modelId,
@@ -89,7 +114,7 @@ export function ChatTab({
           // client-only metadata like contextNote/sources must not be resent.
           history: input.history.map(({ role, content }) => ({ role, content })),
           user_message: input.userMessage,
-          mode: "ask",
+          mode: input.mode,
           context_refs: input.contextRefs,
         },
         input.signal
@@ -102,7 +127,13 @@ export function ChatTab({
         { role: "user", content: vars.userMessage, contextNote: vars.note },
         // Carry this message's source mapping ON the message so it survives
         // reload and isn't lost when component state resets.
-        { role: "assistant", content: data.message, sources: data.mention_sources },
+        {
+          role: "assistant",
+          content: data.message,
+          sources: data.mention_sources,
+          suggestions: data.suggestions.length ? data.suggestions : undefined,
+          suggestionStatus: {},
+        },
       ];
       sessionStore.save(versionId, next);
       setHistory(next);
@@ -129,6 +160,8 @@ export function ChatTab({
     // empties `selected`, so reading it lazily inside mutationFn would race.
     const contextRefs = selectionToContextRefs(selected);
     const note = chips.length ? chips.map((c) => c.label).join(", ") : undefined;
+    // Capture mode at submit time so a later toggle doesn't change an in-flight request.
+    const currentMode = mode;
     setDraft("");
     // Capture pre-send history snapshot before optimistic update
     const preSendHistory = history;
@@ -144,6 +177,7 @@ export function ChatTab({
       contextRefs,
       gen: genRef.current,
       signal: controller.signal,
+      mode: currentMode,
     });
     // Clear the selection on send: the context tab slides away immediately and the
     // attached objects are recorded on the message itself (contextNote, shown under
@@ -179,6 +213,46 @@ export function ChatTab({
     setHistory([]);
   };
 
+  const setBundleStatus = (msgIndex: number, bundleId: string, status: CardStatus) => {
+    setHistory((curr) => {
+      const next = curr.map((m, i) =>
+        i === msgIndex
+          ? { ...m, suggestionStatus: { ...(m.suggestionStatus ?? {}), [bundleId]: status } }
+          : m
+      );
+      sessionStore.save(versionId, next);
+      return next;
+    });
+  };
+
+  const applyBundle = async (msgIndex: number, bundle: Bundle) => {
+    setBundleStatus(msgIndex, bundle.id, "applying");
+    const plan = planBundle(bundle, graphIndex);
+    const res = await onApplySuggestions(plan);
+    if (res.ok) {
+      if (res.undo) undoHandles.current.set(bundle.id, res.undo);
+      setBundleStatus(msgIndex, bundle.id, "applied");
+    } else {
+      setBundleStatus(msgIndex, bundle.id, "failed");
+    }
+  };
+
+  const undoBundle = async (bundleId: string) => {
+    const fn = undoHandles.current.get(bundleId);
+    if (fn) await fn();
+    undoHandles.current.delete(bundleId);
+    // Reflect revert in whichever message owns this bundle.
+    setHistory((curr) => {
+      const next = curr.map((m) =>
+        m.suggestionStatus?.[bundleId]
+          ? { ...m, suggestionStatus: { ...m.suggestionStatus, [bundleId]: "pending" as CardStatus } }
+          : m
+      );
+      sessionStore.save(versionId, next);
+      return next;
+    });
+  };
+
   return (
     <div className="flex h-full flex-col">
       <div
@@ -206,15 +280,33 @@ export function ChatTab({
           )}
         </div>
 
-        {history.map((m, i) => (
-          <ChatMsg
-            key={i}
-            turn={m}
-            labelById={labelById}
-            onNavigate={onNavigate}
-            onOpenSource={onOpenSource}
-          />
-        ))}
+        {history.map((m, i) => {
+          const bundles = m.role === "assistant" && m.suggestions
+            ? bundleSuggestions(m.suggestions)
+            : null;
+          return (
+            <div key={i} className="space-y-1">
+              <ChatMsg
+                turn={m}
+                labelById={labelById}
+                onNavigate={onNavigate}
+                onOpenSource={onOpenSource}
+              />
+              {bundles && (
+                <SuggestionList
+                  bundles={bundles}
+                  statusById={m.suggestionStatus ?? {}}
+                  canUndoById={Object.fromEntries(bundles.map((b) => [b.id, undoHandles.current.has(b.id)]))}
+                  onApply={(b) => applyBundle(i, b)}
+                  onUndo={undoBundle}
+                  onDismiss={(id) => setBundleStatus(i, id, "dismissed")}
+                  onNavigate={onNavigate}
+                  nodeLabel={(id) => labelById.get(id)}
+                />
+              )}
+            </div>
+          );
+        })}
 
         {ask.isPending && (
           <div className="flex items-start gap-2">
@@ -291,7 +383,7 @@ export function ChatTab({
         >
           {showExamples && (
             <div className="mb-1.5 flex flex-wrap gap-1.5">
-              {SUGGESTED_PROMPTS.map((s) => (
+              {SUGGESTED_PROMPTS[mode].map((s) => (
                 <button
                   key={s}
                   onClick={() => {
@@ -305,6 +397,20 @@ export function ChatTab({
               ))}
             </div>
           )}
+          <div className="mb-1.5 inline-flex rounded-md border border-slate-200 p-0.5 text-[10px]">
+            {(["ask", "suggest"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={
+                  "rounded px-2 py-0.5 font-semibold capitalize transition " +
+                  (mode === m ? "bg-slate-900 text-white" : "text-slate-500 hover:text-slate-800")
+                }
+              >
+                {m}
+              </button>
+            ))}
+          </div>
           <div className="flex items-end gap-1.5">
             <button
               onClick={() => setShowExamples((v) => !v)}

@@ -26,6 +26,7 @@ import { reviewByNodeMap } from "@/components/canvas/review-summary";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
 import { api } from "@/lib/api";
 import type { IssueSeverity, NodeReviewUpdate, ReviewDecision, UUID, ViewerTarget } from "@/lib/types";
+import type { BundlePlan } from "@/components/canvas/suggestion-apply";
 
 // react-pdf / pdfjs reference browser-only globals at module eval, which crash
 // server-side rendering. Load the viewer client-only so the page route never
@@ -129,6 +130,14 @@ export default function CanvasPage() {
         citedClaimIds: step.cited_claim_ids,
         edgeLabel: step.edge_label,
       });
+    },
+    []
+  );
+
+  const handleApplySuggestions = useCallback(
+    (plan: BundlePlan) => {
+      if (!canvasRef.current) return Promise.resolve({ ok: false, error: "Canvas not ready." });
+      return canvasRef.current.applySuggestionBatch(plan);
     },
     []
   );
@@ -464,6 +473,8 @@ export default function CanvasPage() {
             }}
             collapsed={rightCollapsed}
             onCollapsedChange={setRightCollapsed}
+            onApplySuggestions={handleApplySuggestions}
+            graph={data}
           />
         </div>
       )}

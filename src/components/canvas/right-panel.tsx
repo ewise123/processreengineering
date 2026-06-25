@@ -73,6 +73,8 @@ export function RightPanel({
   collapsed,
   onCollapsedChange,
   initialTab = "chat",
+  onApplySuggestions,
+  graph,
 }: {
   projectId: UUID;
   modelId: UUID;
@@ -97,6 +99,8 @@ export function RightPanel({
   collapsed: boolean;
   onCollapsedChange: (next: boolean) => void;
   initialTab?: TabId;
+  onApplySuggestions: (plan: import("./suggestion-apply").BundlePlan) => Promise<import("./suggestion-apply").BatchResult>;
+  graph: import("@/lib/types").ProcessGraph;
 }) {
   const [tab, setTab] = useState<TabId>(initialTab);
 
@@ -228,6 +232,8 @@ export function RightPanel({
             onClearSelection={onClearSelection}
             onRemoveContext={onRemoveContext}
             onOpenSource={onOpenSource}
+            onApplySuggestions={onApplySuggestions}
+            graph={graph}
           />
         )}
         {tab === "versions" && (
