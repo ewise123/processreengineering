@@ -383,6 +383,9 @@ function ChatTab({
       setHistory(next);
       // The send completed; drop the snapshot so pendingRef means "a send is in flight".
       pendingRef.current = null;
+      // Clear the attached context only once a reply lands — keeping it until now
+      // means a paused-then-resent ask is still scoped to the same objects.
+      onClearSelection();
     },
     onError: (err) => {
       // Aborts are user-initiated cancels (Pause), not errors — ignore them.
@@ -400,8 +403,9 @@ function ChatTab({
   const submit = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || ask.isPending) return;
-    // Capture the attached context refs + note NOW — onClearSelection() below
-    // empties `selected`, so reading it lazily inside mutationFn would race.
+    // Capture the attached context refs + note NOW. The selection is left intact
+    // until the reply lands (cleared in onSuccess), so a paused-then-resent ask
+    // keeps the same context; capturing now still avoids any lazy-read race.
     const contextRefs = selectionToContextRefs(selected);
     const note = chips.length ? chips.map((c) => c.label).join(", ") : undefined;
     setDraft("");
@@ -420,7 +424,6 @@ function ChatTab({
       gen: genRef.current,
       signal: controller.signal,
     });
-    onClearSelection(); // #11: tab slides away once the prompt is sent
   };
 
   const pause = () => {
