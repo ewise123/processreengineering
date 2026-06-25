@@ -192,6 +192,13 @@ describe("planBundle", () => {
     const plan = planBundle(bundle, idx());
     expect(plan.applyable).toBe(true);
     expect(plan.steps.map((s) => s.kind)).toEqual(["create_node", "create_edge"]);
+    // Identity assertions: a wrong-object reorder (kinds right but steps swapped)
+    // must not pass — the producer step must own t1 and the consumer must point at it.
+    const [n, e] = plan.steps;
+    if (n.kind !== "create_node") throw new Error("expected first step to be create_node");
+    expect(n.tempId).toBe("t1");
+    if (e.kind !== "create_edge") throw new Error("expected second step to be create_edge");
+    expect(e.toRef).toBe("t1");
   });
   it("marks a bundle unapplyable when a real ref no longer exists", () => {
     const bundle = bundleSuggestions([sg("a", { kind: "relabel_node", node_ref: "GONE", new_label: "X" })])[0];
@@ -200,9 +207,12 @@ describe("planBundle", () => {
     expect(plan.reason).toMatch(/no longer/i);
   });
   it("marks a bundle unapplyable when a consumed tmp is never produced", () => {
+    // "ghost" is neither produced in-plan nor a real graph ref, so it trips the
+    // same stale-ref check as a missing real ref (identical code path + reason).
     const bundle = bundleSuggestions([sg("a", { kind: "add_edge", from_ref: "N1", to_ref: "ghost" })])[0];
     const plan = planBundle(bundle, idx());
     expect(plan.applyable).toBe(false);
+    expect(plan.reason).toMatch(/no longer/i);
   });
   it("classifies a delete bundle as non-undoable but applyable", () => {
     const bundle = bundleSuggestions([sg("a", { kind: "remove_edge", edge_ref: "E1" })])[0];

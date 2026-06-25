@@ -212,6 +212,11 @@ function stepRealRefs(step: MutationStep): { ref: string; set: "node" | "edge" |
       return [{ ref: step.laneRef, set: "lane" }];
     case "create_lane":
       return [];
+    default: {
+      const _exhaustive: never = step;
+      void _exhaustive;
+      return [];
+    }
   }
 }
 
@@ -261,6 +266,8 @@ export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
   let applyable = true;
   let reason: string | undefined;
 
+  // A consumed tmp whose producer is absent is caught here by the same check as
+  // a missing real ref: it's neither in `producedAll` nor in the graph index.
   for (const step of steps) {
     for (const { ref, set } of stepRealRefs(step)) {
       if (producedAll.has(ref)) continue; // created within this plan
