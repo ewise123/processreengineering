@@ -381,6 +381,14 @@ function ChatTab({
       ];
       sessionStore.save(versionId, next);
       setHistory(next);
+      // The send completed; drop the snapshot so pendingRef means "a send is in flight".
+      pendingRef.current = null;
+    },
+    onError: (err) => {
+      // Aborts are user-initiated cancels (Pause), not errors — ignore them.
+      // (The render-time banner guard also masks AbortError; this keeps the
+      // suppression intent local to the mutation and matches the design spec.)
+      if (err instanceof DOMException && err.name === "AbortError") return;
     },
   });
 
@@ -436,6 +444,8 @@ function ChatTab({
     // reset the mutation so the "Thinking…" indicator stops immediately.
     genRef.current += 1;
     ask.reset();
+    abortRef.current = null;
+    pendingRef.current = null;
     sessionStore.clear(versionId);
     setHistory([]);
   };
@@ -594,6 +604,8 @@ function ChatTab({
               className="flex-1 resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs focus:border-slate-500 focus:outline-none"
             />
             <button
+              // Cancel is click-only by design: Enter sends; the button toggles to
+              // Pause mid-flight, but Enter never cancels.
               onClick={() => (ask.isPending ? pause() : submit(draft))}
               disabled={!ask.isPending && !draft.trim()}
               title={ask.isPending ? "Stop" : "Send"}
