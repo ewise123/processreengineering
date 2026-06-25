@@ -163,6 +163,7 @@ export function NodeShape({
   onMouseDown,
   onContextMenu,
   onStartConnect,
+  onDoubleClick,
 }: {
   node: ResolvedNode;
   selected: boolean;
@@ -174,6 +175,7 @@ export function NodeShape({
   onMouseDown: (e: MouseEvent, id: string) => void;
   onContextMenu?: (e: MouseEvent, id: string) => void;
   onStartConnect?: (e: MouseEvent, sourceId: UUID, side: ConnectSide) => void;
+  onDoubleClick?: (id: string) => void;
 }) {
   const { kind, x, y, w, h, label, id } = node;
   const isEvent = kind === "start" || kind === "end" || kind === "intermediate";
@@ -201,6 +203,7 @@ export function NodeShape({
       style={{ cursor: showHandles ? "crosshair" : "move" }}
       onMouseDown={(e) => onMouseDown(e, id)}
       onContextMenu={(e) => onContextMenu?.(e, id)}
+      onDoubleClick={() => onDoubleClick?.(id)}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       data-node-id={id}
@@ -276,6 +279,13 @@ export function NodeShape({
             <text x={w - 12} y={14} fontSize="11" fill={AI_PROPOSED_STROKE} aria-label="AI proposed">
               ✦
             </text>
+          )}
+          {node.childModelId && (
+            <g transform={`translate(${w / 2 - 7}, ${h - 14})`} aria-label="Has sub-process" style={{ pointerEvents: "none" }}>
+              <rect width={14} height={12} rx={2} fill="#fff" stroke="#475569" strokeWidth={1} />
+              <line x1={7} y1={3} x2={7} y2={9} stroke="#475569" strokeWidth={1.2} />
+              <line x1={4} y1={6} x2={10} y2={6} stroke="#475569" strokeWidth={1.2} />
+            </g>
           )}
           <foreignObject x={6} y={10} width={w - 12} height={h - 16}>
             <div

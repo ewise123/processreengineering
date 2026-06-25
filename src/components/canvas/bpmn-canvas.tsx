@@ -132,7 +132,7 @@ function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
 
 export type CanvasSelection =
   | { kind: "none" }
-  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; type?: string; laneId?: UUID | null; description?: string }
+  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; type?: string; laneId?: UUID | null; description?: string; childModelId?: UUID | null }
   | { kind: "edge"; id: UUID }
   | { kind: "multi"; nodeIds: UUID[]; edgeIds: UUID[] };
 
@@ -165,6 +165,9 @@ export interface BpmnCanvasHandle {
   /** Pan/zoom to an object by id, select it, and flash it briefly. Handles
    * both nodes and edges (used by chat mention links). */
   navigateTo: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+  /** Clear a node's child-sub-process link locally (drops the "+" marker)
+   * after the sub-process is removed via the API. */
+  clearChildModelId: (id: UUID) => void;
   /** Delete every selected node and edge (node deletes are non-undoable). */
   deleteSelection: () => Promise<void>;
   /** Copy the current selection to the in-memory clipboard. */
@@ -190,6 +193,9 @@ interface BpmnCanvasProps {
   onCountsChange?: (counts: { lanes: number; nodes: number; edges: number }) => void;
   /** Called when the user clicks the "Properties" pill on a selected node. */
   onOpenProperties?: () => void;
+  /** Fires when a node with a child sub-process is double-clicked. The page
+   * resolves the child's latest version and routes there. */
+  onDrillIntoNode?: (childModelId: UUID) => void;
 }
 
 export const BpmnCanvas = forwardRef<BpmnCanvasHandle, BpmnCanvasProps>(
@@ -207,6 +213,7 @@ function BpmnCanvas({
   onNodeDeleted,
   onCountsChange,
   onOpenProperties,
+  onDrillIntoNode,
 }, ref) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState(initialNodes);
@@ -492,6 +499,12 @@ function BpmnCanvas({
     },
     [projectId, modelId, versionId, record, deleteNodeImpl, selectOnly]
   );
+
+  const clearChildModelId = useCallback((id: UUID) => {
+    setNodes((curr) =>
+      curr.map((n) => (n.id === id ? { ...n, childModelId: null } : n))
+    );
+  }, []);
 
   const deleteEdgeImpl = useCallback(
     async (id: UUID) => {
@@ -825,6 +838,7 @@ function BpmnCanvas({
           type: node.type,
           laneId: node.laneId,
           description: node.description,
+          childModelId: node.childModelId ?? null,
         });
       } else {
         onSelectionChange({ kind: "edge", id });
@@ -1576,6 +1590,7 @@ function BpmnCanvas({
         else focusNodeInViewport(refTarget.id);
         flash(refTarget.id);
       },
+      clearChildModelId,
       deleteSelection: deleteSelectionImpl,
       copySelection: copySelectionImpl,
       moveSelectionToLane: moveSelectionToLaneImpl,
@@ -1588,6 +1603,7 @@ function BpmnCanvas({
       focusEdgeInViewport,
       flash,
       clearSelection,
+      clearChildModelId,
       deleteSelectionImpl,
       copySelectionImpl,
       moveSelectionToLaneImpl,
@@ -2115,6 +2131,10 @@ function BpmnCanvas({
               onMouseDown={onNodeMouseDown}
               onContextMenu={openNodeMenu}
               onStartConnect={onStartConnect}
+              onDoubleClick={(id) => {
+                const n = nodesRef.current.find((x) => x.id === id);
+                if (n?.childModelId) onDrillIntoNode?.(n.childModelId);
+              }}
             />
           ))}
           {flashId && (() => {

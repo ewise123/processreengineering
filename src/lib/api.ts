@@ -4,11 +4,14 @@ import type {
   AiEditResponse,
   AiProposedStepRequest,
   AiProposedStepResult,
+  AncestryCrumb,
   BatchAcceptResult,
   BlankMapRequest,
   BlankMapResult,
   ChangeEvent,
   ChangeLogPage,
+  DecomposeRequest,
+  DecomposeResult,
   ChatRequest,
   ChatResponse,
   ChatSuggestRequest,
@@ -410,6 +413,35 @@ export const api = {
     request<ReconcileBatch>(
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/reconcile`,
       { method: "POST", json: {} }
+    ),
+  applyDecompose: (
+    projectId: UUID,
+    modelId: UUID,
+    versionId: UUID,
+    nodeId: UUID,
+    body: DecomposeRequest
+  ) =>
+    request<DecomposeResult>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/nodes/${nodeId}/decompose`,
+      { method: "POST", json: body }
+    ),
+  removeSubProcess: (
+    projectId: UUID,
+    modelId: UUID,
+    versionId: UUID,
+    nodeId: UUID
+  ) =>
+    request<void>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/nodes/${nodeId}/decompose`,
+      { method: "DELETE" }
+    ),
+  getProcessMap: (projectId: UUID, modelId: UUID) =>
+    request<ProcessModel>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}`
+    ),
+  getMapAncestry: (projectId: UUID, modelId: UUID) =>
+    request<AncestryCrumb[]>(
+      `/api/v2/projects/${projectId}/process-maps/${modelId}/ancestry`
     ),
 
   // Process inventory

@@ -130,6 +130,7 @@ export function buildCanvasState(graph: ProcessGraph): {
       aiProposed: (n.properties as { ai_proposed?: boolean } | null)?.ai_proposed === true,
       description: (n.properties as { description?: string } | null)?.description,
       evidenceStale: (n.properties as { evidence_stale?: boolean } | null)?.evidence_stale === true,
+      childModelId: (n.properties as { child_model_id?: string } | null)?.child_model_id ?? null,
     };
   });
 

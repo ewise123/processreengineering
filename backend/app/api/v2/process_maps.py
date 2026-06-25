@@ -76,8 +76,13 @@ from app.schemas.version_ai_edit import (
     AiEditRequest,
     AiEditResponse,
     AiProposedStepRequest,
+    AncestryCrumb,
+    DecomposeProposal,
+    DecomposeRequest,
+    DecomposeResult,
     DescribeProposal,
     RelabelProposal,
+    SubStep,
     SuggestNextProposal,
     SuggestedStep,
     ValidateGap,
@@ -93,6 +98,7 @@ from app.services.legacy_bpmn import build_bpmn_xml, validate_xml
 from app.services.map_ai_edit import (
     propose_relabel,
     propose_description,
+    propose_decompose,
     report_gaps,
     propose_next_steps,
 )
@@ -1948,6 +1954,29 @@ def ai_edit_node(
                 if s.get("proposed_name")
             ]
             return AiEditResponse(action=payload.action, suggest_next=SuggestNextProposal(steps=steps))
+        if payload.action == AiEditAction.DECOMPOSE:
+            if _next_level(model.level) is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Cannot decompose: already at the most detailed level (L4).",
+                )
+            scope = _neighbor_claim_ids(db, version.id, node.id)
+            raw = propose_decompose(map_context_text=ctx.text, selected_label=ctx.selected_label)
+            steps = [
+                SubStep(
+                    proposed_name=s.get("proposed_name", ""),
+                    proposed_type=s.get("proposed_type", "task"),
+                    role=s.get("role", "Process Team"),
+                    edge_label=s.get("edge_label"),
+                    rationale=s.get("rationale", ""),
+                    cited_claim_ids=_resolve_refs_scoped(
+                        s.get("cited_claim_refs"), ctx.claim_ref_to_id, scope
+                    ),
+                )
+                for s in raw.get("sub_steps", [])
+                if s.get("proposed_name")
+            ]
+            return AiEditResponse(action=payload.action, decompose=DecomposeProposal(sub_steps=steps))
         raise HTTPException(status_code=422, detail=f"Unsupported action: {payload.action}")
     except (RuntimeError, ValueError) as exc:  # missing API key, bad proposal, etc.
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -2349,3 +2378,294 @@ def reconcile_map(
             for r in rows
         ],
     )
+
+
+# ─── SP-5b: decompose-to-next-level ─────────────────────────────────
+
+
+def _next_level(level: str) -> str | None:
+    """L1->L2 ... L3->L4. Returns None at the deepest level (L4) or when
+    unparseable — the caller uses None to disable/422 decompose."""
+    canon = _normalize_level(level)  # "L3"
+    try:
+        n = int(canon[1:])
+    except (ValueError, IndexError):
+        return None
+    if n < 1 or n >= 4:
+        return None
+    return f"L{n + 1}"
+
+
+def _latest_version_row(db: Session, model_id: UUID):
+    """(version_id, version_number) of a model's highest version, or (None, None)."""
+    row = db.execute(
+        select(ProcessVersion.id, ProcessVersion.version_number)
+        .where(ProcessVersion.model_id == model_id)
+        .order_by(ProcessVersion.version_number.desc())
+        .limit(1)
+    ).first()
+    return (row[0], row[1]) if row else (None, None)
+
+
+@router.get("/process-maps/{model_id}", response_model=ProcessModelRead)
+def get_process_map(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> ProcessModelRead:
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id or model.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    lv_id, lv_num = _latest_version_row(db, model.id)
+    return ProcessModelRead.model_validate(model).model_copy(
+        update={"latest_version_id": lv_id, "latest_version_number": lv_num}
+    )
+
+
+@router.get("/process-maps/{model_id}/ancestry", response_model=list[AncestryCrumb])
+def get_map_ancestry(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[AncestryCrumb]:
+    """Root-to-leaf chain of maps for the breadcrumb. Each crumb's label is the
+    parent step it was decomposed from (resolved live via the reverse lookup),
+    falling back to the model's own name; deep-link = that map's latest version."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+
+    # Walk up to the root (guard against cycles).
+    chain: list[ProcessModel] = []
+    cur: ProcessModel | None = model
+    guard = 0
+    while cur is not None and guard < 16:
+        chain.append(cur)
+        guard += 1
+        cur = db.get(ProcessModel, cur.parent_model_id) if cur.parent_model_id else None
+    chain.reverse()  # root first
+
+    crumbs: list[AncestryCrumb] = []
+    for i, m in enumerate(chain):
+        lv_id, _ = _latest_version_row(db, m.id)
+        label = m.name
+        # For non-root maps, prefer the live name of the parent step that points here.
+        if i > 0:
+            parent = chain[i - 1]
+            p_lv_id, _ = _latest_version_row(db, parent.id)
+            if p_lv_id is not None:
+                p_nodes = db.scalars(
+                    select(ProcessNode).where(ProcessNode.version_id == p_lv_id)
+                ).all()
+                for n in p_nodes:
+                    if (n.properties or {}).get("child_model_id") == str(m.id):
+                        label = n.name
+                        break
+        crumbs.append(AncestryCrumb(model_id=m.id, version_id=lv_id, level=m.level, label=label))
+    return crumbs
+
+
+def _neighbor_claim_ids(db: Session, version_id: UUID, node_id: UUID) -> set[UUID]:
+    """Claim ids attached to the node plus every node one edge hop away — the
+    grounding scope for decompose (tighter than project-wide)."""
+    edge_rows = db.execute(
+        select(ProcessEdge.source_node_id, ProcessEdge.target_node_id).where(
+            ProcessEdge.version_id == version_id
+        )
+    ).all()
+    node_ids: set[UUID] = {node_id}
+    for src, tgt in edge_rows:
+        if src == node_id:
+            node_ids.add(tgt)
+        if tgt == node_id:
+            node_ids.add(src)
+    claim_ids = db.scalars(
+        select(NodeClaimLink.claim_id).where(NodeClaimLink.node_id.in_(node_ids))
+    ).all()
+    return set(claim_ids)
+
+
+def _resolve_refs_scoped(refs, claim_ref_to_id, scope: set[UUID]):
+    """Like _resolve_refs but additionally drops any resolved id not in `scope`."""
+    return [cid for cid in _resolve_refs(refs, claim_ref_to_id) if cid in scope]
+
+
+@router.post(
+    "/process-maps/{model_id}/versions/{version_id}/nodes/{node_id}/decompose",
+    response_model=DecomposeResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def apply_decompose(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    node_id: UUID,
+    payload: DecomposeRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> DecomposeResult:
+    """Accept a decompose proposal: create-or-reuse a child ProcessModel one
+    level deeper, append a ProcessVersion, persist the sub-step graph marked
+    ai_proposed, and link the parent node via properties.child_model_id. One
+    transaction; foreign claim ids are silently dropped."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+    node = db.get(ProcessNode, node_id)
+    if node is None or node.version_id != version.id:
+        raise HTTPException(status_code=404, detail="Node not found in this version")
+
+    child_level = _next_level(model.level)
+    if child_level is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot decompose: already at the most detailed level (L4).",
+        )
+
+    # Find-or-create the child model via the parent node's stored link.
+    existing_id = (node.properties or {}).get("child_model_id")
+    child: ProcessModel | None = None
+    if existing_id:
+        try:
+            candidate = db.get(ProcessModel, UUID(str(existing_id)))
+        except (ValueError, TypeError):
+            candidate = None
+        if candidate is not None and candidate.deleted_at is None and candidate.project_id == project.id:
+            child = candidate
+    if child is None:
+        child = ProcessModel(
+            project_id=project.id,
+            name=node.name[:300],
+            level=child_level,
+            parent_model_id=model.id,
+        )
+        db.add(child)
+        db.flush()
+
+    # Append a new version (re-decompose chains onto the prior latest).
+    last_num = db.scalar(
+        select(func.coalesce(func.max(ProcessVersion.version_number), 0)).where(
+            ProcessVersion.model_id == child.id
+        )
+    ) or 0
+    parent_version = db.scalars(
+        select(ProcessVersion)
+        .where(ProcessVersion.model_id == child.id, ProcessVersion.version_number == last_num)
+        .limit(1)
+    ).first()
+    child_version = ProcessVersion(
+        model_id=child.id,
+        version_number=last_num + 1,
+        parent_version_id=parent_version.id if parent_version else None,
+        status=ProcessVersionStatus.DRAFT.value,
+        notes=f"AI-decomposed from '{node.name}'.",
+    )
+    db.add(child_version)
+    db.flush()
+
+    # Lanes: one per distinct role, document order.
+    role_order: list[str] = []
+    seen: set[str] = set()
+    for s in payload.sub_steps:
+        r = (s.role or "Process Team").strip() or "Process Team"
+        if r not in seen:
+            role_order.append(r)
+            seen.add(r)
+    lane_by_role: dict[str, ProcessLane] = {}
+    for idx, role in enumerate(role_order):
+        lane = ProcessLane(version_id=child_version.id, name=role, order_index=idx)
+        db.add(lane)
+        lane_by_role[role] = lane
+    db.flush()
+
+    # Resolve real cited claims once (project-scoped guard).
+    all_cited = [cid for s in payload.sub_steps for cid in s.cited_claim_ids]
+    real_claim_ids: set[UUID] = set()
+    if all_cited:
+        real_claim_ids = set(
+            db.scalars(
+                select(Claim.id).where(Claim.id.in_(all_cited), Claim.project_id == project.id)
+            ).all()
+        )
+
+    # Nodes + linear edge chain. Leave position empty -> the canvas lays it out
+    # with Dagre on first open.
+    prev: ProcessNode | None = None
+    for s in payload.sub_steps:
+        role = (s.role or "Process Team").strip() or "Process Team"
+        new_node = ProcessNode(
+            version_id=child_version.id,
+            type=s.proposed_type,
+            name=s.proposed_name,
+            lane_id=lane_by_role[role].id,
+            position={},
+            properties={},
+        )
+        db.add(new_node)
+        db.flush()
+        new_node.properties = {LINEAGE_KEY: str(new_node.id), "ai_proposed": True}
+        flag_modified(new_node, "properties")
+        seen_link: set[UUID] = set()
+        for cid in s.cited_claim_ids:
+            if cid in real_claim_ids and cid not in seen_link:
+                db.add(NodeClaimLink(node_id=new_node.id, claim_id=cid,
+                                     link_kind=ClaimLinkKind.AI_PROPOSED.value))
+                seen_link.add(cid)
+        if prev is not None:
+            db.add(ProcessEdge(
+                version_id=child_version.id,
+                source_node_id=prev.id,
+                target_node_id=new_node.id,
+                label=s.edge_label or None,
+            ))
+        prev = new_node
+
+    # Link the parent node to the child model.
+    node.properties = {**(node.properties or {}), "child_model_id": str(child.id)}
+    flag_modified(node, "properties")
+
+    db.commit()
+    return DecomposeResult(child_model_id=child.id, child_version_id=child_version.id)
+
+
+@router.delete(
+    "/process-maps/{model_id}/versions/{version_id}/nodes/{node_id}/decompose",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_sub_process(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    version_id: UUID,
+    node_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Reverse a decompose: soft-delete the child model (it leaves the maps
+    list) and clear the parent node's child_model_id link."""
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Process model not found")
+    version = db.get(ProcessVersion, version_id)
+    if version is None or version.model_id != model.id:
+        raise HTTPException(status_code=404, detail="Process version not found")
+    node = db.get(ProcessNode, node_id)
+    if node is None or node.version_id != version.id:
+        raise HTTPException(status_code=404, detail="Node not found in this version")
+
+    child_id = (node.properties or {}).get("child_model_id")
+    if not child_id:
+        raise HTTPException(status_code=404, detail="Step has no sub-process to remove")
+
+    try:
+        child = db.get(ProcessModel, UUID(str(child_id)))
+    except (ValueError, TypeError):
+        child = None
+    if child is not None and child.deleted_at is None and child.project_id == project.id:
+        child.deleted_at = func.now()
+
+    props = {**(node.properties or {})}
+    props.pop("child_model_id", None)
+    node.properties = props
+    flag_modified(node, "properties")
+    db.commit()

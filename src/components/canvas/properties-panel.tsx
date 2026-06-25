@@ -16,6 +16,7 @@ import type {
   NodeIssueDetail,
   ProcessLane,
   ReviewDecision,
+  SubStep,
   SuggestedStep,
   UUID,
   ViewerTarget,
@@ -32,12 +33,14 @@ interface SelectedNode {
   type?: string;
   laneId?: string | null;
   description?: string;
+  childModelId?: UUID | null;
 }
 
 export function PropertiesPanel({
   projectId,
   modelId,
   versionId,
+  level,
   selected,
   lanes,
   collapsed,
@@ -46,11 +49,15 @@ export function PropertiesPanel({
   onUpdate,
   onAddStep,
   onOpenSource,
+  onDecompose,
+  onOpenChild,
+  onRemoveChild,
   review,
 }: {
   projectId: UUID;
   modelId: UUID;
   versionId: UUID;
+  level: string | null;
   selected: SelectedNode;
   lanes: ProcessLane[];
   /** Controlled collapse state — the page lifts this so it can resize the
@@ -65,6 +72,9 @@ export function PropertiesPanel({
   onAddStep?: (sourceId: UUID, step: SuggestedStep) => void;
   /** Open a source document in the viewer, jumping to a citation's quote. */
   onOpenSource: (target: ViewerTarget) => void;
+  onDecompose?: (sourceId: UUID, subSteps: SubStep[]) => void;
+  onOpenChild?: (childModelId: UUID) => void;
+  onRemoveChild?: (sourceId: UUID) => void;
   review?: {
     status: ReviewDecision | null;
     onApprove: () => void;
@@ -301,13 +311,26 @@ export function PropertiesPanel({
           modelId={modelId}
           versionId={versionId}
           nodeId={selected.id}
+          level={level}
+          childModelId={selected.childModelId ?? null}
           onRelabel={(name) => onUpdate?.(selected.id, { name })}
           onDescribe={(description) => {
             setDescriptionDraft(description);
             onUpdate?.(selected.id, { description });
           }}
           onAddStep={(step) => onAddStep?.(selected.id, step)}
+          onDecompose={(subSteps) => onDecompose?.(selected.id, subSteps)}
+          onOpenChild={(childModelId) => onOpenChild?.(childModelId)}
         />
+        {selected.childModelId && (
+          <button
+            type="button"
+            onClick={() => onRemoveChild?.(selected.id)}
+            className="mt-2 w-full rounded-md border border-rose-200 px-2.5 py-1.5 text-[11px] font-medium text-rose-700 hover:bg-rose-50"
+          >
+            Remove sub-process
+          </button>
+        )}
       </div>
 
       {/* Issues — open conflicts touching this node's claims */}
