@@ -2,6 +2,7 @@
 
 import { Pause, Play, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useMutation } from "@tanstack/react-query";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 
@@ -246,7 +247,7 @@ export function ChatTab({
       // A failed undo means the canvas is still in the applied state — keep the
       // card "applied" and retain the handle so Undo can be retried. Do NOT
       // blanket-reset to "pending".
-      console.error("Failed to undo applied suggestion", err);
+      toast.error("Couldn't undo that change — try refreshing the map.");
       return;
     }
     undoHandles.current.delete(bundleId);
@@ -334,7 +335,7 @@ export function ChatTab({
         {ask.isError &&
           !(ask.error instanceof DOMException && ask.error.name === "AbortError") && (
             <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] text-rose-700">
-              {(ask.error as Error).message}
+              {ask.error instanceof Error ? ask.error.message : "An error occurred"}
             </div>
           )}
       </div>

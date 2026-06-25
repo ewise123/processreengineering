@@ -845,6 +845,7 @@ function BpmnCanvas({
       const resolve = (ref: string): UUID => (tmp[ref] as UUID) ?? (ref as UUID);
       let inverses: Array<() => Promise<void>> = [];
       let applied = false;
+      let dead = false;
 
       const runSteps = async () => {
         // Reset by deleting keys (NOT reassigning) so `resolve`'s captured
@@ -879,11 +880,17 @@ function BpmnCanvas({
         applied = false;
       };
       const reapply = async () => {
-        if (applied) return;
+        if (applied || dead) return;
         await runSteps();
       };
       record({ description: "Apply suggestion", do: reapply, undo: revert });
-      return { ok: true, undo: revert };
+      // Card Undo reverts AND permanently kills redo for this batch so
+      // Cmd+Shift+Z can't silently re-apply while the card shows "pending".
+      const cardUndo = async () => {
+        await revert();
+        dead = true;
+      };
+      return { ok: true, undo: cardUndo };
     },
     [record, runStep]
   );

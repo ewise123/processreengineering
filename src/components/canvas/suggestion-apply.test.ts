@@ -220,4 +220,34 @@ describe("planBundle", () => {
     expect(plan.applyable).toBe(true);
     expect(plan.undoable).toBe(false);
   });
+  it("resolves a decompose sub-step role to a lane id when the role matches an existing lane name", () => {
+    const bundle = bundleSuggestions([
+      sg("a", {
+        kind: "decompose",
+        node_ref: "N1",
+        sub_steps: [{ proposed_name: "Approve Invoice", proposed_type: "task", role: "Finance", edge_label: null }],
+      }),
+    ])[0];
+    const index = idx({ laneIds: new Set(["L1", "L9"]), laneNameToId: new Map([["Finance", "L9"]]) });
+    const plan = planBundle(bundle, index);
+    expect(plan.applyable).toBe(true);
+    const createStep = plan.steps.find((s) => s.kind === "create_node");
+    if (!createStep || createStep.kind !== "create_node") throw new Error("Expected a create_node step");
+    expect(createStep.laneRef).toBe("L9");
+  });
+  it("leaves laneRef null when the decompose sub-step role does not match any lane name", () => {
+    const bundle = bundleSuggestions([
+      sg("a", {
+        kind: "decompose",
+        node_ref: "N1",
+        sub_steps: [{ proposed_name: "Unknown Lane Step", proposed_type: "task", role: "NoSuchLane", edge_label: null }],
+      }),
+    ])[0];
+    const index = idx({ laneNameToId: new Map([["Finance", "L9"]]) });
+    const plan = planBundle(bundle, index);
+    expect(plan.applyable).toBe(true);
+    const createStep = plan.steps.find((s) => s.kind === "create_node");
+    if (!createStep || createStep.kind !== "create_node") throw new Error("Expected a create_node step");
+    expect(createStep.laneRef).toBeNull();
+  });
 });

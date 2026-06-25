@@ -135,11 +135,15 @@ export default function CanvasPage() {
   );
 
   const handleApplySuggestions = useCallback(
-    (plan: BundlePlan) => {
-      if (!canvasRef.current) return Promise.resolve({ ok: false, error: "Canvas not ready." });
-      return canvasRef.current.applySuggestionBatch(plan);
+    async (plan: BundlePlan) => {
+      if (!canvasRef.current) return { ok: false, error: "Canvas not ready." } as const;
+      const res = await canvasRef.current.applySuggestionBatch(plan);
+      if (res.ok) {
+        queryClient.invalidateQueries({ queryKey: ["graph", params.id, params.modelId, params.versionId] });
+      }
+      return res;
     },
-    []
+    [queryClient, params.id, params.modelId, params.versionId]
   );
 
   const handleNodeDeleted = useCallback(

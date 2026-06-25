@@ -83,7 +83,6 @@ export function opToSteps(op: SuggestionOp): MutationStep[] {
   }
 }
 
-// Placeholder exports completed in later tasks:
 export interface GraphIndex {
   nodeIds: Set<UUID>;
   edgeIds: Set<UUID>;
@@ -257,7 +256,17 @@ function orderByDependency(suggestions: ChatSuggestion[]): ChatSuggestion[] {
  * as in-plan (order-independent), and every other ref must exist in the current
  * graph index, else the bundle is marked unapplyable. */
 export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
-  const steps = orderByDependency(bundle.suggestions).flatMap((s) => opToSteps(s.op));
+  const rawSteps = orderByDependency(bundle.suggestions).flatMap((s) => opToSteps(s.op));
+
+  // Resolve decompose sub-step roles to lane ids: if a create_node step has a
+  // non-null `role` that matches an existing lane by name, set its laneRef so
+  // the executor places it in that lane rather than falling back to the parent.
+  const steps = rawSteps.map((step) =>
+    step.kind === "create_node" && step.role && index.laneNameToId.has(step.role)
+      ? { ...step, laneRef: index.laneNameToId.get(step.role)! }
+      : step
+  );
+
   // Every tmp produced anywhere in this plan — validation is order-independent.
   const producedAll = new Set<string>();
   for (const step of steps) {
