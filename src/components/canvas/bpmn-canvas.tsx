@@ -507,6 +507,8 @@ function BpmnCanvas({
       const x = inLane.length ? Math.max(...inLane.map((n) => n.x + n.w)) + 60 : 80;
       return { laneId: resolvedLane, x, relativeY: 40 };
     },
+    // Empty deps intentional: reads only via stable refs (nodesRef/lanesRef)
+    // and the module-level placeProposedStep, so it never needs to re-create.
     []
   );
 
@@ -639,7 +641,8 @@ function BpmnCanvas({
       step: MutationStep,
       tmp: Record<string, UUID>,
       resolve: (ref: string) => UUID,
-      inverses: Array<() => Promise<void>>
+      inverses: Array<() => Promise<void>>,
+      batchCtx: { newLaneCount: number }
     ) => {
       switch (step.kind) {
         case "update_node": {
@@ -661,9 +664,11 @@ function BpmnCanvas({
             apiPatch.lane_id = laneId;
             localPatch.laneId = laneId;
           }
-          setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...localPatch } : n)));
-          await api.updateNode(projectId, id, apiPatch);
           const prev = { label: before.label, description: before.description, laneId: before.laneId };
+          setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...localPatch } : n)));
+          // Push the inverse BEFORE the API call so a forward failure can still
+          // revert the optimistic local edit. Restoring to the pre-edit value is
+          // a harmless no-op on the server if the forward call never landed.
           inverses.push(async () => {
             setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...prev } : n)));
             await api.updateNode(projectId, id, {
@@ -672,6 +677,7 @@ function BpmnCanvas({
               lane_id: prev.laneId ?? undefined,
             });
           });
+          await api.updateNode(projectId, id, apiPatch);
           break;
         }
         case "delete_node": {
@@ -745,11 +751,12 @@ function BpmnCanvas({
           if (!before) throw new Error("Edge no longer exists.");
           const oldLabel = before.label;
           setEdges((curr) => curr.map((e) => (e.id === id ? { ...e, label: step.label } : e)));
-          await api.updateEdge(projectId, id, { label: step.label });
+          // Push the inverse BEFORE the API call (see update_node note).
           inverses.push(async () => {
             setEdges((curr) => curr.map((e) => (e.id === id ? { ...e, label: oldLabel } : e)));
             await api.updateEdge(projectId, id, { label: oldLabel });
           });
+          await api.updateEdge(projectId, id, { label: step.label });
           break;
         }
         case "reroute_edge": {
@@ -760,11 +767,20 @@ function BpmnCanvas({
           const newTo = step.toRef ? resolve(step.toRef) : before.to;
           await api.deleteEdge(projectId, id);
           setEdges((curr) => curr.filter((e) => e.id !== id));
-          const created = await api.createEdge(projectId, modelId, versionId, {
-            source_node_id: newFrom,
-            target_node_id: newTo,
-            label: before.label,
-          });
+          // The edge is already gone; if the recreate fails we can't restore it
+          // (non-undoable batch), so surface a clear, recoverable message.
+          let created;
+          try {
+            created = await api.createEdge(projectId, modelId, versionId, {
+              source_node_id: newFrom,
+              target_node_id: newTo,
+              label: before.label,
+            });
+          } catch {
+            throw new Error(
+              "The edge was deleted but could not be reconnected — please refresh the map."
+            );
+          }
           setEdges((curr) => [
             ...curr,
             { id: created.id, from: created.source_node_id, to: created.target_node_id, label: created.label ?? null },
@@ -773,16 +789,21 @@ function BpmnCanvas({
           break;
         }
         case "create_lane": {
+          // lanesRef.current is stale within a batch (setLanes is async), so a
+          // batch-scoped counter offsets order_index + palette index to keep
+          // multiple create_lane steps in one bundle distinct.
+          const laneSlot = lanesRef.current.length + batchCtx.newLaneCount;
           const created = await api.createLane(projectId, modelId, versionId, {
             name: step.name,
-            order_index: lanesRef.current.length,
+            order_index: laneSlot,
             height_px: LANE_HEIGHT,
           });
+          batchCtx.newLaneCount++;
           tmp[step.tempId] = created.id;
           const newLane: CanvasLane = {
             id: created.id,
             label: created.name,
-            color: LANE_PALETTE[lanesRef.current.length % LANE_PALETTE.length],
+            color: LANE_PALETTE[laneSlot % LANE_PALETTE.length],
             collapsed: false,
             y: 0,
             h: created.height_px,
@@ -800,11 +821,12 @@ function BpmnCanvas({
           if (!before) throw new Error("Lane no longer exists.");
           const oldName = before.label;
           setLanes((curr) => curr.map((l) => (l.id === id ? { ...l, label: step.name } : l)));
-          await api.updateLane(projectId, id, { name: step.name });
+          // Push the inverse BEFORE the API call (see update_node note).
           inverses.push(async () => {
             setLanes((curr) => curr.map((l) => (l.id === id ? { ...l, label: oldName } : l)));
             await api.updateLane(projectId, id, { name: oldName });
           });
+          await api.updateLane(projectId, id, { name: step.name });
           break;
         }
       }
@@ -825,9 +847,13 @@ function BpmnCanvas({
       let applied = false;
 
       const runSteps = async () => {
+        // Reset by deleting keys (NOT reassigning) so `resolve`'s captured
+        // reference stays valid; clears stale tmp entries on a reapply/redo.
+        for (const k in tmp) delete tmp[k];
         inverses = [];
+        const batchCtx = { newLaneCount: 0 };
         for (const step of plan.steps) {
-          await runStep(step, tmp, resolve, inverses);
+          await runStep(step, tmp, resolve, inverses, batchCtx);
         }
         applied = true;
       };
