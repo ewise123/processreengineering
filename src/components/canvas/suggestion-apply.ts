@@ -107,7 +107,72 @@ export interface BatchResult {
   error?: string;
   undo?: () => Promise<void>;
 }
-// indexGraph / bundleSuggestions / planBundle implemented in Tasks 2 & 3.
-export function indexGraph(_graph: ProcessGraph): GraphIndex {
-  throw new Error("not implemented");
+export function indexGraph(graph: ProcessGraph): GraphIndex {
+  const laneNameToId = new Map<string, UUID>();
+  for (const l of graph.lanes) laneNameToId.set(l.name, l.id);
+  return {
+    nodeIds: new Set(graph.nodes.map((n) => n.id)),
+    edgeIds: new Set(graph.edges.map((e) => e.id)),
+    laneIds: new Set(graph.lanes.map((l) => l.id)),
+    laneNameToId,
+  };
+}
+
+/** Every ref string a suggestion's op reads (consuming refs only — not temp_id). */
+function consumedRefs(op: SuggestionOp): string[] {
+  const refs: string[] = [];
+  for (const v of [op.node_ref, op.edge_ref, op.lane_ref, op.from_ref, op.to_ref, op.near_node_ref]) {
+    if (v) refs.push(v);
+  }
+  return refs;
+}
+
+/** Union-find: group suggestions joined by a shared `group` or a tmp_id dep. */
+export function bundleSuggestions(suggestions: ChatSuggestion[]): Bundle[] {
+  const parent = suggestions.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const union = (a: number, b: number) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb);
+  };
+
+  // 1) shared non-null group
+  const byGroup = new Map<string, number>();
+  suggestions.forEach((s, i) => {
+    if (!s.group) return;
+    if (byGroup.has(s.group)) union(byGroup.get(s.group)!, i);
+    else byGroup.set(s.group, i);
+  });
+
+  // 2) tmp_id producer -> consumer
+  const producerOf = new Map<string, number>();
+  suggestions.forEach((s, i) => {
+    if (s.op.temp_id) producerOf.set(s.op.temp_id, i);
+  });
+  suggestions.forEach((s, i) => {
+    for (const ref of consumedRefs(s.op)) {
+      const producer = producerOf.get(ref);
+      if (producer !== undefined) union(producer, i);
+    }
+  });
+
+  // Collect members per root, preserving document order.
+  const groups = new Map<number, ChatSuggestion[]>();
+  suggestions.forEach((s, i) => {
+    const root = find(i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root)!.push(s);
+  });
+
+  // Emit bundles in the document order of their first member.
+  const roots = [...groups.keys()].sort((a, b) => a - b);
+  return roots.map((root) => {
+    const members = groups.get(root)!;
+    return {
+      id: members.map((m) => m.id).join("+"),
+      suggestions: members,
+      undoable: members.every((m) => !isDeleteOp(m.op.kind)),
+    };
+  });
 }

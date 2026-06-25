@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { opToSteps, isDeleteOp } from "./suggestion-apply";
-import type { SuggestionOp } from "@/lib/types";
+import { opToSteps, isDeleteOp, bundleSuggestions, indexGraph } from "./suggestion-apply";
+import type { SuggestionOp, ChatSuggestion, ProcessGraph } from "@/lib/types";
 
 const op = (o: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }): SuggestionOp => ({
   kind: o.kind,
@@ -107,5 +107,58 @@ describe("opToSteps", () => {
     expect(opToSteps(op({ kind: "rename_lane", lane_ref: "L1", name: "Operations" }))).toEqual([
       { kind: "update_lane", laneRef: "L1", name: "Operations" },
     ]);
+  });
+});
+
+const sg = (id: string, opOverrides: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }, group?: string): ChatSuggestion => ({
+  id,
+  group: group ?? null,
+  title: id,
+  op: op(opOverrides),
+  affected_refs: [],
+  rationale: "",
+  cited_claim_ids: [],
+});
+
+describe("bundleSuggestions", () => {
+  it("keeps independent suggestions as singleton bundles", () => {
+    const a = sg("a", { kind: "relabel_node", node_ref: "N1", new_label: "X" });
+    const b = sg("b", { kind: "relabel_node", node_ref: "N2", new_label: "Y" });
+    const bundles = bundleSuggestions([a, b]);
+    expect(bundles.map((x) => x.suggestions.map((s) => s.id))).toEqual([["a"], ["b"]]);
+  });
+  it("bundles suggestions that share a non-null group", () => {
+    const a = sg("a", { kind: "relabel_node", node_ref: "N1", new_label: "X" }, "g1");
+    const b = sg("b", { kind: "relabel_node", node_ref: "N2", new_label: "Y" }, "g1");
+    const bundles = bundleSuggestions([a, b]);
+    expect(bundles).toHaveLength(1);
+    expect(bundles[0].suggestions.map((s) => s.id)).toEqual(["a", "b"]);
+  });
+  it("bundles a tmp_id producer with its consumer", () => {
+    const a = sg("a", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "New" });
+    const b = sg("b", { kind: "add_edge", from_ref: "N1", to_ref: "t1" });
+    const bundles = bundleSuggestions([a, b]);
+    expect(bundles).toHaveLength(1);
+    expect(bundles[0].suggestions.map((s) => s.id)).toEqual(["a", "b"]);
+  });
+  it("marks a bundle non-undoable if any member is a delete op", () => {
+    const a = sg("a", { kind: "remove_node", node_ref: "N1" }, "g1");
+    const b = sg("b", { kind: "relabel_node", node_ref: "N2", new_label: "Y" }, "g1");
+    const bundles = bundleSuggestions([a, b]);
+    expect(bundles[0].undoable).toBe(false);
+  });
+});
+
+describe("indexGraph", () => {
+  it("indexes node/edge/lane ids and lane names", () => {
+    const graph = {
+      nodes: [{ id: "n1" }, { id: "n2" }],
+      edges: [{ id: "e1" }],
+      lanes: [{ id: "l1", name: "Ops" }],
+    } as unknown as ProcessGraph;
+    const idx = indexGraph(graph);
+    expect(idx.nodeIds.has("n1")).toBe(true);
+    expect(idx.edgeIds.has("e1")).toBe(true);
+    expect(idx.laneNameToId.get("Ops")).toBe("l1");
   });
 });
