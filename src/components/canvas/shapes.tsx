@@ -94,6 +94,15 @@ export function buildPinnedEdgePath(
   };
 }
 
+/** An edge renders as a backtrack loop when it is explicitly a rework edge OR
+ * when both anchor faces are pinned (which routes through buildPinnedEdgePath).
+ * Keeps styling and routing from ever disagreeing. */
+export function isReworkEdge(
+  edge: Pick<CanvasEdge, "kind" | "sourceSide" | "targetSide">
+): boolean {
+  return edge.kind === "rework" || (!!edge.sourceSide && !!edge.targetSide);
+}
+
 export function buildEdgePath(
   from: SimpleRect,
   to: SimpleRect,
@@ -504,7 +513,7 @@ export function EdgeArrow({
   if (!from || !to) return null;
 
   const edgeProposed = isEdgeProposed(from, to);
-  const isRework = edge.kind === "rework";
+  const isRework = isReworkEdge(edge);
 
   const { d, midX, midY, orientation, midSegment } = buildEdgePath(from, to, {
     bendX: edge.bendX,

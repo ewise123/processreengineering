@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildEdgePath, buildPinnedEdgePath } from "./shapes";
+import { buildEdgePath, buildPinnedEdgePath, isReworkEdge } from "./shapes";
 
 // Two nodes side by side on the same row. "to" sits to the LEFT of "from",
 // i.e. a backtrack: the user drags from the later step back to an earlier one.
@@ -33,6 +33,24 @@ describe("buildPinnedEdgePath", () => {
     // source exits bottom (160) → channel 56 below = 216; target enters top (100)
     const r = buildPinnedEdgePath(later, earlier, "bottom", "top");
     expect(r.d).toBe("M 460 160 L 460 216 L 60 216 L 60 100");
+  });
+});
+
+describe("isReworkEdge", () => {
+  it("returns true when kind is rework, even with no sides pinned", () => {
+    expect(isReworkEdge({ kind: "rework", sourceSide: null, targetSide: null })).toBe(true);
+  });
+
+  it("returns true when both sides are pinned, even if kind is flow", () => {
+    expect(isReworkEdge({ kind: "flow", sourceSide: "bottom", targetSide: "bottom" })).toBe(true);
+  });
+
+  it("returns false when only one side is pinned", () => {
+    expect(isReworkEdge({ kind: "flow", sourceSide: "bottom", targetSide: null })).toBe(false);
+  });
+
+  it("returns false when neither side is pinned and kind is flow", () => {
+    expect(isReworkEdge({ kind: "flow", sourceSide: null, targetSide: null })).toBe(false);
   });
 });
 
