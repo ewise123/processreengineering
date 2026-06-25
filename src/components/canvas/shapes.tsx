@@ -163,6 +163,7 @@ export function NodeShape({
   onMouseDown,
   onContextMenu,
   onStartConnect,
+  onDoubleClick,
 }: {
   node: ResolvedNode;
   selected: boolean;
@@ -174,6 +175,7 @@ export function NodeShape({
   onMouseDown: (e: MouseEvent, id: string) => void;
   onContextMenu?: (e: MouseEvent, id: string) => void;
   onStartConnect?: (e: MouseEvent, sourceId: UUID, side: ConnectSide) => void;
+  onDoubleClick?: (id: string) => void;
 }) {
   const { kind, x, y, w, h, label, id } = node;
   const isEvent = kind === "start" || kind === "end" || kind === "intermediate";
@@ -201,6 +203,7 @@ export function NodeShape({
       style={{ cursor: showHandles ? "crosshair" : "move" }}
       onMouseDown={(e) => onMouseDown(e, id)}
       onContextMenu={(e) => onContextMenu?.(e, id)}
+      onDoubleClick={() => onDoubleClick?.(id)}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       data-node-id={id}
@@ -277,6 +280,13 @@ export function NodeShape({
               ✦
             </text>
           )}
+          {node.childModelId && (
+            <g transform={`translate(${w / 2 - 7}, ${h - 14})`} aria-label="Has sub-process" style={{ pointerEvents: "none" }}>
+              <rect width={14} height={12} rx={2} fill="#fff" stroke="#475569" strokeWidth={1} />
+              <line x1={7} y1={3} x2={7} y2={9} stroke="#475569" strokeWidth={1.2} />
+              <line x1={4} y1={6} x2={10} y2={6} stroke="#475569" strokeWidth={1.2} />
+            </g>
+          )}
           <foreignObject x={6} y={10} width={w - 12} height={h - 16}>
             <div
               style={{
@@ -344,6 +354,15 @@ export function NodeShape({
           <text textAnchor="middle" y={4} fontSize="11" fontWeight="700" fill="#fff">
             {reviewBadge === "approved" ? "✓" : "!"}
           </text>
+        </g>
+      )}
+      {node.evidenceStale && (
+        <g transform={`translate(${w - 8}, ${h + 8})`} style={{ pointerEvents: "none" }}>
+          <circle r={8} fill="#f59e0b" stroke="#fff" strokeWidth={2} />
+          <text textAnchor="middle" y={3.5} fontSize="10" fontWeight="700" fill="#fff">
+            !
+          </text>
+          <title>Evidence stale — refresh from claims</title>
         </g>
       )}
       {handlesVisible && (

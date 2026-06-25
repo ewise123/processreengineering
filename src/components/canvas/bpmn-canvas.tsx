@@ -15,7 +15,8 @@ import {
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
-import type { IssueSeverity, UUID } from "@/lib/types";
+import type { IssueSeverity, NodeUpdate, UUID } from "@/lib/types";
+import type { BundlePlan, BatchResult, MutationStep } from "./suggestion-apply";
 
 import { CanvasContextMenu, type ContextMenuItem } from "./canvas-context-menu";
 import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
@@ -46,8 +47,10 @@ import type {
   ResolvedNode,
   Viewport,
 } from "./types";
+import { ReasonPromptDialog } from "./reason-prompt-dialog";
 import { useClipboard } from "./use-clipboard";
 import { useGraphPersistence, type SaveStatus } from "./use-persistence";
+import { useReasonPrompt } from "./use-reason-prompt";
 import { useUndoStack } from "./use-undo-stack";
 
 const WORLD_WIDTH_MIN = 1700;
@@ -130,7 +133,7 @@ function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
 
 export type CanvasSelection =
   | { kind: "none" }
-  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; type?: string; laneId?: UUID | null; description?: string }
+  | { kind: "node"; id: UUID; name?: string; nodeKind?: string; type?: string; laneId?: UUID | null; description?: string; childModelId?: UUID | null }
   | { kind: "edge"; id: UUID }
   | { kind: "multi"; nodeIds: UUID[]; edgeIds: UUID[] };
 
@@ -163,12 +166,19 @@ export interface BpmnCanvasHandle {
   /** Pan/zoom to an object by id, select it, and flash it briefly. Handles
    * both nodes and edges (used by chat mention links). */
   navigateTo: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+  /** Clear a node's child-sub-process link locally (drops the "+" marker)
+   * after the sub-process is removed via the API. */
+  clearChildModelId: (id: UUID) => void;
   /** Delete every selected node and edge (node deletes are non-undoable). */
   deleteSelection: () => Promise<void>;
   /** Copy the current selection to the in-memory clipboard. */
   copySelection: () => void;
   /** Reassign every selected node to a lane (grouped undo). */
   moveSelectionToLane: (laneId: UUID) => void;
+  /** Apply a validated suggestion bundle plan to the canvas. Runs every step,
+   * rolling back on failure. Undoable plans record a single grouped undo entry
+   * (Cmd+Z) and return an inline `undo`; delete-containing plans do neither. */
+  applySuggestionBatch: (plan: BundlePlan) => Promise<BatchResult>;
 }
 
 interface BpmnCanvasProps {
@@ -188,6 +198,20 @@ interface BpmnCanvasProps {
   onCountsChange?: (counts: { lanes: number; nodes: number; edges: number }) => void;
   /** Called when the user clicks the "Properties" pill on a selected node. */
   onOpenProperties?: () => void;
+  /** Fires when a node with a child sub-process is double-clicked. The page
+   * resolves the child's latest version and routes there. */
+  onDrillIntoNode?: (childModelId: UUID) => void;
+}
+
+/** Pure helper: recompute `y` offsets for a lane list after insertions/deletions.
+ * Module-level (not a hook) so both the canvas body and `runStep` can call it. */
+function recomputeY(ls: CanvasLane[]): CanvasLane[] {
+  let y = 0;
+  return ls.map((l) => {
+    const out = { ...l, y };
+    y += l.h;
+    return out;
+  });
 }
 
 export const BpmnCanvas = forwardRef<BpmnCanvasHandle, BpmnCanvasProps>(
@@ -205,6 +229,7 @@ function BpmnCanvas({
   onNodeDeleted,
   onCountsChange,
   onOpenProperties,
+  onDrillIntoNode,
 }, ref) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState(initialNodes);
@@ -233,6 +258,8 @@ function BpmnCanvas({
 
   const { record, undo, redo, canUndo, canRedo } = useUndoStack();
   const clipboard = useClipboard();
+  const reasonPrompt = useReasonPrompt();
+  const { promptReason } = reasonPrompt;
 
   const selectOnly = useCallback((id: string) => setSelectedIds(new Set([id])), []);
   const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
@@ -274,7 +301,8 @@ function BpmnCanvas({
   const applyNodeEditLocal = useCallback(
     async (
       id: UUID,
-      next: { name: string; laneId: UUID | null; relativeY: number; description?: string }
+      next: { name: string; laneId: UUID | null; relativeY: number; description?: string },
+      reason: string
     ) => {
       setNodes((curr) =>
         curr.map((n) =>
@@ -294,13 +322,14 @@ function BpmnCanvas({
         lane_id: next.laneId ?? undefined,
         relative_y: next.relativeY,
         ...(next.description !== undefined ? { description: next.description } : {}),
+        reason,
       });
     },
     [projectId]
   );
 
   const applyNodeTypeLocal = useCallback(
-    async (id: UUID, newType: string) => {
+    async (id: UUID, newType: string, reason: string) => {
       const kind = nodeKindFromType(newType);
       const size = sizeForNodeType(newType);
       setNodes((curr) =>
@@ -310,7 +339,7 @@ function BpmnCanvas({
             : n
         )
       );
-      await api.updateNode(projectId, id, { type: newType });
+      await api.updateNode(projectId, id, { type: newType, reason });
     },
     [projectId]
   );
@@ -325,11 +354,14 @@ function BpmnCanvas({
       if (patch.type !== undefined && patch.type !== old.type) {
         const newType = patch.type;
         const oldType = old.type;
-        await applyNodeTypeLocal(id, newType);
+        const reason = await promptReason("Change step type");
+        if (reason === null) return;
+        await applyNodeTypeLocal(id, newType, reason);
+        const description = "Change node type";
         record({
-          description: "Change node type",
-          do: () => applyNodeTypeLocal(id, newType),
-          undo: () => applyNodeTypeLocal(id, oldType),
+          description,
+          do: () => applyNodeTypeLocal(id, newType, `Redo of ${description}`),
+          undo: () => applyNodeTypeLocal(id, oldType, `Undo of ${description}`),
         });
         return;
       }
@@ -341,11 +373,16 @@ function BpmnCanvas({
         const oldDescription = old.description;
         const newDescription = patch.description;
         const base = { name: old.label, laneId: old.laneId, relativeY: old.relativeY };
-        await applyNodeEditLocal(id, { ...base, description: newDescription });
+        const reason = await promptReason("Edit step description");
+        if (reason === null) return;
+        await applyNodeEditLocal(id, { ...base, description: newDescription }, reason);
+        const description = "Edit description";
         record({
-          description: "Edit description",
-          do: () => applyNodeEditLocal(id, { ...base, description: newDescription }),
-          undo: () => applyNodeEditLocal(id, { ...base, description: oldDescription }),
+          description,
+          do: () =>
+            applyNodeEditLocal(id, { ...base, description: newDescription }, `Redo of ${description}`),
+          undo: () =>
+            applyNodeEditLocal(id, { ...base, description: oldDescription }, `Undo of ${description}`),
         });
         return;
       }
@@ -370,14 +407,17 @@ function BpmnCanvas({
         laneId: oldLaneId,
         relativeY: oldRelativeY,
       };
-      await applyNodeEditLocal(id, next);
+      const reason = await promptReason(laneChanged ? "Move step to lane" : "Rename step");
+      if (reason === null) return;
+      await applyNodeEditLocal(id, next, reason);
+      const description = laneChanged ? "Move node to lane" : "Rename node";
       record({
-        description: laneChanged ? "Move node to lane" : "Rename node",
-        do: () => applyNodeEditLocal(id, next),
-        undo: () => applyNodeEditLocal(id, prev),
+        description,
+        do: () => applyNodeEditLocal(id, next, `Redo of ${description}`),
+        undo: () => applyNodeEditLocal(id, prev, `Undo of ${description}`),
       });
     },
-    [applyNodeEditLocal, applyNodeTypeLocal, record]
+    [applyNodeEditLocal, applyNodeTypeLocal, record, promptReason]
   );
 
   const addProposedStep = useCallback(
@@ -476,6 +516,32 @@ function BpmnCanvas({
     [projectId, modelId, versionId, record, deleteNodeImpl, selectOnly]
   );
 
+  const clearChildModelId = useCallback((id: UUID) => {
+    setNodes((curr) =>
+      curr.map((n) => (n.id === id ? { ...n, childModelId: null } : n))
+    );
+  }, []);
+
+  // Pick a world position for a newly-created suggestion node: offset from the
+  // anchor node when one is given, else a default slot in the target lane.
+  const placeNewNode = useCallback(
+    (laneId: UUID | null, nearNodeId: UUID | null): { laneId: UUID; x: number; relativeY: number } | null => {
+      const near = nearNodeId ? nodesRef.current.find((n) => n.id === nearNodeId) : null;
+      const resolvedLane = laneId ?? near?.laneId ?? lanesRef.current[0]?.id ?? null;
+      if (!resolvedLane) return null;
+      if (near) {
+        const pos = placeProposedStep({ x: near.x, relativeY: near.relativeY, w: near.w });
+        return { laneId: resolvedLane, x: pos.x, relativeY: pos.relativeY };
+      }
+      const inLane = nodesRef.current.filter((n) => n.laneId === resolvedLane);
+      const x = inLane.length ? Math.max(...inLane.map((n) => n.x + n.w)) + 60 : 80;
+      return { laneId: resolvedLane, x, relativeY: 40 };
+    },
+    // Empty deps intentional: reads only via stable refs (nodesRef/lanesRef)
+    // and the module-level placeProposedStep, so it never needs to re-create.
+    []
+  );
+
   const deleteEdgeImpl = useCallback(
     async (id: UUID) => {
       const edge = edgesRef.current.find((e) => e.id === id);
@@ -536,8 +602,8 @@ function BpmnCanvas({
   }, [deleteNodeImpl, deleteEdgeImpl]);
 
   const updateEdgeLabelLocal = useCallback(
-    async (id: UUID, label: string | null) => {
-      const updated = await api.updateEdge(projectId, id, { label });
+    async (id: UUID, label: string | null, reason: string) => {
+      const updated = await api.updateEdge(projectId, id, { label, reason });
       setEdges((curr) =>
         curr.map((e) =>
           e.id === id ? { ...e, label: updated.label ?? null } : e
@@ -555,14 +621,17 @@ function BpmnCanvas({
       if (!existing) return;
       const oldLabel = existing.label;
       if (oldLabel === newLabel) return;
-      await updateEdgeLabelLocal(id, newLabel);
+      const reason = await promptReason("Edit connection label");
+      if (reason === null) return;
+      await updateEdgeLabelLocal(id, newLabel, reason);
+      const description = "Edit edge label";
       record({
-        description: "Edit edge label",
-        do: () => updateEdgeLabelLocal(id, newLabel),
-        undo: () => updateEdgeLabelLocal(id, oldLabel),
+        description,
+        do: () => updateEdgeLabelLocal(id, newLabel, `Redo of ${description}`),
+        undo: () => updateEdgeLabelLocal(id, oldLabel, `Undo of ${description}`),
       });
     },
-    [updateEdgeLabelLocal, record]
+    [updateEdgeLabelLocal, record, promptReason]
   );
 
   const createEdgeImpl = useCallback(
@@ -596,6 +665,267 @@ function BpmnCanvas({
       });
     },
     [projectId, modelId, versionId, record, deselect]
+  );
+
+  // Per-step executor for applySuggestionBatch. Declared before
+  // applySuggestionBatch so it can appear in that callback's dep array.
+  const runStep = useCallback(
+    async (
+      step: MutationStep,
+      tmp: Record<string, UUID>,
+      resolve: (ref: string) => UUID,
+      inverses: Array<() => Promise<void>>,
+      batchCtx: { newLaneCount: number }
+    ) => {
+      switch (step.kind) {
+        case "update_node": {
+          const id = resolve(step.nodeRef);
+          const before = nodesRef.current.find((n) => n.id === id);
+          if (!before) throw new Error("Node no longer exists.");
+          const apiPatch: NodeUpdate = {};
+          const localPatch: Partial<CanvasNode> = {};
+          if (step.name !== undefined) {
+            apiPatch.name = step.name;
+            localPatch.label = step.name;
+          }
+          if (step.description !== undefined) {
+            apiPatch.description = step.description;
+            localPatch.description = step.description;
+          }
+          if (step.laneRef !== undefined) {
+            const laneId = resolve(step.laneRef);
+            apiPatch.lane_id = laneId;
+            localPatch.laneId = laneId;
+          }
+          const prev = { label: before.label, description: before.description, laneId: before.laneId };
+          setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...localPatch } : n)));
+          // Push the inverse BEFORE the API call so a forward failure can still
+          // revert the optimistic local edit. Restoring to the pre-edit value is
+          // a harmless no-op on the server if the forward call never landed.
+          inverses.push(async () => {
+            setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...prev } : n)));
+            await api.updateNode(projectId, id, {
+              name: prev.label,
+              description: prev.description,
+              lane_id: prev.laneId ?? undefined,
+            });
+          });
+          await api.updateNode(projectId, id, apiPatch);
+          break;
+        }
+        case "delete_node": {
+          const id = resolve(step.nodeRef);
+          await deleteNodeImpl(id);
+          // delete-containing plans aren't undoable; no inverse pushed.
+          break;
+        }
+        case "create_node": {
+          const place = placeNewNode(
+            step.laneRef ? resolve(step.laneRef) : null,
+            step.nearNodeRef ? resolve(step.nearNodeRef) : null
+          );
+          if (!place) throw new Error("No lane available to place the new step.");
+          const created = await api.createNode(projectId, modelId, versionId, {
+            type: step.nodeType,
+            name: step.label,
+            lane_id: place.laneId,
+            x: place.x,
+            relative_y: place.relativeY,
+          });
+          const size = sizeForNodeType(created.type);
+          const newNode: CanvasNode = {
+            id: created.id,
+            type: created.type,
+            kind: nodeKindFromType(created.type),
+            label: created.name,
+            laneId: place.laneId,
+            x: place.x,
+            relativeY: place.relativeY,
+            w: size.w,
+            h: size.h,
+            aiProposed: true,
+          };
+          tmp[step.tempId] = created.id;
+          setNodes((curr) => [...curr, newNode]);
+          inverses.push(async () => {
+            await api.deleteNode(projectId, created.id);
+            setNodes((curr) => curr.filter((n) => n.id !== created.id));
+            setEdges((curr) => curr.filter((e) => e.from !== created.id && e.to !== created.id));
+          });
+          break;
+        }
+        case "create_edge": {
+          const created = await api.createEdge(projectId, modelId, versionId, {
+            source_node_id: resolve(step.fromRef),
+            target_node_id: resolve(step.toRef),
+            label: step.label,
+          });
+          if (step.tempId) tmp[step.tempId] = created.id;
+          setEdges((curr) => [
+            ...curr,
+            { id: created.id, from: created.source_node_id, to: created.target_node_id, label: created.label ?? null },
+          ]);
+          inverses.push(async () => {
+            await api.deleteEdge(projectId, created.id);
+            setEdges((curr) => curr.filter((e) => e.id !== created.id));
+          });
+          break;
+        }
+        case "delete_edge": {
+          const id = resolve(step.edgeRef);
+          await api.deleteEdge(projectId, id);
+          setEdges((curr) => curr.filter((e) => e.id !== id));
+          // delete-containing plan: no inverse.
+          break;
+        }
+        case "update_edge_label": {
+          const id = resolve(step.edgeRef);
+          const before = edgesRef.current.find((e) => e.id === id);
+          if (!before) throw new Error("Edge no longer exists.");
+          const oldLabel = before.label;
+          setEdges((curr) => curr.map((e) => (e.id === id ? { ...e, label: step.label } : e)));
+          // Push the inverse BEFORE the API call (see update_node note).
+          inverses.push(async () => {
+            setEdges((curr) => curr.map((e) => (e.id === id ? { ...e, label: oldLabel } : e)));
+            await api.updateEdge(projectId, id, { label: oldLabel });
+          });
+          await api.updateEdge(projectId, id, { label: step.label });
+          break;
+        }
+        case "reroute_edge": {
+          const id = resolve(step.edgeRef);
+          const before = edgesRef.current.find((e) => e.id === id);
+          if (!before) throw new Error("Edge no longer exists.");
+          const newFrom = step.fromRef ? resolve(step.fromRef) : before.from;
+          const newTo = step.toRef ? resolve(step.toRef) : before.to;
+          await api.deleteEdge(projectId, id);
+          setEdges((curr) => curr.filter((e) => e.id !== id));
+          // The edge is already gone; if the recreate fails we can't restore it
+          // (non-undoable batch), so surface a clear, recoverable message.
+          let created;
+          try {
+            created = await api.createEdge(projectId, modelId, versionId, {
+              source_node_id: newFrom,
+              target_node_id: newTo,
+              label: before.label,
+            });
+          } catch {
+            throw new Error(
+              "The edge was deleted but could not be reconnected — please refresh the map."
+            );
+          }
+          setEdges((curr) => [
+            ...curr,
+            { id: created.id, from: created.source_node_id, to: created.target_node_id, label: created.label ?? null },
+          ]);
+          // delete-containing plan: no inverse.
+          break;
+        }
+        case "create_lane": {
+          // lanesRef.current is stale within a batch (setLanes is async), so a
+          // batch-scoped counter offsets order_index + palette index to keep
+          // multiple create_lane steps in one bundle distinct.
+          const laneSlot = lanesRef.current.length + batchCtx.newLaneCount;
+          const created = await api.createLane(projectId, modelId, versionId, {
+            name: step.name,
+            order_index: laneSlot,
+            height_px: LANE_HEIGHT,
+          });
+          batchCtx.newLaneCount++;
+          tmp[step.tempId] = created.id;
+          const newLane: CanvasLane = {
+            id: created.id,
+            label: created.name,
+            color: LANE_PALETTE[laneSlot % LANE_PALETTE.length],
+            collapsed: false,
+            y: 0,
+            h: created.height_px,
+          };
+          setLanes((curr) => recomputeY([...curr, newLane]));
+          inverses.push(async () => {
+            await api.deleteLane(projectId, created.id);
+            setLanes((curr) => recomputeY(curr.filter((l) => l.id !== created.id)));
+          });
+          break;
+        }
+        case "update_lane": {
+          const id = resolve(step.laneRef);
+          const before = lanesRef.current.find((l) => l.id === id);
+          if (!before) throw new Error("Lane no longer exists.");
+          const oldName = before.label;
+          setLanes((curr) => curr.map((l) => (l.id === id ? { ...l, label: step.name } : l)));
+          // Push the inverse BEFORE the API call (see update_node note).
+          inverses.push(async () => {
+            setLanes((curr) => curr.map((l) => (l.id === id ? { ...l, label: oldName } : l)));
+            await api.updateLane(projectId, id, { name: oldName });
+          });
+          await api.updateLane(projectId, id, { name: step.name });
+          break;
+        }
+      }
+    },
+    [projectId, modelId, versionId, deleteNodeImpl, placeNewNode]
+  );
+
+  const applySuggestionBatch = useCallback(
+    async (plan: BundlePlan): Promise<BatchResult> => {
+      if (!plan.applyable) {
+        return { ok: false, error: plan.reason ?? "This change can no longer be applied." };
+      }
+
+      // tmp placeholder -> real id, populated as create-steps run.
+      const tmp: Record<string, UUID> = {};
+      const resolve = (ref: string): UUID => (tmp[ref] as UUID) ?? (ref as UUID);
+      let inverses: Array<() => Promise<void>> = [];
+      let applied = false;
+      let dead = false;
+
+      const runSteps = async () => {
+        // Reset by deleting keys (NOT reassigning) so `resolve`'s captured
+        // reference stays valid; clears stale tmp entries on a reapply/redo.
+        for (const k in tmp) delete tmp[k];
+        inverses = [];
+        const batchCtx = { newLaneCount: 0 };
+        for (const step of plan.steps) {
+          await runStep(step, tmp, resolve, inverses, batchCtx);
+        }
+        applied = true;
+      };
+
+      try {
+        await runSteps();
+      } catch (err) {
+        for (const inv of [...inverses].reverse()) {
+          try {
+            await inv();
+          } catch {
+            /* best-effort rollback */
+          }
+        }
+        return { ok: false, error: err instanceof Error ? err.message : "Couldn't apply the change." };
+      }
+
+      if (!plan.undoable) return { ok: true };
+
+      const revert = async () => {
+        if (!applied) return;
+        for (const inv of [...inverses].reverse()) await inv();
+        applied = false;
+      };
+      const reapply = async () => {
+        if (applied || dead) return;
+        await runSteps();
+      };
+      record({ description: "Apply suggestion", do: reapply, undo: revert });
+      // Card Undo reverts AND permanently kills redo for this batch so
+      // Cmd+Shift+Z can't silently re-apply while the card shows "pending".
+      const cardUndo = async () => {
+        await revert();
+        dead = true;
+      };
+      return { ok: true, undo: cardUndo };
+    },
+    [record, runStep]
   );
 
   // Recenter the viewport on a node so it's actually visible after a remote
@@ -805,6 +1135,7 @@ function BpmnCanvas({
           type: node.type,
           laneId: node.laneId,
           description: node.description,
+          childModelId: node.childModelId ?? null,
         });
       } else {
         onSelectionChange({ kind: "edge", id });
@@ -1234,13 +1565,6 @@ function BpmnCanvas({
         const finals = drag.members
           .map((m) => nodesRef.current.find((n) => n.id === m.id))
           .filter((n): n is NonNullable<typeof n> => !!n);
-        for (const f of finals) {
-          markNode(f.id, {
-            x: f.x,
-            relative_y: f.relativeY,
-            lane_id: f.laneId ?? undefined,
-          });
-        }
         const moved = drag.members.some((m) => {
           const f = finals.find((n) => n.id === m.id);
           return (
@@ -1250,24 +1574,62 @@ function BpmnCanvas({
               f.laneId !== m.origLaneId)
           );
         });
-        if (moved) {
-          const newPositions = finals.map((f) => ({
-            id: f.id,
-            x: f.x,
-            relativeY: f.relativeY,
-            laneId: f.laneId,
-          }));
-          const oldPositions = drag.members.map((m) => ({
-            id: m.id,
-            x: m.origX,
-            relativeY: m.origRelativeY,
-            laneId: m.origLaneId,
-          }));
-          record({
-            description: finals.length > 1 ? `Move ${finals.length} nodes` : "Move node",
-            do: () => applyGroupPositionsLocal(newPositions),
-            undo: () => applyGroupPositionsLocal(oldPositions),
-          });
+        // A drag that lands a node in a different lane is a SEMANTIC edit and
+        // needs a reason; a pure reposition (or in-lane move) is cosmetic.
+        const relaned = drag.members.some((m) => {
+          const f = finals.find((n) => n.id === m.id);
+          return f && f.laneId !== m.origLaneId;
+        });
+        const newPositions = finals.map((f) => ({
+          id: f.id,
+          x: f.x,
+          relativeY: f.relativeY,
+          laneId: f.laneId,
+        }));
+        const oldPositions = drag.members.map((m) => ({
+          id: m.id,
+          x: m.origX,
+          relativeY: m.origRelativeY,
+          laneId: m.origLaneId,
+        }));
+        const description =
+          finals.length > 1 ? `Move ${finals.length} nodes` : "Move node";
+
+        if (moved && relaned) {
+          // Prompt for the relane reason. The nodes are already optimistically
+          // in their new spots (from onMove); if the user cancels we snap them
+          // back and persist nothing.
+          void (async () => {
+            const reason = await promptReason(
+              finals.length > 1 ? `Move ${finals.length} steps to lane` : "Move step to lane"
+            );
+            if (reason === null) {
+              applyGroupPositionsLocal(oldPositions);
+              return;
+            }
+            applyGroupPositionsLocal(newPositions, reason);
+            record({
+              description,
+              do: () => applyGroupPositionsLocal(newPositions, `Redo of ${description}`),
+              undo: () => applyGroupPositionsLocal(oldPositions, `Undo of ${description}`),
+            });
+          })();
+        } else {
+          // Cosmetic move: persist position only, no prompt, no reason.
+          for (const f of finals) {
+            markNode(f.id, {
+              x: f.x,
+              relative_y: f.relativeY,
+              lane_id: f.laneId ?? undefined,
+            });
+          }
+          if (moved) {
+            record({
+              description,
+              do: () => applyGroupPositionsLocal(newPositions),
+              undo: () => applyGroupPositionsLocal(oldPositions),
+            });
+          }
         }
         // A plain click (no drag) on a member of a multi-selection collapses the
         // selection to just that node; a real group drag leaves the group selected.
@@ -1317,7 +1679,12 @@ function BpmnCanvas({
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
-  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal, clearSelection, setSelection, selectOnly]);
+  // applyGroupPositionsLocal is intentionally omitted: it's declared later in
+  // the component (referencing it here would hit the TDZ) and its identity
+  // tracks markNode, which is already a dependency, so the effect re-subscribes
+  // exactly when it would change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal, promptReason, clearSelection, setSelection, selectOnly]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
   const onCanvasDragOver = (e: ReactDragEvent<SVGSVGElement>) => {
@@ -1409,8 +1776,19 @@ function BpmnCanvas({
   // Low-level mutator used by undo/redo callbacks for node moves. Bypasses
   // record() so undo replay does not pollute the history stack.
   const applyGroupPositionsLocal = useCallback(
-    (positions: Array<{ id: UUID; x: number; relativeY: number; laneId: UUID | null }>) => {
+    (
+      positions: Array<{ id: UUID; x: number; relativeY: number; laneId: UUID | null }>,
+      // Provided only when a position change also re-lanes a node (semantic);
+      // pure repositioning leaves it undefined so the cosmetic patch carries
+      // no reason.
+      reason?: string
+    ) => {
       const byId = new Map(positions.map((p) => [p.id, p]));
+      // Snapshot current lanes so we can decide, per node, whether this apply
+      // actually changes the lane (semantic → attach reason) or is a pure move.
+      const prevLaneById = new Map(
+        nodesRef.current.map((n) => [n.id, n.laneId])
+      );
       setNodes((curr) =>
         curr.map((n) => {
           const p = byId.get(n.id);
@@ -1418,14 +1796,20 @@ function BpmnCanvas({
         })
       );
       for (const p of positions) {
-        markNode(p.id, { x: p.x, relative_y: p.relativeY, lane_id: p.laneId ?? undefined });
+        const laneChanged = reason !== undefined && prevLaneById.get(p.id) !== p.laneId;
+        markNode(p.id, {
+          x: p.x,
+          relative_y: p.relativeY,
+          lane_id: p.laneId ?? undefined,
+          ...(laneChanged ? { reason } : {}),
+        });
       }
     },
     [markNode]
   );
 
   const moveSelectionToLaneImpl = useCallback(
-    (laneId: UUID) => {
+    async (laneId: UUID) => {
       const ids = [...selectedIdsRef.current].filter((id) =>
         nodesRef.current.some((n) => n.id === id)
       );
@@ -1434,15 +1818,22 @@ function BpmnCanvas({
         const n = nodesRef.current.find((nn) => nn.id === id)!;
         return { id, x: n.x, relativeY: n.relativeY, laneId: n.laneId };
       });
+      // No-op if every selected node already lives in the target lane.
+      if (oldPositions.every((p) => p.laneId === laneId)) return;
+      const reason = await promptReason(
+        ids.length > 1 ? `Move ${ids.length} steps to lane` : "Move step to lane"
+      );
+      if (reason === null) return;
       const newPositions = oldPositions.map((p) => ({ ...p, relativeY: 0, laneId }));
-      applyGroupPositionsLocal(newPositions);
+      applyGroupPositionsLocal(newPositions, reason);
+      const description = `Move ${ids.length} to lane`;
       record({
-        description: `Move ${ids.length} to lane`,
-        do: () => applyGroupPositionsLocal(newPositions),
-        undo: () => applyGroupPositionsLocal(oldPositions),
+        description,
+        do: () => applyGroupPositionsLocal(newPositions, `Redo of ${description}`),
+        undo: () => applyGroupPositionsLocal(oldPositions, `Undo of ${description}`),
       });
     },
-    [applyGroupPositionsLocal, record]
+    [applyGroupPositionsLocal, record, promptReason]
   );
 
   const copySelectionImpl = useCallback(() => {
@@ -1496,9 +1887,11 @@ function BpmnCanvas({
         else focusNodeInViewport(refTarget.id);
         flash(refTarget.id);
       },
+      clearChildModelId,
       deleteSelection: deleteSelectionImpl,
       copySelection: copySelectionImpl,
       moveSelectionToLane: moveSelectionToLaneImpl,
+      applySuggestionBatch,
     }),
     [
       deleteNodeImpl,
@@ -1508,9 +1901,11 @@ function BpmnCanvas({
       focusEdgeInViewport,
       flash,
       clearSelection,
+      clearChildModelId,
       deleteSelectionImpl,
       copySelectionImpl,
       moveSelectionToLaneImpl,
+      applySuggestionBatch,
     ]
   );
 
@@ -1689,15 +2084,6 @@ function BpmnCanvas({
     [clipboard, pasteClipboardImpl, fitToWorld]
   );
 
-  const recomputeY = (ls: CanvasLane[]): CanvasLane[] => {
-    let y = 0;
-    return ls.map((l) => {
-      const out = { ...l, y };
-      y += l.h;
-      return out;
-    });
-  };
-
   const moveLaneLocal = useCallback(
     (laneId: string, targetIdx: number) => {
       const curr = lanesRef.current;
@@ -1781,28 +2167,31 @@ function BpmnCanvas({
   );
 
   const renameLaneLocal = useCallback(
-    (laneId: string, newName: string) => {
+    (laneId: string, newName: string, reason: string) => {
       setLanes((curr) =>
         curr.map((l) => (l.id === laneId ? { ...l, label: newName } : l))
       );
-      markLane(laneId, { name: newName });
+      markLane(laneId, { name: newName, reason });
     },
     [markLane]
   );
 
   const renameLane = useCallback(
-    (laneId: string, newName: string) => {
+    async (laneId: string, newName: string) => {
       const old = lanesRef.current.find((l) => l.id === laneId);
       if (!old || old.label === newName) return;
       const oldName = old.label;
-      renameLaneLocal(laneId, newName);
+      const reason = await promptReason("Rename lane");
+      if (reason === null) return;
+      renameLaneLocal(laneId, newName, reason);
+      const description = "Rename lane";
       record({
-        description: "Rename lane",
-        do: () => renameLaneLocal(laneId, newName),
-        undo: () => renameLaneLocal(laneId, oldName),
+        description,
+        do: () => renameLaneLocal(laneId, newName, `Redo of ${description}`),
+        undo: () => renameLaneLocal(laneId, oldName, `Undo of ${description}`),
       });
     },
-    [renameLaneLocal, record]
+    [renameLaneLocal, record, promptReason]
   );
 
   const setLaneColorLocal = useCallback(
@@ -2032,6 +2421,10 @@ function BpmnCanvas({
               onMouseDown={onNodeMouseDown}
               onContextMenu={openNodeMenu}
               onStartConnect={onStartConnect}
+              onDoubleClick={(id) => {
+                const n = nodesRef.current.find((x) => x.id === id);
+                if (n?.childModelId) onDrillIntoNode?.(n.childModelId);
+              }}
             />
           ))}
           {flashId && (() => {
@@ -2195,6 +2588,8 @@ function BpmnCanvas({
           onClose={() => setContextMenu(null)}
         />
       )}
+
+      <ReasonPromptDialog {...reasonPrompt} />
     </div>
   );
 });

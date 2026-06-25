@@ -19,6 +19,7 @@ class AiEditAction(StrEnum):
     DESCRIBE = "describe"
     VALIDATE = "validate"
     SUGGEST_NEXT = "suggest_next"
+    DECOMPOSE = "decompose"
 
 
 class AiEditRequest(BaseModel):
@@ -62,6 +63,22 @@ class SuggestNextProposal(BaseModel):
     steps: list[SuggestedStep] = Field(default_factory=list)
 
 
+class SubStep(BaseModel):
+    """One sub-step of a decomposed parent step. In a propose response,
+    `cited_claim_ids` are the surviving (node+neighbor-scoped) claim UUIDs; in
+    an apply request they are the user-accepted ids."""
+    proposed_name: str = Field(min_length=1, max_length=500)
+    proposed_type: str = Field(pattern=_NODE_TYPE_PATTERN)
+    role: str = Field(min_length=1, max_length=300)
+    edge_label: str | None = Field(default=None, max_length=300)
+    rationale: str = Field(default="", max_length=2000)
+    cited_claim_ids: list[UUID] = Field(default_factory=list)
+
+
+class DecomposeProposal(BaseModel):
+    sub_steps: list[SubStep] = Field(default_factory=list)
+
+
 class AiEditResponse(BaseModel):
     """Exactly one of the action fields is populated, matching the request."""
     action: AiEditAction
@@ -69,6 +86,7 @@ class AiEditResponse(BaseModel):
     describe: DescribeProposal | None = None
     validate_: ValidateProposal | None = Field(default=None, alias="validate")
     suggest_next: SuggestNextProposal | None = None
+    decompose: DecomposeProposal | None = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -84,3 +102,21 @@ class AiProposedStepRequest(BaseModel):
     relative_y: float
     edge_label: str | None = Field(default=None, max_length=300)
     cited_claim_ids: list[UUID] = Field(default_factory=list)
+
+
+class DecomposeRequest(BaseModel):
+    """Apply a decompose proposal: create/append a child version from these
+    accepted sub-steps."""
+    sub_steps: list[SubStep] = Field(min_length=1)
+
+
+class DecomposeResult(BaseModel):
+    child_model_id: UUID
+    child_version_id: UUID
+
+
+class AncestryCrumb(BaseModel):
+    model_id: UUID
+    version_id: UUID | None
+    level: str
+    label: str

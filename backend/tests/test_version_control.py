@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app.factory import create_app
 from app.db.session import get_db
 from app.enums import ReviewTargetType
+from app.models.change_event import ChangeEvent
 from app.models.identity import Organization, User
 from app.models.process import (
     NodeClaimLink,
@@ -318,3 +319,46 @@ def test_diff_identical_copy_of_unstamped_version_has_no_changes(client, db):
     assert d["edges"]["removed"] == []
     assert d["lanes"]["added"] == []
     assert d["lanes"]["removed"] == []
+
+
+def test_copy_version_logs_exactly_one_version_level_event(client, db):
+    """copy_version must write exactly one version-level change_event (kind=branch,
+    source=manual) and zero per-node create events for the cloned nodes."""
+    proj, model, version, lanes, nodes = _seed(db)
+
+    before_count = len(db.execute(select(ChangeEvent)).scalars().all())
+
+    r = client.post(_copy_url(proj, model, version), json={"note": "Branch test"})
+    assert r.status_code == 200, r.text
+    new_id = r.json()["id"]
+
+    all_events_after = db.execute(select(ChangeEvent)).scalars().all()
+    after_count = len(all_events_after)
+
+    # Exactly one new event was written by copy_version.
+    assert after_count == before_count + 1, (
+        f"Expected exactly 1 new change_event, got {after_count - before_count}"
+    )
+
+    # That one event is a version-level branch event targeting the new version.
+    new_events = [e for e in all_events_after if str(e.target_id) == new_id]
+    assert len(new_events) == 1
+    ev = new_events[0]
+    assert ev.target_type == "version"
+    assert ev.kind == "branch"
+    assert ev.source == "manual"
+    assert str(ev.version_id) == new_id
+
+    # No per-node create events for the cloned nodes.
+    new_version_node_ids = {
+        str(n.id) for n in db.execute(
+            select(ProcessNode).where(ProcessNode.version_id == new_id)
+        ).scalars().all()
+    }
+    node_events_for_cloned = [
+        e for e in all_events_after
+        if e.target_type == "node" and str(e.target_id) in new_version_node_ids
+    ]
+    assert len(node_events_for_cloned) == 0, (
+        f"Expected 0 node create events for cloned nodes, got {len(node_events_for_cloned)}"
+    )

@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.enums import NodeType
+from app.enums import ClaimLinkKind, NodeType
 
 _NODE_TYPE_PATTERN = rf"^({'|'.join(t.value for t in NodeType)})$"
 
@@ -15,7 +15,7 @@ class ProcessMapGenerateRequest(BaseModel):
     focus: str | None = Field(default=None, max_length=300)
     map_type: str | None = Field(default=None, pattern=r"^(current_state|future_state)?$")
     scope_input_ids: list[UUID] | None = None
-    segment_id: UUID | None = None
+    process_id: UUID | None = None
 
 
 class ProcessMapGenerateResult(BaseModel):
@@ -28,6 +28,10 @@ class ProcessMapGenerateResult(BaseModel):
     edge_count: int
     node_link_count: int
     bpmn_xml_size: int
+
+
+class ProcessMapAttachRequest(BaseModel):
+    process_id: UUID | None = None  # null detaches
 
 
 class ProcessLaneRead(BaseModel):
@@ -53,6 +57,7 @@ class LaneUpdate(BaseModel):
     height_px: int | None = Field(default=None, ge=80)
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     collapsed: bool | None = None
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class NodeUpdate(BaseModel):
@@ -65,6 +70,7 @@ class NodeUpdate(BaseModel):
         pattern=_NODE_TYPE_PATTERN,
     )
     description: str | None = Field(default=None, max_length=5000)
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class NodeCreate(BaseModel):
@@ -94,6 +100,7 @@ class EdgeUpdate(BaseModel):
     label: str | None = Field(default=None, max_length=300)
     bend_x: float | None = None
     bend_y: float | None = None
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class CitationDetail(BaseModel):
@@ -153,6 +160,7 @@ class NodeIssueDetail(BaseModel):
 
     conflict_id: UUID
     kind: str
+    detection_reason: str | None
     resolution_status: str
     detected_by: str
     resolution_notes: str | None
@@ -244,6 +252,9 @@ class ProcessModelRead(BaseModel):
     latest_version_number: int | None = None
     latest_source_segment_id: UUID | None = None
     latest_source_run_status: str | None = None
+    process_id: UUID | None = None
+    process_name: str | None = None
+    unreconciled_claim_count: int = 0
 
 
 class ConsistencyFinding(BaseModel):
@@ -254,3 +265,34 @@ class ConsistencyFinding(BaseModel):
     summary: str
     node_ids: list[UUID] = Field(default_factory=list)
     lane_ids: list[UUID] = Field(default_factory=list)
+
+
+class NodeClaimLinkRequest(BaseModel):
+    """Body for POST /nodes/{id}/claims — attach a batch of claims as evidence."""
+
+    claim_ids: list[UUID] = Field(min_length=1)
+    link_kind: str = Field(default=ClaimLinkKind.EVIDENCE.value, max_length=20)
+
+
+class NodeClaimLinkResult(BaseModel):
+    node_id: UUID
+    linked_claim_ids: list[UUID]
+    added_count: int
+    already_linked_count: int
+
+
+class BlankMapRequest(BaseModel):
+    """Body for POST /process-maps — create an empty editable map."""
+
+    name: str = Field(min_length=1, max_length=300)
+    level: str = Field(pattern=r"^(1|2|3|4|L1|L2|L3|L4)$")
+
+
+class BlankMapResult(BaseModel):
+    model_id: UUID
+    version_id: UUID
+    name: str
+    level: str
+    lane_id: UUID
+    start_node_id: UUID
+    end_node_id: UUID

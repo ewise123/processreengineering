@@ -11,14 +11,15 @@ from app.models.process import (
     ProcessNode,
     ProcessVersion,
 )
-from app.models.process_detection import (
-    ClaimSegmentMembership,
-    DetectionRun,
-    ProcessSegment,
+from app.models.process_inventory import (
+    Process,
+    ProcessClaimLink,
+    ProcessSuggestion,
 )
 from app.models.analysis import Analysis, Output
 from app.models.workflow import Review, ReviewComment
-from app.models.audit import AiInteraction, AuditEvent, GenerationJob
+from app.models.audit import GenerationJob
+from app.models.change_event import ChangeEvent
 
 __all__ = [
     "Organization",
@@ -39,14 +40,13 @@ __all__ = [
     "ProcessEdge",
     "NodeClaimLink",
     "EdgeClaimLink",
-    "DetectionRun",
-    "ProcessSegment",
-    "ClaimSegmentMembership",
+    "Process",
+    "ProcessClaimLink",
+    "ProcessSuggestion",
     "Analysis",
     "Output",
     "Review",
     "ReviewComment",
-    "AuditEvent",
-    "AiInteraction",
     "GenerationJob",
+    "ChangeEvent",
 ]

@@ -24,8 +24,12 @@ import type { SelectedObject } from "@/components/canvas/chat-context";
 import { buildCanvasState } from "@/components/canvas/layout";
 import { reviewByNodeMap } from "@/components/canvas/review-summary";
 import type { SaveStatus } from "@/components/canvas/use-persistence";
+import { toast } from "sonner";
+import { LevelBreadcrumb } from "@/components/canvas/level-breadcrumb";
+import { buildBreadcrumb } from "@/components/canvas/decompose-nav";
 import { api } from "@/lib/api";
-import type { IssueSeverity, NodeReviewUpdate, ReviewDecision, UUID, ViewerTarget } from "@/lib/types";
+import type { IssueSeverity, NodeReviewUpdate, ReviewDecision, SubStep, UUID, ViewerTarget } from "@/lib/types";
+import type { BundlePlan } from "@/components/canvas/suggestion-apply";
 
 // react-pdf / pdfjs reference browser-only globals at module eval, which crash
 // server-side rendering. Load the viewer client-only so the page route never
@@ -133,6 +137,69 @@ export default function CanvasPage() {
     []
   );
 
+  const handleDrillIntoNode = useCallback(
+    async (childModelId: UUID) => {
+      try {
+        const child = await api.getProcessMap(params.id, childModelId);
+        if (child.latest_version_id) {
+          router.push(`/projects/${params.id}/maps/${childModelId}/versions/${child.latest_version_id}`);
+        } else {
+          toast.error("That sub-process has no version to open.");
+        }
+      } catch {
+        toast.error("Couldn't open the sub-process.");
+      }
+    },
+    [router, params.id]
+  );
+
+  const handleDecompose = useCallback(
+    async (sourceId: UUID, subSteps: SubStep[]) => {
+      try {
+        const res = await api.applyDecompose(params.id, params.modelId, params.versionId, sourceId, {
+          sub_steps: subSteps,
+        });
+        toast.success("Sub-process created.");
+        queryClient.invalidateQueries({
+          queryKey: ["graph", params.id, params.modelId, params.versionId],
+        });
+        router.push(`/projects/${params.id}/maps/${res.child_model_id}/versions/${res.child_version_id}`);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Decompose failed.");
+      }
+    },
+    [router, queryClient, params.id, params.modelId, params.versionId]
+  );
+
+  const handleRemoveChild = useCallback(
+    async (sourceId: UUID) => {
+      try {
+        await api.removeSubProcess(params.id, params.modelId, params.versionId, sourceId);
+        toast.success("Sub-process removed.");
+        canvasRef.current?.clearChildModelId(sourceId);
+        queryClient.invalidateQueries({
+          queryKey: ["graph", params.id, params.modelId, params.versionId],
+        });
+        setSelected({ kind: "none" });
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Couldn't remove the sub-process.");
+      }
+    },
+    [queryClient, params.id, params.modelId, params.versionId]
+  );
+
+  const handleApplySuggestions = useCallback(
+    async (plan: BundlePlan) => {
+      if (!canvasRef.current) return { ok: false, error: "Canvas not ready." } as const;
+      const res = await canvasRef.current.applySuggestionBatch(plan);
+      if (res.ok) {
+        queryClient.invalidateQueries({ queryKey: ["graph", params.id, params.modelId, params.versionId] });
+      }
+      return res;
+    },
+    [queryClient, params.id, params.modelId, params.versionId]
+  );
+
   const handleNodeDeleted = useCallback(
     (_id: UUID) => {
       setSelected({ kind: "none" });
@@ -185,6 +252,21 @@ export default function CanvasPage() {
     queryFn: () => api.getReviewState(params.id, params.modelId, params.versionId),
     enabled: !!data,
   });
+
+  const { data: mapModel } = useQuery({
+    queryKey: ["map-model", params.id, params.modelId],
+    queryFn: () => api.getProcessMap(params.id, params.modelId),
+  });
+
+  const { data: ancestry } = useQuery({
+    queryKey: ["ancestry", params.id, params.modelId],
+    queryFn: () => api.getMapAncestry(params.id, params.modelId),
+  });
+
+  const breadcrumb = useMemo(
+    () => (ancestry ? buildBreadcrumb(ancestry, params.id) : []),
+    [ancestry, params.id]
+  );
 
   const reviewByNode = useMemo<Record<string, ReviewDecision>>(
     () => reviewByNodeMap(reviewState?.nodes ?? []),
@@ -283,6 +365,7 @@ export default function CanvasPage() {
               <Badge variant="secondary">{data.version.status}</Badge>
             </div>
           )}
+          {breadcrumb.length > 0 && <LevelBreadcrumb items={breadcrumb} />}
         </div>
         <div
           style={{
@@ -348,6 +431,7 @@ export default function CanvasPage() {
           onNodeDeleted={handleNodeDeleted}
           onCountsChange={handleCountsChange}
           onOpenProperties={() => setPropertiesCollapsed(false)}
+          onDrillIntoNode={handleDrillIntoNode}
         />
       )}
 
@@ -374,6 +458,7 @@ export default function CanvasPage() {
             projectId={params.id}
             modelId={params.modelId}
             versionId={params.versionId}
+            level={mapModel?.level ?? null}
             selected={selectedNode}
             lanes={data.lanes}
             collapsed={propertiesCollapsed}
@@ -385,6 +470,9 @@ export default function CanvasPage() {
               setViewerTarget(target);
               setViewerExpanded(true);
             }}
+            onDecompose={handleDecompose}
+            onOpenChild={handleDrillIntoNode}
+            onRemoveChild={handleRemoveChild}
             review={
               selectedNode
                 ? {
@@ -464,6 +552,8 @@ export default function CanvasPage() {
             }}
             collapsed={rightCollapsed}
             onCollapsedChange={setRightCollapsed}
+            onApplySuggestions={handleApplySuggestions}
+            graph={data}
           />
         </div>
       )}

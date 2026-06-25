@@ -20,6 +20,9 @@ class Claim(IdMixin, TimestampMixin, Base):
         index=True,
     )
     kind: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="extracted", server_default="extracted"
+    )
     subject: Mapped[str] = mapped_column(Text, nullable=False)
     normalized: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -70,3 +73,4 @@ class ClaimConflict(IdMixin, TimestampMixin, Base):
         String(20), nullable=False, default=ConflictStatus.DETECTED.value
     )
     resolution_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

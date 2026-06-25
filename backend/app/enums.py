@@ -108,6 +108,7 @@ class ClaimLinkKind(StrEnum):
     PARTIAL = "partial"
     INFERRED = "inferred"
     AI_PROPOSED = "ai_proposed"
+    EVIDENCE = "evidence"
 
 
 class ConflictKind(StrEnum):
@@ -182,8 +183,71 @@ class JobStatus(StrEnum):
     FAILED = "failed"
 
 
-class DetectionRunStatus(StrEnum):
-    DRAFT = "draft"
-    ACCEPTED = "accepted"
+class ProcessStatus(StrEnum):
+    ACTIVE = "active"
     ARCHIVED = "archived"
-    SUPERSEDED = "superseded"
+
+
+class AssignedBy(StrEnum):
+    USER = "user"
+    AI_ACCEPTED = "ai_accepted"
+    INHERITED = "inherited"
+
+
+class SuggestionKind(StrEnum):
+    PROCESS_DISCOVERY = "process_discovery"
+    MAP_RECONCILE = "map_reconcile"
+
+
+class SuggestionStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
+class SuggestionOutcome(StrEnum):
+    """Resolution detail for an accepted suggestion. APPLIED is the normal
+    path; TARGET_GONE is the graceful no-op when the suggestion's target
+    process/claim was deleted before accept."""
+
+    APPLIED = "applied"
+    TARGET_GONE = "target_gone"
+
+
+class ChangeTargetType(StrEnum):
+    NODE = "node"
+    EDGE = "edge"
+    LANE = "lane"
+    VERSION = "version"
+
+
+class ChangeActorKind(StrEnum):
+    USER = "user"
+    AI = "ai"
+    SYSTEM = "system"
+
+
+class ChangeKind(StrEnum):
+    CREATE = "create"
+    RELABEL = "relabel"
+    DESCRIBE = "describe"
+    RETYPE = "retype"
+    RELANE = "relane"
+    LINK_CLAIM = "link_claim"
+    UNLINK_CLAIM = "unlink_claim"
+    CONNECT = "connect"
+    RECONNECT = "reconnect"
+    DELETE = "delete"
+    BRANCH = "branch"
+    RESTORE = "restore"
+    FLAG_STALE = "flag_stale"
+    RECITE = "recite"
+
+
+class ChangeSource(StrEnum):
+    GENERATION = "generation"
+    MANUAL = "manual"
+    CHAT = "chat"
+    RECONCILE = "reconcile"
+    IMPORT = "import"
+    MIGRATION = "migration"

@@ -25,19 +25,6 @@ export function targetPageFromRef(
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-/** Escape a string for safe insertion as HTML text. react-pdf's
- *  customTextRenderer return value is injected via innerHTML, so any PDF-derived
- *  text must be escaped to avoid XSS from a malicious document. We only ever wrap
- *  matches in a fixed <mark>, so escaping (not full sanitization) is sufficient. */
-export function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
 const WORD_CHAR = /[a-z0-9]/;
 
 /** True when a text-layer item is part of the quote, matched on WORD
