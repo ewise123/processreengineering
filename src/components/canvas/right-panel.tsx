@@ -36,6 +36,7 @@ import { api } from "@/lib/api";
 import type {
   InputRow,
   NodeIssue,
+  ProcessGraph,
   ReviewState,
   UUID,
   ViewerTarget,
@@ -45,6 +46,7 @@ import { diffChangeCount, isEmptyDiff } from "./version-diff";
 import { bucketNodes, reviewByNodeMap } from "./review-summary";
 import { type SelectedObject } from "./chat-context";
 import { ChatTab } from "./chat-tab";
+import type { BundlePlan, BatchResult } from "./suggestion-apply";
 
 type TabId = "chat" | "versions" | "issues" | "review" | "sources";
 
@@ -99,8 +101,8 @@ export function RightPanel({
   collapsed: boolean;
   onCollapsedChange: (next: boolean) => void;
   initialTab?: TabId;
-  onApplySuggestions: (plan: import("./suggestion-apply").BundlePlan) => Promise<import("./suggestion-apply").BatchResult>;
-  graph: import("@/lib/types").ProcessGraph;
+  onApplySuggestions: (plan: BundlePlan) => Promise<BatchResult>;
+  graph: ProcessGraph;
 }) {
   const [tab, setTab] = useState<TabId>(initialTab);
 

@@ -239,7 +239,16 @@ export function ChatTab({
 
   const undoBundle = async (bundleId: string) => {
     const fn = undoHandles.current.get(bundleId);
-    if (fn) await fn();
+    if (!fn) return;
+    try {
+      await fn();
+    } catch (err) {
+      // A failed undo means the canvas is still in the applied state — keep the
+      // card "applied" and retain the handle so Undo can be retried. Do NOT
+      // blanket-reset to "pending".
+      console.error("Failed to undo applied suggestion", err);
+      return;
+    }
     undoHandles.current.delete(bundleId);
     // Reflect revert in whichever message owns this bundle.
     setHistory((curr) => {

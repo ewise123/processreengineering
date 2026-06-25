@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, RotateCcw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { ChatSuggestion, ObjectRef, UUID } from "@/lib/types";
 import type { Bundle } from "./suggestion-apply";
@@ -21,7 +21,7 @@ export function SuggestionList({
   bundles: Bundle[];
   statusById: Record<string, CardStatus>;
   canUndoById: Record<string, boolean>;
-  onApply: (bundle: Bundle) => void;
+  onApply: (bundle: Bundle) => void | Promise<void>;
   onUndo: (bundleId: string) => void;
   onDismiss: (bundleId: string) => void;
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
@@ -39,7 +39,11 @@ export function SuggestionList({
         {pending.length > 1 && (
           <button
             type="button"
-            onClick={() => pending.forEach((b) => onApply(b))}
+            onClick={async () => {
+              // Sequential, not concurrent: each apply runs canvas mutations +
+              // API calls that must not interleave with the next bundle's.
+              for (const b of pending) await onApply(b);
+            }}
             className="rounded-full border border-violet-200 px-2 py-0.5 text-[10px] font-semibold text-violet-700 hover:bg-violet-50"
           >
             Apply all
@@ -76,7 +80,7 @@ function SuggestionCard({
   bundle: Bundle;
   status: CardStatus;
   canUndo: boolean;
-  onApply: () => void;
+  onApply: () => void | Promise<void>;
   onUndo: () => void;
   onDismiss: () => void;
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
@@ -86,6 +90,19 @@ function SuggestionCard({
   const isDelete = !bundle.undoable;
   const head = bundle.suggestions[0];
   const extra = bundle.suggestions.length - 1;
+
+  // Synchronous double-click guard: `applyBundle` is async and only commits
+  // "applying" after a render, so a second click before that commit would
+  // re-fire the apply (clobbering the undo handle). This ref flips
+  // synchronously on the first click and clears once the apply settles.
+  const applyingRef = useRef(false);
+  const runApply = () => {
+    if (applyingRef.current || status === "applying") return;
+    applyingRef.current = true;
+    Promise.resolve(onApply()).finally(() => {
+      applyingRef.current = false;
+    });
+  };
 
   useEffect(() => {
     if (status !== "pending") setConfirming(false);
@@ -134,7 +151,11 @@ function SuggestionCard({
       ) : confirming ? (
         <div className="mt-2 flex items-center gap-1.5">
           <span className="text-[10px] text-rose-700">Can&apos;t be undone.</span>
-          <button type="button" onClick={onApply} className="rounded bg-rose-600 px-2 py-1 text-[10px] font-semibold text-white">
+          <button
+            type="button"
+            onClick={runApply}
+            className="rounded bg-rose-600 px-2 py-1 text-[10px] font-semibold text-white disabled:opacity-50"
+          >
             Apply anyway
           </button>
           <button type="button" onClick={() => setConfirming(false)} className="rounded border border-slate-300 px-2 py-1 text-[10px] text-slate-600">
@@ -145,8 +166,8 @@ function SuggestionCard({
         <div className="mt-2 flex gap-1.5">
           <button
             type="button"
-            onClick={() => (isDelete ? setConfirming(true) : onApply())}
-            className="rounded bg-slate-800 px-2 py-1 text-[10px] font-semibold text-white hover:bg-slate-700"
+            onClick={() => (isDelete ? setConfirming(true) : runApply())}
+            className="rounded bg-slate-800 px-2 py-1 text-[10px] font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
           >
             Apply
           </button>
