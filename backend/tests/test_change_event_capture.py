@@ -199,6 +199,43 @@ def test_create_edge_logs_one_connect_event(db):
     assert ev.after["target_node_id"] == str(n2.id)
 
 
+def test_create_rework_edge_persists_sides_and_logs_rework(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    from app.models.process import ProcessNode
+    n2 = ProcessNode(version_id=version.id, lane_id=n1.lane_id, type="task",
+                     name="Earlier Step", position={}, properties={})
+    db.add(n2)
+    db.flush()
+    db.commit()
+
+    # Backtrack: drag from the later step (n1) back to the earlier one (n2),
+    # both anchored on their bottom faces.
+    new_edge = pm_api.create_edge(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=EdgeCreate(
+            source_node_id=n1.id,
+            target_node_id=n2.id,
+            source_side="bottom",
+            target_side="bottom",
+            edge_kind="rework",
+        ),
+        db=db,
+    )
+    assert new_edge.source_side == "bottom"
+    assert new_edge.target_side == "bottom"
+    assert new_edge.edge_kind == "rework"
+
+    events = _events_for(db, new_edge.id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind == "connect"
+    assert ev.source == "manual"
+    assert ev.reason == "Added rework connection"
+    assert ev.after["edge_kind"] == "rework"
+
+
 def test_add_lane_logs_one_create_event(db):
     project, version, n1, claim = _seed_version_for_endpoint(db)
     new_lane = pm_api.add_lane(

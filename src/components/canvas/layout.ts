@@ -141,6 +141,9 @@ export function buildCanvasState(graph: ProcessGraph): {
     label: e.label,
     bendX: e.bend_x ?? null,
     bendY: e.bend_y ?? null,
+    sourceSide: e.source_side ?? null,
+    targetSide: e.target_side ?? null,
+    kind: e.edge_kind === "rework" ? "rework" : "flow",
   }));
 
   return { nodes, edges, lanes };

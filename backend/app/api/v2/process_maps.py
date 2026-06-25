@@ -19,6 +19,7 @@ from app.enums import (
     ChangeTargetType,
     ClaimLinkKind,
     ConflictStatus,
+    EdgeKind,
     NodeType,
     ProcessVersionStatus,
     ReviewTargetType,
@@ -1027,11 +1028,15 @@ def create_edge(
             status_code=409, detail="Edge already exists between these nodes"
         )
 
+    is_rework = payload.edge_kind == EdgeKind.REWORK.value
     edge = ProcessEdge(
         version_id=version.id,
         source_node_id=payload.source_node_id,
         target_node_id=payload.target_node_id,
         label=payload.label,
+        source_side=payload.source_side,
+        target_side=payload.target_side,
+        edge_kind=payload.edge_kind,
     )
     db.add(edge)
     db.flush()
@@ -1042,9 +1047,10 @@ def create_edge(
         model_id=version.model_id,
         version_id=version.id,
         kind=ChangeKind.CONNECT.value,
-        reason="Connected two nodes",
+        reason="Added rework connection" if is_rework else "Connected two nodes",
         after={"source_node_id": str(edge.source_node_id),
-               "target_node_id": str(edge.target_node_id)},
+               "target_node_id": str(edge.target_node_id),
+               "edge_kind": edge.edge_kind},
         source=ChangeSource.MANUAL.value,
     )
     db.commit()
@@ -1071,6 +1077,10 @@ def update_edge(
         edge.bend_x = payload.bend_x
     if "bend_y" in payload.model_fields_set:
         edge.bend_y = payload.bend_y
+    if "source_side" in payload.model_fields_set:
+        edge.source_side = payload.source_side
+    if "target_side" in payload.model_fields_set:
+        edge.target_side = payload.target_side
 
     label_changed = "label" in payload.model_fields_set and (payload.label or None) != old_label
     if label_changed:

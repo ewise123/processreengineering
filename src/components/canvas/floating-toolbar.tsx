@@ -1,11 +1,11 @@
 "use client";
 
-import { Hand } from "lucide-react";
+import { Hand, Undo2 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type { Viewport } from "./types";
 
-export type CanvasTool = "select" | "pan" | "connect";
+export type CanvasTool = "select" | "pan" | "connect" | "rework";
 
 export function FloatingToolbar({
   tool,
@@ -88,6 +88,13 @@ export function FloatingToolbar({
             <path d="M8 12h8M13 8l4 4-4 4" />
             <circle cx="5" cy="12" r="2" />
           </svg>
+        </ToolButton>
+        <ToolButton
+          active={tool === "rework"}
+          onClick={() => onToolChange("rework")}
+          title="Rework / backtrack arrow (R) — drag a top/bottom handle onto an earlier step's top/bottom handle"
+        >
+          <Undo2 size={14} />
         </ToolButton>
       </Group>
 

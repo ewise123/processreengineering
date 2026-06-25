@@ -86,6 +86,9 @@ type Drag =
       // Live cursor position in world coords for the temp line.
       currX: number;
       currY: number;
+      // True when started from the Rework tool: the drop pins source/target
+      // faces and creates a distinct backtrack edge instead of an auto-routed one.
+      rework?: boolean;
     }
   | {
       type: "edgeBend";
@@ -122,6 +125,10 @@ function buildPreviewToCursor(
   const midY = (start.y + cy) / 2;
   return `M ${start.x} ${start.y} L ${start.x} ${midY} L ${cx} ${midY} L ${cx} ${cy}`;
 }
+
+/** In Rework mode only the top/bottom faces anchor a backtrack loop, so we
+ * hide the left/right handles. Module-level for a stable prop reference. */
+const REWORK_HANDLE_SIDES: ConnectSide[] = ["top", "bottom"];
 
 function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
   if (lanes.length === 0) return undefined;
@@ -635,12 +642,23 @@ function BpmnCanvas({
   );
 
   const createEdgeImpl = useCallback(
-    async (sourceId: UUID, targetId: UUID) => {
+    async (
+      sourceId: UUID,
+      targetId: UUID,
+      opts?: {
+        sourceSide?: "top" | "bottom";
+        targetSide?: "top" | "bottom";
+        kind?: "rework";
+      }
+    ) => {
       let currentId: UUID;
       const create = async () => {
         const created = await api.createEdge(projectId, modelId, versionId, {
           source_node_id: sourceId,
           target_node_id: targetId,
+          ...(opts?.sourceSide ? { source_side: opts.sourceSide } : {}),
+          ...(opts?.targetSide ? { target_side: opts.targetSide } : {}),
+          ...(opts?.kind ? { edge_kind: opts.kind } : {}),
         });
         currentId = created.id;
         setEdges((curr) => [
@@ -650,12 +668,15 @@ function BpmnCanvas({
             from: sourceId,
             to: targetId,
             label: created.label ?? null,
+            sourceSide: created.source_side ?? opts?.sourceSide ?? null,
+            targetSide: created.target_side ?? opts?.targetSide ?? null,
+            kind: created.edge_kind === "rework" ? "rework" : "flow",
           },
         ]);
       };
       await create();
       record({
-        description: "Create edge",
+        description: opts?.kind === "rework" ? "Create rework edge" : "Create edge",
         do: create,
         undo: async () => {
           await api.deleteEdge(projectId, currentId);
@@ -1039,6 +1060,7 @@ function BpmnCanvas({
         if (e.key === "v" || e.key === "V") { setTool("select"); return; }
         if (e.key === "h" || e.key === "H") { setTool("pan"); return; }
         if (e.key === "c" || e.key === "C") { setTool("connect"); return; }
+        if (e.key === "r" || e.key === "R") { setTool("rework"); return; }
         if (e.key === "Escape") {
           if (contextMenuRef.current) {
             setContextMenu(null);
@@ -1278,22 +1300,34 @@ function BpmnCanvas({
     const stored = nodesRef.current.find((n) => n.id === id);
     if (!resolved || !stored) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
-    if (tool === "connect") {
-      // Body-drag in connect mode picks the source side from where the user
-      // grabbed: closest of top/right/bottom/left to the click point.
+    if (tool === "connect" || tool === "rework") {
+      // Body-drag picks the source side from where the user grabbed. Connect
+      // allows all four faces; Rework is restricted to top/bottom (the only
+      // faces a backtrack loop anchors to).
       const cx = resolved.x + resolved.w / 2;
       const cy = resolved.y + resolved.h / 2;
       const dx = x - cx;
       const dy = y - cy;
       const side: ConnectSide =
-        Math.abs(dx) > Math.abs(dy)
-          ? dx >= 0
-            ? "right"
-            : "left"
-          : dy >= 0
+        tool === "rework"
+          ? dy >= 0
             ? "bottom"
-            : "top";
-      setDrag({ type: "connect", sourceId: id, sourceSide: side, currX: x, currY: y });
+            : "top"
+          : Math.abs(dx) > Math.abs(dy)
+            ? dx >= 0
+              ? "right"
+              : "left"
+            : dy >= 0
+              ? "bottom"
+              : "top";
+      setDrag({
+        type: "connect",
+        sourceId: id,
+        sourceSide: side,
+        currX: x,
+        currY: y,
+        rework: tool === "rework",
+      });
       return;
     }
     const groupIds = isGroupDrag
@@ -1369,9 +1403,16 @@ function BpmnCanvas({
       e.stopPropagation();
       selectOnly(sourceId);
       const { x, y } = toWorld(e.clientX, e.clientY);
-      setDrag({ type: "connect", sourceId, sourceSide: side, currX: x, currY: y });
+      setDrag({
+        type: "connect",
+        sourceId,
+        sourceSide: side,
+        currX: x,
+        currY: y,
+        rework: tool === "rework",
+      });
     },
-    [toWorld, selectOnly]
+    [toWorld, selectOnly, tool]
   );
 
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
@@ -1551,7 +1592,26 @@ function BpmnCanvas({
           const exists = edgesRef.current.some(
             (e2) => e2.from === sourceId && e2.to === targetId
           );
-          if (!exists) {
+          if (!exists && drag.rework) {
+            // Pin the faces: source keeps the handle it left from (coerced to
+            // top/bottom); target enters whichever half the cursor dropped in.
+            const lane = target.laneId
+              ? displayLanesRef.current.find((l) => l.id === target.laneId)
+              : undefined;
+            const ty = lane ? lane.y + target.relativeY : target.relativeY;
+            const targetSide: "top" | "bottom" =
+              y < ty + target.h / 2 ? "top" : "bottom";
+            const sourceSide: "top" | "bottom" =
+              drag.sourceSide === "top" ? "top" : "bottom";
+            void createEdgeImpl(sourceId, targetId, {
+              sourceSide,
+              targetSide,
+              kind: "rework",
+            }).catch((err) => {
+              console.error("Failed to create rework edge", err);
+              toast.error("Couldn't add that backtrack arrow — please try again.");
+            });
+          } else if (!exists) {
             void createEdgeImpl(sourceId, targetId).catch((err) => {
               console.error("Failed to create edge", err);
               toast.error("Couldn't connect those steps — please try again.");
@@ -2317,7 +2377,7 @@ function BpmnCanvas({
               ? "grabbing"
               : tool === "pan"
                 ? "grab"
-                : tool === "connect"
+                : tool === "connect" || tool === "rework"
                   ? "crosshair"
                   : "default",
           userSelect: "none",
@@ -2334,6 +2394,17 @@ function BpmnCanvas({
             orient="auto"
           >
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
+          </marker>
+          <marker
+            id="poet-arrow-rework"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="8"
+            markerHeight="8"
+            orient="auto"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706" />
           </marker>
           <pattern
             id="poet-grid"
@@ -2417,7 +2488,8 @@ function BpmnCanvas({
               selected={selectedIds.has(node.id)}
               issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
               reviewBadge={reviewMode ? reviewMap[node.id] ?? null : null}
-              showHandles={tool === "connect"}
+              showHandles={tool === "connect" || tool === "rework"}
+              handleSides={tool === "rework" ? REWORK_HANDLE_SIDES : undefined}
               onMouseDown={onNodeMouseDown}
               onContextMenu={openNodeMenu}
               onStartConnect={onStartConnect}
@@ -2511,17 +2583,30 @@ function BpmnCanvas({
                   drag.currY >= n.y &&
                   drag.currY <= n.y + n.h
               );
+              // Rework preview pins both faces so the user sees the exact loop
+              // they'll get; target face follows which half the cursor is over.
+              const reworkSides =
+                drag.rework && target
+                  ? {
+                      sourceSide: (drag.sourceSide === "top" ? "top" : "bottom") as
+                        | "top"
+                        | "bottom",
+                      targetSide: (drag.currY < target.y + target.h / 2
+                        ? "top"
+                        : "bottom") as "top" | "bottom",
+                    }
+                  : undefined;
               const d = target
-                ? buildEdgePath(source, target).d
+                ? buildEdgePath(source, target, reworkSides).d
                 : buildPreviewToCursor(source, drag.sourceSide, drag.currX, drag.currY);
               return (
                 <path
                   d={d}
                   fill="none"
-                  stroke="#0f172a"
+                  stroke={drag.rework ? "#d97706" : "#0f172a"}
                   strokeWidth={1.5}
                   strokeDasharray="4 4"
-                  markerEnd="url(#poet-arrow)"
+                  markerEnd={drag.rework ? "url(#poet-arrow-rework)" : "url(#poet-arrow)"}
                   pointerEvents="none"
                 />
               );
