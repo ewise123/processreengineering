@@ -39,6 +39,8 @@ import {
   type ConnectSide,
   type EdgeOrientation,
 } from "./shapes";
+import { pickDropTargetId, type RectLike } from "./drop-target";
+import { isBacktrack, deriveLoopSides } from "./backtrack";
 import type {
   CanvasEdge,
   CanvasLane,
@@ -86,9 +88,6 @@ type Drag =
       // Live cursor position in world coords for the temp line.
       currX: number;
       currY: number;
-      // True when started from the Rework tool: the drop pins source/target
-      // faces and creates a distinct backtrack edge instead of an auto-routed one.
-      rework?: boolean;
     }
   | {
       type: "edgeBend";
@@ -126,9 +125,6 @@ function buildPreviewToCursor(
   return `M ${start.x} ${start.y} L ${start.x} ${midY} L ${cx} ${midY} L ${cx} ${cy}`;
 }
 
-/** In Rework mode only the top/bottom faces anchor a backtrack loop, so we
- * hide the left/right handles. Module-level for a stable prop reference. */
-const REWORK_HANDLE_SIDES: ConnectSide[] = ["top", "bottom"];
 
 function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
   if (lanes.length === 0) return undefined;
@@ -1060,7 +1056,6 @@ function BpmnCanvas({
         if (e.key === "v" || e.key === "V") { setTool("select"); return; }
         if (e.key === "h" || e.key === "H") { setTool("pan"); return; }
         if (e.key === "c" || e.key === "C") { setTool("connect"); return; }
-        if (e.key === "r" || e.key === "R") { setTool("rework"); return; }
         if (e.key === "Escape") {
           if (contextMenuRef.current) {
             setContextMenu(null);
@@ -1300,34 +1295,23 @@ function BpmnCanvas({
     const stored = nodesRef.current.find((n) => n.id === id);
     if (!resolved || !stored) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
-    if (tool === "connect" || tool === "rework") {
-      // Body-drag picks the source side from where the user grabbed. Connect
-      // allows all four faces; Rework is restricted to top/bottom (the only
-      // faces a backtrack loop anchors to).
+    if (tool === "connect") {
+      // Body-drag picks the source side from where the user grabbed: the closest
+      // of top/right/bottom/left to the click point. Backtrack vs forward is
+      // decided on drop, not here.
       const cx = resolved.x + resolved.w / 2;
       const cy = resolved.y + resolved.h / 2;
       const dx = x - cx;
       const dy = y - cy;
       const side: ConnectSide =
-        tool === "rework"
-          ? dy >= 0
+        Math.abs(dx) > Math.abs(dy)
+          ? dx >= 0
+            ? "right"
+            : "left"
+          : dy >= 0
             ? "bottom"
-            : "top"
-          : Math.abs(dx) > Math.abs(dy)
-            ? dx >= 0
-              ? "right"
-              : "left"
-            : dy >= 0
-              ? "bottom"
-              : "top";
-      setDrag({
-        type: "connect",
-        sourceId: id,
-        sourceSide: side,
-        currX: x,
-        currY: y,
-        rework: tool === "rework",
-      });
+            : "top";
+      setDrag({ type: "connect", sourceId: id, sourceSide: side, currX: x, currY: y });
       return;
     }
     const groupIds = isGroupDrag
@@ -1403,16 +1387,9 @@ function BpmnCanvas({
       e.stopPropagation();
       selectOnly(sourceId);
       const { x, y } = toWorld(e.clientX, e.clientY);
-      setDrag({
-        type: "connect",
-        sourceId,
-        sourceSide: side,
-        currX: x,
-        currY: y,
-        rework: tool === "rework",
-      });
+      setDrag({ type: "connect", sourceId, sourceSide: side, currX: x, currY: y });
     },
-    [toWorld, selectOnly, tool]
+    [toWorld, selectOnly]
   );
 
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
@@ -1572,37 +1549,31 @@ function BpmnCanvas({
       }
       if (drag.type === "connect") {
         const { x, y } = screenToWorld(e.clientX, e.clientY);
-        const target = nodesRef.current.find((n) => {
-          // Resolve node Y the same way renderNodes does.
-          const lane = n.laneId
-            ? displayLanesRef.current.find((l) => l.id === n.laneId)
-            : undefined;
-          const ny = lane ? lane.y + n.relativeY : n.relativeY;
-          return (
-            n.id !== drag.sourceId &&
-            x >= n.x &&
-            x <= n.x + n.w &&
-            y >= ny &&
-            y <= ny + n.h
-          );
-        });
-        if (target) {
+        // Build resolved candidate rects (exclude the source) and pick the
+        // nearest within tolerance, so a drop just outside a node still lands.
+        const candidates: RectLike[] = nodesRef.current
+          .filter((n) => n.id !== drag.sourceId)
+          .map((n) => {
+            const lane = n.laneId
+              ? displayLanesRef.current.find((l) => l.id === n.laneId)
+              : undefined;
+            const ny = lane ? lane.y + n.relativeY : n.relativeY;
+            return { id: n.id, x: n.x, y: ny, w: n.w, h: n.h };
+          });
+        const targetId = pickDropTargetId(x, y, candidates);
+        const targetRect = candidates.find((c) => c.id === targetId);
+        if (targetId && targetRect) {
           const sourceId = drag.sourceId;
-          const targetId = target.id;
+          const source = nodesRef.current.find((n) => n.id === sourceId);
           const exists = edgesRef.current.some(
             (e2) => e2.from === sourceId && e2.to === targetId
           );
-          if (!exists && drag.rework) {
-            // Pin the faces: source keeps the handle it left from (coerced to
-            // top/bottom); target enters whichever half the cursor dropped in.
-            const lane = target.laneId
-              ? displayLanesRef.current.find((l) => l.id === target.laneId)
-              : undefined;
-            const ty = lane ? lane.y + target.relativeY : target.relativeY;
-            const targetSide: "top" | "bottom" =
-              y < ty + target.h / 2 ? "top" : "bottom";
-            const sourceSide: "top" | "bottom" =
-              drag.sourceSide === "top" ? "top" : "bottom";
+          if (!exists && source && isBacktrack(source, targetRect)) {
+            const { sourceSide, targetSide } = deriveLoopSides(
+              drag.sourceSide,
+              y,
+              targetRect
+            );
             void createEdgeImpl(sourceId, targetId, {
               sourceSide,
               targetSide,
@@ -2377,7 +2348,7 @@ function BpmnCanvas({
               ? "grabbing"
               : tool === "pan"
                 ? "grab"
-                : tool === "connect" || tool === "rework"
+                : tool === "connect"
                   ? "crosshair"
                   : "default",
           userSelect: "none",
@@ -2488,8 +2459,7 @@ function BpmnCanvas({
               selected={selectedIds.has(node.id)}
               issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
               reviewBadge={reviewMode ? reviewMap[node.id] ?? null : null}
-              showHandles={tool === "connect" || tool === "rework"}
-              handleSides={tool === "rework" ? REWORK_HANDLE_SIDES : undefined}
+              showHandles={tool === "connect"}
               onMouseDown={onNodeMouseDown}
               onContextMenu={openNodeMenu}
               onStartConnect={onStartConnect}
@@ -2572,41 +2542,43 @@ function BpmnCanvas({
             (() => {
               const source = renderNodes.find((n) => n.id === drag.sourceId);
               if (!source) return null;
-              // If the cursor is over a target node, preview the final
-              // edge using node-to-node routing so the user can see exactly
-              // what they'll get. Otherwise fall back to source-side → cursor.
-              const target = renderNodes.find(
-                (n) =>
-                  n.id !== drag.sourceId &&
-                  drag.currX >= n.x &&
-                  drag.currX <= n.x + n.w &&
-                  drag.currY >= n.y &&
-                  drag.currY <= n.y + n.h
-              );
-              // Rework preview pins both faces so the user sees the exact loop
-              // they'll get; target face follows which half the cursor is over.
-              const reworkSides =
-                drag.rework && target
-                  ? {
-                      sourceSide: (drag.sourceSide === "top" ? "top" : "bottom") as
-                        | "top"
-                        | "bottom",
-                      targetSide: (drag.currY < target.y + target.h / 2
-                        ? "top"
-                        : "bottom") as "top" | "bottom",
-                    }
-                  : undefined;
-              const d = target
-                ? buildEdgePath(source, target, reworkSides).d
-                : buildPreviewToCursor(source, drag.sourceSide, drag.currX, drag.currY);
+              // Use the same picker as the drop so the preview matches the result.
+              const candidates: RectLike[] = renderNodes
+                .filter((n) => n.id !== drag.sourceId)
+                .map((n) => ({ id: n.id, x: n.x, y: n.y, w: n.w, h: n.h }));
+              const targetId = pickDropTargetId(drag.currX, drag.currY, candidates);
+              const target = targetId
+                ? renderNodes.find((n) => n.id === targetId)
+                : undefined;
+              const backtrack = !!target && isBacktrack(source, target);
+              let d: string;
+              if (target && backtrack) {
+                const { sourceSide, targetSide } = deriveLoopSides(
+                  drag.sourceSide,
+                  drag.currY,
+                  target
+                );
+                d = buildEdgePath(source, target, { sourceSide, targetSide }).d;
+              } else if (target) {
+                d = buildEdgePath(source, target).d;
+              } else {
+                d = buildPreviewToCursor(
+                  source,
+                  drag.sourceSide,
+                  drag.currX,
+                  drag.currY
+                );
+              }
               return (
                 <path
                   d={d}
                   fill="none"
-                  stroke={drag.rework ? "#d97706" : "#0f172a"}
+                  stroke={backtrack ? "#d97706" : "#0f172a"}
                   strokeWidth={1.5}
                   strokeDasharray="4 4"
-                  markerEnd={drag.rework ? "url(#poet-arrow-rework)" : "url(#poet-arrow)"}
+                  markerEnd={
+                    backtrack ? "url(#poet-arrow-rework)" : "url(#poet-arrow)"
+                  }
                   pointerEvents="none"
                 />
               );

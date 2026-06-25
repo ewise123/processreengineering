@@ -234,7 +234,6 @@ export function NodeShape({
   issueLevel,
   reviewBadge,
   showHandles,
-  handleSides,
   onMouseDown,
   onContextMenu,
   onStartConnect,
@@ -247,9 +246,6 @@ export function NodeShape({
   /** When true, hover handles are always rendered (e.g. while the connect
    * tool is active). Otherwise they appear on hover or when selected. */
   showHandles?: boolean;
-  /** Restricts which connect handles render. Defaults to all four faces;
-   * Rework mode passes ["top","bottom"]. */
-  handleSides?: ConnectSide[];
   onMouseDown: (e: MouseEvent, id: string) => void;
   onContextMenu?: (e: MouseEvent, id: string) => void;
   onStartConnect?: (e: MouseEvent, sourceId: UUID, side: ConnectSide) => void;
@@ -445,18 +441,10 @@ export function NodeShape({
       )}
       {handlesVisible && (
         <>
-          {(!handleSides || handleSides.includes("top")) && (
-            <ConnectHandle cx={w / 2} cy={0} onMouseDown={(e) => onStartConnect!(e, id, "top")} />
-          )}
-          {(!handleSides || handleSides.includes("right")) && (
-            <ConnectHandle cx={w} cy={h / 2} onMouseDown={(e) => onStartConnect!(e, id, "right")} />
-          )}
-          {(!handleSides || handleSides.includes("bottom")) && (
-            <ConnectHandle cx={w / 2} cy={h} onMouseDown={(e) => onStartConnect!(e, id, "bottom")} />
-          )}
-          {(!handleSides || handleSides.includes("left")) && (
-            <ConnectHandle cx={0} cy={h / 2} onMouseDown={(e) => onStartConnect!(e, id, "left")} />
-          )}
+          <ConnectHandle cx={w / 2} cy={0} onMouseDown={(e) => onStartConnect!(e, id, "top")} />
+          <ConnectHandle cx={w} cy={h / 2} onMouseDown={(e) => onStartConnect!(e, id, "right")} />
+          <ConnectHandle cx={w / 2} cy={h} onMouseDown={(e) => onStartConnect!(e, id, "bottom")} />
+          <ConnectHandle cx={0} cy={h / 2} onMouseDown={(e) => onStartConnect!(e, id, "left")} />
         </>
       )}
     </g>
