@@ -1,12 +1,29 @@
 "use client";
 
-import { Check, RotateCcw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Check, ChevronRight, RotateCcw } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import type { ChatSuggestion, ObjectRef, UUID } from "@/lib/types";
-import type { Bundle } from "./suggestion-apply";
+import type { OpKind } from "@/lib/types";
+import { isDeleteOp, type Bundle } from "./suggestion-apply";
+import { opPayload, opTarget } from "./suggestion-display";
 
 export type CardStatus = "pending" | "applying" | "applied" | "failed" | "dismissed";
+
+/** Human-readable verb for each op kind, shown as the per-change badge. */
+const ACTION_LABEL: Record<OpKind, string> = {
+  relabel_node: "Rename",
+  describe_node: "Describe",
+  add_node: "Add step",
+  remove_node: "Remove step",
+  add_edge: "Connect",
+  remove_edge: "Remove link",
+  relabel_edge: "Label link",
+  reroute_edge: "Reroute",
+  move_to_lane: "Move lane",
+  add_lane: "Add lane",
+  rename_lane: "Rename lane",
+  decompose: "Break down",
+};
 
 export function SuggestionList({
   bundles,
@@ -15,8 +32,10 @@ export function SuggestionList({
   onApply,
   onUndo,
   onDismiss,
-  onNavigate,
-  nodeLabel,
+  onRestore,
+  renderText,
+  summaryById,
+  errorById,
 }: {
   bundles: Bundle[];
   statusById: Record<string, CardStatus>;
@@ -24,17 +43,22 @@ export function SuggestionList({
   onApply: (bundle: Bundle) => void | Promise<void>;
   onUndo: (bundleId: string) => void;
   onDismiss: (bundleId: string) => void;
-  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
-  nodeLabel?: (id: UUID) => string | undefined;
+  onRestore: (bundleId: string) => void;
+  /** Render text with `[[kind:uuid]]` mentions as named, clickable links. */
+  renderText: (text: string) => ReactNode;
+  /** group id → one-line purpose of that bundle. */
+  summaryById: Map<string, string>;
+  /** bundle id → the apply-failure message to show on a failed card. */
+  errorById: Record<string, string>;
 }) {
-  const visible = bundles.filter((b) => statusById[b.id] !== "dismissed");
-  if (visible.length === 0) return null;
-  const pending = visible.filter((b) => (statusById[b.id] ?? "pending") === "pending");
+  if (bundles.length === 0) return null;
+  // Dismissed cards stay visible (dimmed); only still-pending ones feed "Apply all".
+  const pending = bundles.filter((b) => (statusById[b.id] ?? "pending") === "pending");
   return (
     <div className="mt-2 space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-bold uppercase tracking-wider text-violet-700">
-          Suggested changes · {visible.length}
+          Suggested changes · {bundles.length}
         </span>
         {pending.length > 1 && (
           <button
@@ -50,46 +74,61 @@ export function SuggestionList({
           </button>
         )}
       </div>
-      {visible.map((b) => (
+      {bundles.map((b) => (
         <SuggestionCard
           key={b.id}
           bundle={b}
           status={statusById[b.id] ?? "pending"}
           canUndo={!!canUndoById[b.id]}
+          summary={bundleSummary(b, summaryById)}
+          error={errorById[b.id]}
           onApply={() => onApply(b)}
           onUndo={() => onUndo(b.id)}
           onDismiss={() => onDismiss(b.id)}
-          onNavigate={onNavigate}
-          nodeLabel={nodeLabel}
+          onRestore={() => onRestore(b.id)}
+          renderText={renderText}
         />
       ))}
     </div>
   );
 }
 
+/** The purpose statement for a bundle: the summary of the first member group
+ * that has one (a bundle may span groups when linked by a tmp_id dependency). */
+function bundleSummary(bundle: Bundle, summaryById: Map<string, string>): string | undefined {
+  for (const s of bundle.suggestions) {
+    if (s.group && summaryById.has(s.group)) return summaryById.get(s.group);
+  }
+  return undefined;
+}
+
 function SuggestionCard({
   bundle,
   status,
   canUndo,
+  summary,
+  error,
   onApply,
   onUndo,
   onDismiss,
-  onNavigate,
-  nodeLabel,
+  onRestore,
+  renderText,
 }: {
   bundle: Bundle;
   status: CardStatus;
   canUndo: boolean;
+  summary?: string;
+  error?: string;
   onApply: () => void | Promise<void>;
   onUndo: () => void;
   onDismiss: () => void;
-  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
-  nodeLabel?: (id: UUID) => string | undefined;
+  onRestore: () => void;
+  renderText: (text: string) => ReactNode;
 }) {
   const [confirming, setConfirming] = useState(false);
   const isDelete = !bundle.undoable;
-  const head = bundle.suggestions[0];
-  const extra = bundle.suggestions.length - 1;
+  const dismissed = status === "dismissed";
+  const multi = bundle.suggestions.length > 1;
 
   // Synchronous double-click guard: `applyBundle` is async and only commits
   // "applying" after a render, so a second click before that commit would
@@ -112,32 +151,71 @@ function SuggestionCard({
     <div
       className={
         "rounded-md border p-2 " +
-        (status === "applied"
+        (dismissed
+          ? "border-slate-200 bg-slate-50/40 opacity-60"
+          : status === "applied"
           ? "border-emerald-200 bg-emerald-50/50"
           : status === "failed"
           ? "border-rose-200 bg-rose-50/50"
           : "border-slate-200 bg-slate-50/60")
       }
     >
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-[11px] font-semibold text-slate-800">
-          {head.title}
-          {extra > 0 && <span className="ml-1 text-[10px] font-normal text-slate-500">+{extra} more</span>}
-        </p>
-        {isDelete && status === "pending" && (
-          <span className="shrink-0 rounded bg-rose-100 px-1 py-px text-[9px] font-bold text-rose-700">removes</span>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+          {multi ? `Bundle · ${bundle.suggestions.length} changes` : "Suggested change"}
+        </span>
+        {isDelete && !dismissed && status === "pending" && (
+          <span className="shrink-0 rounded bg-rose-100 px-1 py-px text-[9px] font-bold text-rose-700">
+            not undoable
+          </span>
         )}
       </div>
 
-      {bundle.suggestions.map((s) =>
-        s.rationale ? (
-          <p key={s.id} className="mt-0.5 text-[10px] text-slate-500">{s.rationale}</p>
-        ) : null
+      {/* What the bundle does as a whole, before the individual changes. */}
+      {summary && (
+        <p className="mb-1.5 text-[11px] font-medium leading-snug text-slate-700">{summary}</p>
       )}
 
-      <AffectedRefs suggestions={bundle.suggestions} onNavigate={onNavigate} nodeLabel={nodeLabel} />
+      {/* Every change in the bundle: the action badge + target object, the
+          proposed new value, and collapsible reasoning. */}
+      <div className="space-y-1">
+        {bundle.suggestions.map((s) => {
+          const target = opTarget(s.op);
+          const payload = opPayload(s.op);
+          return (
+            <div key={s.id} className="rounded border border-slate-200 bg-white/70 px-1.5 py-1.5">
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={
+                    "shrink-0 rounded px-1 py-px text-[8.5px] font-bold uppercase tracking-wide " +
+                    (isDeleteOp(s.op.kind) ? "bg-rose-100 text-rose-700" : "bg-slate-200 text-slate-600")
+                  }
+                >
+                  {ACTION_LABEL[s.op.kind] ?? s.op.kind}
+                </span>
+                <span className="min-w-0 text-[11px] font-medium leading-snug text-slate-800">
+                  {target ? renderText(target) : renderText(s.title)}
+                </span>
+              </div>
+              {payload && (
+                <div className="mt-1 whitespace-pre-wrap rounded bg-slate-100/80 px-1.5 py-1 text-[11px] leading-snug text-slate-700">
+                  {payload.hasMention ? renderText(payload.value) : payload.value}
+                </div>
+              )}
+              {s.rationale && <Reasoning rationale={s.rationale} renderText={renderText} />}
+            </div>
+          );
+        })}
+      </div>
 
-      {status === "applied" ? (
+      {dismissed ? (
+        <div className="mt-2 flex items-center gap-2 text-[10px] font-semibold text-slate-500">
+          Dismissed
+          <button type="button" onClick={onRestore} className="font-normal text-slate-500 underline hover:text-slate-800">
+            Restore
+          </button>
+        </div>
+      ) : status === "applied" ? (
         <div className="mt-2 flex items-center gap-2 text-[10px] font-semibold text-emerald-700">
           <Check size={12} /> Applied
           {canUndo && (
@@ -163,7 +241,7 @@ function SuggestionCard({
           </button>
         </div>
       ) : (
-        <div className="mt-2 flex gap-1.5">
+        <div className="mt-2 flex items-center gap-1.5">
           <button
             type="button"
             onClick={() => (isDelete ? setConfirming(true) : runApply())}
@@ -174,37 +252,39 @@ function SuggestionCard({
           <button type="button" onClick={onDismiss} className="rounded border border-slate-300 px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-100">
             Dismiss
           </button>
-          {status === "failed" && <span className="self-center text-[10px] text-rose-600">Failed — try again</span>}
+          {status === "failed" && (
+            <span className="self-center text-[10px] text-rose-600">{error ?? "Failed — try again"}</span>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function AffectedRefs({
-  suggestions,
-  onNavigate,
-  nodeLabel,
+/** A change's rationale, collapsed behind a "Reasoning" disclosure that expands
+ * inside the card. Collapsed by default so the card leads with the change itself. */
+function Reasoning({
+  rationale,
+  renderText,
 }: {
-  suggestions: ChatSuggestion[];
-  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
-  nodeLabel?: (id: UUID) => string | undefined;
+  rationale: string;
+  renderText: (text: string) => ReactNode;
 }) {
-  const refs: ObjectRef[] = suggestions.flatMap((s) => s.affected_refs).filter((r) => r.kind !== "lane");
-  if (refs.length === 0) return null;
+  const [open, setOpen] = useState(false);
   return (
-    <div className="mt-1 flex flex-wrap gap-1">
-      {refs.map((r) => (
-        <button
-          key={`${r.kind}:${r.id}`}
-          type="button"
-          onClick={() => onNavigate({ kind: r.kind as "node" | "edge", id: r.id })}
-          className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[9px] text-slate-600 hover:bg-slate-100"
-          title="Jump to this object"
-        >
-          {r.kind === "node" ? (nodeLabel?.(r.id) ?? "node") : "edge"}
-        </button>
-      ))}
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex items-center gap-0.5 text-[10px] font-medium text-slate-500 hover:text-slate-700"
+      >
+        <ChevronRight size={10} className={"transition-transform " + (open ? "rotate-90" : "")} />
+        Reasoning
+      </button>
+      {open && (
+        <div className="mt-0.5 pl-3 text-[10px] leading-snug text-slate-500">{renderText(rationale)}</div>
+      )}
     </div>
   );
 }

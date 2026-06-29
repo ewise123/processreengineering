@@ -282,7 +282,10 @@ export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
       if (producedAll.has(ref)) continue; // created within this plan
       if (!index[SET_BY_KIND[set]].has(ref)) {
         applyable = false;
-        reason = `A referenced ${set} no longer exists on the map.`;
+        // Name the offending ref: a real-looking UUID points at a stale graph
+        // index, while a short/non-UUID ref means the model emitted one the
+        // backend couldn't resolve.
+        reason = `A referenced ${set} ("${ref}") is not on the current map.`;
         break;
       }
     }
