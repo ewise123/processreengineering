@@ -88,8 +88,10 @@ from app.schemas.version_chat_suggest import (
     ChatSuggestResponse,
     ChatSuggestion,
     ChatTurn as SuggestChatTurn,
+    GroupSummary,
     MentionSource,
     ObjectRef,
+    OpKind,
     RefKind,
     SuggestionOp,
 )
@@ -1244,20 +1246,62 @@ def _build_suggestion(raw: dict, ctx, index: int):
         if raw.get(field) is not None:
             op_kwargs[field] = raw[field]
 
+    # add_node requires `new_label`, but the model commonly fills the generic
+    # `name` field for a new node's label instead. Coalesce so the op validates
+    # rather than being dropped (a dropped add_node orphans the add_edge ops that
+    # point at its temp_id, which then sinks the whole bundle on the client).
+    if (
+        op_kwargs.get("kind") == OpKind.ADD_NODE.value
+        and not op_kwargs.get("new_label")
+        and op_kwargs.get("name")
+    ):
+        op_kwargs["new_label"] = op_kwargs["name"]
+
     try:
         op = SuggestionOp(**op_kwargs)
     except (ValueError, TypeError, KeyError):
         return None  # malformed op -> dropped, never reaches the client
 
+    # Resolve [[N3]]/[[C1]] mentions in title + rationale into [[kind:uuid]] the
+    # same way prose is resolved, so the UI renders named, clickable links there.
     return ChatSuggestion(
         id=f"sg-{index}-{uuid4().hex[:8]}",
         group=raw.get("group"),
-        title=str(raw.get("title") or op.kind.value)[:300],
+        title=_resolve_mention_refs(str(raw.get("title") or op.kind.value), ctx)[:300],
         op=op,
         affected_refs=affected,
-        rationale=str(raw.get("rationale") or "")[:2000],
+        rationale=_resolve_mention_refs(str(raw.get("rationale") or ""), ctx)[:2000],
         cited_claim_ids=_resolve_refs(raw.get("cited_claim_refs"), ctx.claim_ref_to_id),
     )
+
+
+def _drop_orphaned_consumers(suggestions: list[ChatSuggestion]) -> list[ChatSuggestion]:
+    """Remove suggestions that consume a `tmp:` ref with no surviving producer.
+
+    A producer is any suggestion carrying that `temp_id`. If the model's
+    producing op (e.g. an add_node) is dropped during build, its `tmp:` id is
+    left dangling on the consumers (the add_edge ops that point at it). The
+    frontend rejects an entire bundle the moment one ref is unresolvable, so we
+    prune the orphans server-side and ship only the internally-consistent ops.
+    Runs to a fixpoint in case a pruned consumer was itself a producer."""
+    kept = list(suggestions)
+    while True:
+        produced = {s.op.temp_id for s in kept if s.op.temp_id}
+        survivors = []
+        for s in kept:
+            consumed = (
+                s.op.node_ref, s.op.edge_ref, s.op.lane_ref,
+                s.op.from_ref, s.op.to_ref, s.op.near_node_ref,
+            )
+            dangling = any(
+                r and str(r).startswith("tmp:") and r not in produced
+                for r in consumed
+            )
+            if not dangling:
+                survivors.append(s)
+        if len(survivors) == len(kept):
+            return survivors
+        kept = survivors
 
 
 @router.post(
@@ -1383,7 +1427,7 @@ def chat_suggest(
 
     history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
     try:
-        message, raw_suggestions = run_chat_suggest(
+        message, raw_suggestions, raw_groups = run_chat_suggest(
             history=history,
             user_message=payload.user_message,
             map_context_text=map_text,
@@ -1397,26 +1441,54 @@ def chat_suggest(
         built = _build_suggestion(raw, ctx, index=i)
         if built is not None:
             suggestions.append(built)
-    resolved = _resolve_mention_refs(message, ctx)
-    # Guard against malformed tokens: the regex matches hex-ish strings that are
-    # not valid UUIDs (e.g. an echoed "[[claim:abc]]"), so UUID() can raise.
-    # Skip those instead of turning the endpoint into a 500. Dedupe while
-    # preserving first-seen order.
+    # A dropped producing op leaves its temp_id dangling on the ops that consume
+    # it; prune those orphans so the client never sees an unresolvable bundle.
+    suggestions = _drop_orphaned_consumers(suggestions)
+    # When a command yields suggestion cards, the cards ARE the response. Drop any
+    # top-level prose: the model occasionally narrates the change (restating the
+    # node's name or echoing the proposed text) despite the prompt rules, and that
+    # prose is pure noise next to the card. Questions (no suggestions) keep prose.
+    resolved = "" if suggestions else _resolve_mention_refs(message, ctx)
+    # Build mention sources from claim refs in the prose AND in the resolved
+    # suggestion titles/rationales (those now carry [[claim:uuid]] too). Guard
+    # against malformed tokens: the regex matches hex-ish strings that aren't
+    # valid UUIDs, so UUID() can raise — skip those. Dedupe, preserving order.
     mention_sources = []
     seen_claim_ids: set[UUID] = set()
-    for cid_str in re.findall(r"\[\[claim:([0-9a-fA-F-]+)\]\]", resolved):
+    claim_texts = [resolved] + [s.title for s in suggestions] + [s.rationale for s in suggestions]
+    for text in claim_texts:
+        for cid_str in re.findall(r"\[\[claim:([0-9a-fA-F-]+)\]\]", text):
+            try:
+                cid = UUID(cid_str)
+            except ValueError:
+                continue
+            if cid in seen_claim_ids:
+                continue
+            seen_claim_ids.add(cid)
+            tgt = ctx.source_target_by_claim.get(cid)
+            if tgt:
+                mention_sources.append(MentionSource(claim_id=cid, **tgt))
+    # Group summaries — only for groups actually present on an emitted suggestion.
+    used_groups = {s.group for s in suggestions if s.group}
+    group_summaries: list[GroupSummary] = []
+    seen_groups: set[str] = set()
+    for g in raw_groups:
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("id") or "").strip()
+        summary = str(g.get("summary") or "").strip()
+        if not gid or not summary or gid not in used_groups or gid in seen_groups:
+            continue
+        seen_groups.add(gid)
         try:
-            cid = UUID(cid_str)
+            group_summaries.append(GroupSummary(id=gid, summary=summary[:500]))
         except ValueError:
             continue
-        if cid in seen_claim_ids:
-            continue
-        seen_claim_ids.add(cid)
-        tgt = ctx.source_target_by_claim.get(cid)
-        if tgt:
-            mention_sources.append(MentionSource(claim_id=cid, **tgt))
     return ChatSuggestResponse(
-        message=resolved, suggestions=suggestions, mention_sources=mention_sources
+        message=resolved,
+        suggestions=suggestions,
+        mention_sources=mention_sources,
+        group_summaries=group_summaries,
     )
 
 

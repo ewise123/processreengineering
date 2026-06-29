@@ -83,11 +83,12 @@ def test_suggest_mode_returns_message_and_raw_suggestions():
              "cited_claim_refs": ["C1"]}]}),
     ])
     with patch.object(map_chat_suggest, "_get_client", return_value=fake):
-        message, raw = map_chat_suggest.run_chat_suggest(
+        message, raw, groups = map_chat_suggest.run_chat_suggest(
             history=[], user_message="improve N1", map_context_text="...",
             mode=ChatMode.SUGGEST,
         )
     assert "improvement" in message
+    assert groups == []
     assert raw[0]["kind"] == "relabel_node"
     assert raw[0]["cited_claim_refs"] == ["C1"]
 
@@ -97,7 +98,7 @@ def test_suggest_mode_no_tool_call_returns_empty_suggestions():
     from app.schemas.version_chat_suggest import ChatMode
     fake = _FakeClient([_TextBlock("That looks correct as-is; no change needed.")])
     with patch.object(map_chat_suggest, "_get_client", return_value=fake):
-        message, raw = map_chat_suggest.run_chat_suggest(
+        message, raw, _groups = map_chat_suggest.run_chat_suggest(
             history=[], user_message="is N1 ok?", map_context_text="...",
             mode=ChatMode.SUGGEST,
         )
@@ -116,7 +117,7 @@ def test_ask_mode_never_calls_tools():
         return "A plain answer."
 
     with patch.object(map_chat_suggest, "chat", fake_chat):
-        message, raw = map_chat_suggest.run_chat_suggest(
+        message, raw, _groups = map_chat_suggest.run_chat_suggest(
             history=[], user_message="what is N1?", map_context_text="...",
             mode=ChatMode.ASK,
         )
@@ -131,7 +132,7 @@ def test_suggest_mode_ignores_non_list_suggestions():
     from app.schemas.version_chat_suggest import ChatMode
     fake = _FakeClient([_ToolBlock("propose_changes", {"suggestions": {"oops": "not a list"}})])
     with patch.object(map_chat_suggest, "_get_client", return_value=fake):
-        message, raw = map_chat_suggest.run_chat_suggest(
+        message, raw, _groups = map_chat_suggest.run_chat_suggest(
             history=[], user_message="x", map_context_text="...", mode=ChatMode.SUGGEST)
     assert raw == []
 
@@ -188,6 +189,63 @@ def test_build_suggestion_returns_none_for_malformed_op():
     assert pm_api._build_suggestion(raw, ctx, index=0) is None
 
 
+def test_build_suggestion_add_node_accepts_name_as_label():
+    """The model commonly fills `name` (not `new_label`) for a new node's label.
+    Accept it as the label so the add_node isn't dropped — a dropped producer
+    orphans the add_edge ops that point at its temp_id and sinks the bundle."""
+    from app.api.v2 import process_maps as pm_api
+    ctx, (n1, _n2, _e1, l1, _c1) = _ctx_stub()
+    raw = {"kind": "add_node", "temp_id": "tmp:1", "lane_ref": "L1",
+           "node_type": "task", "name": "Manager Approval", "near_node_ref": "N1",
+           "title": "Add approval", "rationale": "needed", "cited_claim_refs": []}
+    s = pm_api._build_suggestion(raw, ctx, index=0)
+    assert s is not None                       # not dropped
+    assert s.op.new_label == "Manager Approval"  # name coalesced into new_label
+
+
+def test_build_suggestion_prefers_new_label_over_name_for_add_node():
+    """When both are present, new_label wins; name is only a fallback."""
+    from app.api.v2 import process_maps as pm_api
+    ctx, (_n1, _n2, _e1, _l1, _c1) = _ctx_stub()
+    raw = {"kind": "add_node", "temp_id": "tmp:1", "lane_ref": "L1",
+           "node_type": "task", "new_label": "Real label", "name": "Other",
+           "title": "t", "rationale": "r", "cited_claim_refs": []}
+    s = pm_api._build_suggestion(raw, ctx, index=0)
+    assert s.op.new_label == "Real label"
+
+
+def test_drop_orphaned_consumers_removes_dangling_tmp_refs():
+    """A suggestion that consumes a tmp: ref with no producer in the set is
+    dropped, so the frontend never rejects a whole bundle over a dangling ref."""
+    from app.api.v2 import process_maps as pm_api
+    ctx, (n1, _n2, _e1, _l1, _c1) = _ctx_stub()
+    # add_edge from a NEW (missing) node tmp:1 to existing N1 -> orphan.
+    orphan = pm_api._build_suggestion(
+        {"kind": "add_edge", "from_ref": "tmp:1", "to_ref": "N1",
+         "title": "wire", "rationale": "r", "cited_claim_refs": []}, ctx, index=0)
+    # relabel of an existing node -> no tmp deps, must survive.
+    keeper = pm_api._build_suggestion(
+        {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
+         "title": "t", "rationale": "r", "cited_claim_refs": []}, ctx, index=1)
+    kept = pm_api._drop_orphaned_consumers([orphan, keeper])
+    assert kept == [keeper]
+
+
+def test_drop_orphaned_consumers_keeps_satisfied_tmp_refs():
+    """A consumer whose producer IS present survives."""
+    from app.api.v2 import process_maps as pm_api
+    ctx, (n1, _n2, _e1, _l1, _c1) = _ctx_stub()
+    producer = pm_api._build_suggestion(
+        {"kind": "add_node", "temp_id": "tmp:1", "lane_ref": "L1",
+         "node_type": "task", "new_label": "New step",
+         "title": "t", "rationale": "r", "cited_claim_refs": []}, ctx, index=0)
+    consumer = pm_api._build_suggestion(
+        {"kind": "add_edge", "from_ref": "N1", "to_ref": "tmp:1",
+         "title": "wire", "rationale": "r", "cited_claim_refs": []}, ctx, index=1)
+    kept = pm_api._drop_orphaned_consumers([producer, consumer])
+    assert kept == [producer, consumer]
+
+
 def test_build_suggestion_resolves_lowercase_ref():
     from app.api.v2 import process_maps as pm_api
     ctx, (n1, _n2, _e1, _l1, _c1) = _ctx_stub()
@@ -238,7 +296,7 @@ def test_chat_suggest_endpoint_resolves_suggestion(db):
         return ("Here is a fix.", [
             {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
              "title": "Clarify", "rationale": "C1 supports it.",
-             "cited_claim_refs": ["C1", "C99"]}])
+             "cited_claim_refs": ["C1", "C99"]}], [])
 
     with _pytest.MonkeyPatch.context() as mp:
         mp.setattr(pm_api, "run_chat_suggest", fake_service)
@@ -247,7 +305,9 @@ def test_chat_suggest_endpoint_resolves_suggestion(db):
             payload=ChatSuggestRequest(user_message="improve N1", mode="suggest"),
             db=db,
         )
-    assert resp.message == "Here is a fix."
+    # When suggestion cards are returned, the top-level prose is suppressed — the
+    # cards ARE the response, and stray prose only restates the change as noise.
+    assert resp.message == ""
     assert len(resp.suggestions) == 1
     assert resp.suggestions[0].op.node_ref == str(n1.id)
     assert resp.suggestions[0].cited_claim_ids == [claim.id]   # C99 dropped
@@ -259,7 +319,7 @@ def test_chat_suggest_endpoint_ask_mode_has_no_suggestions(db):
     project, version, n1, claim = _seed(db)
     with _pytest.MonkeyPatch.context() as mp:
         mp.setattr(pm_api, "run_chat_suggest",
-                   lambda **k: ("Plain answer.", []))
+                   lambda **k: ("Plain answer.", [], []))
         resp = pm_api.chat_suggest(
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(user_message="what is N1?", mode="ask"),
@@ -348,7 +408,7 @@ def test_chat_suggest_endpoint_drops_only_malformed_op_in_batch(db):
              "title": "Good", "rationale": "r", "cited_claim_refs": []},
             {"kind": "relabel_node", "node_ref": "N1",  # malformed: missing new_label
              "title": "Bad", "rationale": "r", "cited_claim_refs": []},
-        ])
+        ], [])
 
     with _pytest.MonkeyPatch.context() as mp:
         mp.setattr(pm_api, "run_chat_suggest", fake_service)
@@ -410,7 +470,7 @@ def test_chat_suggest_ask_message_is_mention_resolved(db):
     project, version, n1, claim = _seed(db)
     with _pytest.MonkeyPatch.context() as mp:
         mp.setattr(pm_api, "run_chat_suggest",
-                   lambda **k: ("See step [[N1]].", []))
+                   lambda **k: ("See step [[N1]].", [], []))
         resp = pm_api.chat_suggest(
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)
@@ -440,7 +500,7 @@ def test_chat_suggest_focuses_on_all_context_nodes(db):
 
     def fake_service(*, history, user_message, map_context_text, mode):
         captured["ctx"] = map_context_text
-        return ("ok", [])
+        return ("ok", [], [])
 
     with _pytest.MonkeyPatch.context() as mp:
         mp.setattr(pm_api, "run_chat_suggest", fake_service)
@@ -480,7 +540,7 @@ def test_chat_suggest_attaches_mention_sources_for_cited_claims(db):
     db.commit()
 
     with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pm_api, "run_chat_suggest", lambda **k: ("Per [[C1]] this is logged.", []))
+        mp.setattr(pm_api, "run_chat_suggest", lambda **k: ("Per [[C1]] this is logged.", [], []))
         resp = pm_api.chat_suggest(
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)
@@ -499,10 +559,92 @@ def test_chat_suggest_skips_malformed_claim_token_without_crashing(db):
 
     with _pytest.MonkeyPatch.context() as mp:
         # "abc" is hex-ish (matches the regex) but not a valid UUID.
-        mp.setattr(pm_api, "run_chat_suggest", lambda **k: ("See [[claim:abc]] here.", []))
+        mp.setattr(pm_api, "run_chat_suggest", lambda **k: ("See [[claim:abc]] here.", [], []))
         resp = pm_api.chat_suggest(
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)
     # No crash; the malformed token simply produces no source.
     assert resp.mention_sources == []
     assert "[[claim:abc]]" in resp.message
+
+
+# ---------------------------------------------------------------------------
+# Suggest-mode UI feedback: bundle summaries + named refs in title/rationale
+# ---------------------------------------------------------------------------
+
+
+def test_service_extracts_group_summaries():
+    from app.services import map_chat_suggest
+    from app.schemas.version_chat_suggest import ChatMode
+    fake = _FakeClient([
+        _ToolBlock("propose_changes", {
+            "suggestions": [{"kind": "relabel_node", "node_ref": "N1",
+                             "new_label": "X", "title": "t", "rationale": "r",
+                             "group": "g1"}],
+            "groups": [{"id": "g1", "summary": "Tidy the naming."}],
+        }),
+    ])
+    with patch.object(map_chat_suggest, "_get_client", return_value=fake):
+        _msg, raw, groups = map_chat_suggest.run_chat_suggest(
+            history=[], user_message="x", map_context_text="...", mode=ChatMode.SUGGEST)
+    assert raw and groups == [{"id": "g1", "summary": "Tidy the naming."}]
+
+
+def test_build_suggestion_resolves_mentions_in_title_and_rationale():
+    from app.api.v2 import process_maps as pm_api
+    ctx, (n1, _n2, _e1, _l1, c1) = _ctx_stub()
+    raw = {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
+           "title": "Rename [[N1]]", "rationale": "Per [[C1]], rename it.",
+           "cited_claim_refs": ["C1"]}
+    s = pm_api._build_suggestion(raw, ctx, index=0)
+    assert f"[[node:{n1}]]" in s.title
+    assert f"[[claim:{c1}]]" in s.rationale
+
+
+def test_endpoint_returns_group_summaries_only_for_used_groups(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    project, version, n1, claim = _seed(db)
+
+    def fake_service(*, history, user_message, map_context_text, mode):
+        return ("Bundled.", [
+            {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
+             "title": "t", "rationale": "r", "group": "g1", "cited_claim_refs": []},
+        ], [
+            {"id": "g1", "summary": "Clean up receiving."},
+            {"id": "ghost", "summary": "Unused group, must be dropped."},
+        ])
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_suggest", fake_service)
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="x", mode="suggest"), db=db)
+    assert [(g.id, g.summary) for g in resp.group_summaries] == [("g1", "Clean up receiving.")]
+
+
+def test_endpoint_mention_sources_include_claims_cited_in_rationale(db):
+    from app.api.v2 import process_maps as pm_api
+    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    from app.models.input import Chunk, DocumentSection, Input
+    from app.models.claim import ClaimCitation
+    project, version, n1, claim = _seed(db)
+    inp = Input(project_id=project.id, name="SOP.pdf", type="document"); db.add(inp); db.flush()
+    sec = DocumentSection(input_id=inp.id, kind="section", order_index=0, ref={"page": 1}, text="t")
+    db.add(sec); db.flush()
+    chunk = Chunk(section_id=sec.id, char_start=0, char_end=1, text="t"); db.add(chunk); db.flush()
+    db.add(ClaimCitation(claim_id=claim.id, chunk_id=chunk.id, quote="t")); db.commit()
+
+    def fake_service(*, history, user_message, map_context_text, mode):
+        return ("No prose mentions here.", [
+            {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
+             "title": "Rename it", "rationale": "Backed by [[C1]].", "cited_claim_refs": ["C1"]},
+        ], [])
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_suggest", fake_service)
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="x", mode="suggest"), db=db)
+    # The claim was cited only in a suggestion rationale (not the prose) — still surfaced.
+    assert any(s.claim_id == claim.id for s in resp.mention_sources)
