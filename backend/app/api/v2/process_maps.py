@@ -958,7 +958,8 @@ def update_node(
             reason=payload.reason.strip(),
             before={f: changed[f][0] for f in changed},
             after={f: changed[f][1] for f in changed},
-            source=ChangeSource.MANUAL.value,
+            source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+            actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
         )
     db.commit()
     db.refresh(node)
@@ -1089,7 +1090,8 @@ def update_edge(
             reason=payload.reason.strip(),
             before={"label": old_label},
             after={"label": edge.label},
-            source=ChangeSource.MANUAL.value,
+            source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+            actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
         )
     db.commit()
     db.refresh(edge)
@@ -1209,7 +1211,8 @@ def update_lane(
             reason=payload.reason.strip(),
             before={"name": old_name},
             after={"name": lane.name},
-            source=ChangeSource.MANUAL.value,
+            source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+            actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
         )
     db.commit()
     db.refresh(lane)

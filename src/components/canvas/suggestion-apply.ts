@@ -1,4 +1,5 @@
 import type { ChatSuggestion, OpKind, SuggestionOp, UUID, ProcessGraph } from "@/lib/types";
+import { parseMentions } from "./mentions";
 
 /** Op kinds that delete or re-point objects. A bundle containing any of these
  * is non-undoable and requires a confirm before applying. */
@@ -9,17 +10,20 @@ export function isDeleteOp(kind: OpKind): boolean {
 }
 
 /** A single executable mutation. Ref fields hold either a real UUID or a
- * tmp placeholder (a producing step's `tempId`); the executor resolves them. */
+ * tmp placeholder (a producing step's `tempId`); the executor resolves them.
+ * `reason` is the change-log reason the executor sends with the PATCH — only
+ * the semantic-edit steps carry it (the backend requires a reason for those);
+ * `planBundle` fills it from the owning suggestion's rationale. */
 export type MutationStep =
-  | { kind: "update_node"; nodeRef: string; name?: string; description?: string; laneRef?: string }
+  | { kind: "update_node"; nodeRef: string; name?: string; description?: string; laneRef?: string; reason?: string }
   | { kind: "delete_node"; nodeRef: string }
   | { kind: "create_node"; tempId: string; laneRef: string | null; nodeType: string; label: string; nearNodeRef: string | null; role?: string | null }
   | { kind: "create_edge"; tempId?: string; fromRef: string; toRef: string; label: string | null }
   | { kind: "delete_edge"; edgeRef: string }
-  | { kind: "update_edge_label"; edgeRef: string; label: string }
+  | { kind: "update_edge_label"; edgeRef: string; label: string; reason?: string }
   | { kind: "reroute_edge"; edgeRef: string; fromRef: string | null; toRef: string | null }
   | { kind: "create_lane"; tempId: string; name: string }
-  | { kind: "update_lane"; laneRef: string; name: string };
+  | { kind: "update_lane"; laneRef: string; name: string; reason?: string };
 
 /** Translate one op into its ordered mutation steps. Pure; no ref resolution. */
 export function opToSteps(op: SuggestionOp): MutationStep[] {
@@ -251,12 +255,65 @@ function orderByDependency(suggestions: ChatSuggestion[]): ChatSuggestion[] {
   return out;
 }
 
+/** Backend `reason` columns are capped at 2000 chars (NodeUpdate/EdgeUpdate/
+ * LaneUpdate). Stay under it so an applied suggestion never 422s on length. */
+const REASON_MAX = 2000;
+
+/** Readable nouns substituted for `[[kind:uuid]]` mentions when flattening a
+ * rationale into a stored reason. The Change Log renders `reason` as raw text
+ * (no mention resolver), so leaving the markup in would surface ugly tokens. */
+const MENTION_NOUN: Record<string, string> = {
+  node: "this step",
+  edge: "this connection",
+  lane: "this lane",
+  claim: "a cited source",
+};
+
+function toPlainText(text: string): string {
+  return parseMentions(text)
+    .map((seg) => (seg.type === "text" ? seg.value : MENTION_NOUN[seg.kind] ?? ""))
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cap(text: string): string {
+  return text.length <= REASON_MAX ? text : `${text.slice(0, REASON_MAX - 1).trimEnd()}…`;
+}
+
+/** The change-log reason to store when an applied suggestion edits a semantic
+ * field. Prefers the suggestion's rationale (the card's "Reasoning" text),
+ * mention-stripped to plain prose; falls back to the title when the rationale
+ * is empty so the reason is never blank (the backend rejects empty reasons). */
+export function reasonForSuggestion(s: ChatSuggestion): string {
+  const rationale = toPlainText(s.rationale ?? "");
+  if (rationale) return cap(rationale);
+  const title = toPlainText(s.title ?? "");
+  return cap(title ? `Applied AI suggestion: ${title}` : "Applied AI suggestion");
+}
+
+/** Attach the owning suggestion's reason to the semantic-edit steps that need
+ * one; other step kinds (create/delete/connect) auto-log on the backend. */
+function withReason(step: MutationStep, reason: string): MutationStep {
+  switch (step.kind) {
+    case "update_node":
+    case "update_edge_label":
+    case "update_lane":
+      return { ...step, reason };
+    default:
+      return step;
+  }
+}
+
 /** Build an ordered, validated plan for one bundle. Suggestions are reordered so
  * tmp producers precede consumers; a tmp ref produced ANYWHERE in the plan counts
  * as in-plan (order-independent), and every other ref must exist in the current
  * graph index, else the bundle is marked unapplyable. */
 export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
-  const rawSteps = orderByDependency(bundle.suggestions).flatMap((s) => opToSteps(s.op));
+  const rawSteps = orderByDependency(bundle.suggestions).flatMap((s) => {
+    const reason = reasonForSuggestion(s);
+    return opToSteps(s.op).map((step) => withReason(step, reason));
+  });
 
   // Resolve decompose sub-step roles to lane ids: if a create_node step has a
   // non-null `role` that matches an existing lane by name, set its laneRef so

@@ -51,6 +51,51 @@ def test_update_node_multifield_logs_single_event_highest_priority(db):
     assert "description" in ev.after
 
 
+def test_update_node_ai_applied_records_chat_source_and_ai_actor(db):
+    # An applied chat suggestion supplies the rationale as the reason and marks
+    # ai_applied so the trail attributes it to the AI, not a manual user edit.
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    pm_api.update_node(project=project, node_id=n1.id,
+                       payload=NodeUpdate(name="Receive PO", reason="Matches source wording", ai_applied=True),
+                       db=db)
+    ev = max(_events_for(db, n1.id), key=lambda e: e.created_at)
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.reason == "Matches source wording"
+
+
+def test_update_edge_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    pm_api.update_edge(project=project, edge_id=edge.id,
+                       payload=EdgeUpdate(label="if approved", reason="branch label", ai_applied=True),
+                       db=db)
+    ev = max(_events_for(db, edge.id), key=lambda e: e.created_at)
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+
+
+def test_update_lane_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    lane = db.get(ProcessLane, n1.lane_id)
+    pm_api.update_lane(project=project, lane_id=lane.id,
+                       payload=LaneUpdate(name="Operations", reason="Owner is Ops", ai_applied=True),
+                       db=db)
+    ev = max(_events_for(db, lane.id), key=lambda e: e.created_at)
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+
+
+def test_update_node_manual_default_stays_manual_user(db):
+    # Without ai_applied the edit is a manual user edit (default attribution).
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    pm_api.update_node(project=project, node_id=n1.id,
+                       payload=NodeUpdate(name="Receive PO", reason="Per interview"), db=db)
+    ev = max(_events_for(db, n1.id), key=lambda e: e.created_at)
+    assert ev.source == "manual"
+    assert ev.actor_kind == "user"
+
+
 def test_update_node_cosmetic_only_logs_nothing_and_needs_no_reason(db):
     project, version, n1, claim = _seed_version_for_endpoint(db)
     before = len(_events_for(db, n1.id))

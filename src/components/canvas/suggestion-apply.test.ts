@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { opToSteps, isDeleteOp, bundleSuggestions, indexGraph, planBundle } from "./suggestion-apply";
+import { opToSteps, isDeleteOp, bundleSuggestions, indexGraph, planBundle, reasonForSuggestion } from "./suggestion-apply";
 import type { SuggestionOp, ChatSuggestion, ProcessGraph } from "@/lib/types";
 import type { GraphIndex } from "./suggestion-apply";
 
@@ -249,5 +249,83 @@ describe("planBundle", () => {
     const createStep = plan.steps.find((s) => s.kind === "create_node");
     if (!createStep || createStep.kind !== "create_node") throw new Error("Expected a create_node step");
     expect(createStep.laneRef).toBeNull();
+  });
+});
+
+// A suggestion with a custom title + rationale (the `sg` helper hardcodes both).
+const sgWith = (
+  id: string,
+  opOverrides: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] },
+  extra: { title?: string; rationale?: string }
+): ChatSuggestion => ({
+  id,
+  group: null,
+  title: extra.title ?? id,
+  op: op(opOverrides),
+  affected_refs: [],
+  rationale: extra.rationale ?? "",
+  cited_claim_ids: [],
+});
+
+describe("reasonForSuggestion", () => {
+  it("uses the rationale, stripping [[kind:uuid]] mentions to readable text", () => {
+    const s = sgWith("a", { kind: "relabel_node", node_ref: "N1", new_label: "X" }, {
+      rationale: "Per [[claim:11111111-1111-1111-1111-111111111111]], rename [[node:22222222-2222-2222-2222-222222222222]].",
+    });
+    const reason = reasonForSuggestion(s);
+    expect(reason).not.toMatch(/\[\[/); // no raw mention markup survives
+    expect(reason).toContain("a cited source");
+    expect(reason).toContain("this step");
+  });
+
+  it("falls back to 'Applied AI suggestion: <title>' (title also stripped) when rationale is empty", () => {
+    const s = sgWith("a", { kind: "relabel_node", node_ref: "N1", new_label: "X" }, {
+      title: "Rename [[node:22222222-2222-2222-2222-222222222222]]",
+      rationale: "",
+    });
+    const reason = reasonForSuggestion(s);
+    expect(reason).toMatch(/^Applied AI suggestion: Rename this step$/);
+  });
+
+  it("caps the stored reason at the backend's 2000-char max_length", () => {
+    const s = sgWith("a", { kind: "relabel_node", node_ref: "N1", new_label: "X" }, {
+      rationale: "x".repeat(5000),
+    });
+    expect(reasonForSuggestion(s).length).toBeLessThanOrEqual(2000);
+  });
+});
+
+describe("planBundle reason threading", () => {
+  it("attaches the suggestion's reason to update_node steps", () => {
+    const bundle = bundleSuggestions([
+      sgWith("a", { kind: "relabel_node", node_ref: "N1", new_label: "Receive PO" }, {
+        rationale: "Matches the source wording.",
+      }),
+    ])[0];
+    const step = planBundle(bundle, idx()).steps[0];
+    if (step.kind !== "update_node") throw new Error("expected update_node step");
+    expect(step.reason).toBe("Matches the source wording.");
+  });
+
+  it("attaches the reason to update_edge_label and update_lane steps", () => {
+    const edgePlan = planBundle(
+      bundleSuggestions([
+        sgWith("e", { kind: "relabel_edge", edge_ref: "E1", new_label: "if approved" }, { rationale: "Branch is conditional." }),
+      ])[0],
+      idx()
+    );
+    const edgeStep = edgePlan.steps[0];
+    if (edgeStep.kind !== "update_edge_label") throw new Error("expected update_edge_label step");
+    expect(edgeStep.reason).toBe("Branch is conditional.");
+
+    const lanePlan = planBundle(
+      bundleSuggestions([
+        sgWith("l", { kind: "rename_lane", lane_ref: "L1", name: "Operations" }, { rationale: "Owner is Ops." }),
+      ])[0],
+      idx()
+    );
+    const laneStep = lanePlan.steps[0];
+    if (laneStep.kind !== "update_lane") throw new Error("expected update_lane step");
+    expect(laneStep.reason).toBe("Owner is Ops.");
   });
 });
