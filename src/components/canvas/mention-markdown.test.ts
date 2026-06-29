@@ -3,10 +3,12 @@ import { mentionsToMarkdown } from "./mention-markdown";
 
 const N = "11111111-1111-1111-1111-111111111111";
 const C = "33333333-3333-3333-3333-333333333333";
+const L = "44444444-4444-4444-4444-444444444444";
 
 describe("mentionsToMarkdown", () => {
   const labels = new Map([[N, "Review Invoice"]]);
   const sources = new Map([[C, "SOP.pdf"]]);
+  const lanes = new Map([[L, "Procurement Manager"]]);
 
   it("passes through plain markdown untouched", () => {
     expect(mentionsToMarkdown("**bold** and a list", labels, sources)).toBe("**bold** and a list");
@@ -26,8 +28,18 @@ describe("mentionsToMarkdown", () => {
       `[step](poet://node/x) [source](poet://claim/y)`
     );
   });
-  it("renders any stray edge mention as plain endpoint-less text (edges dropped)", () => {
-    expect(mentionsToMarkdown(`[[edge:z]] gone`, labels, sources)).toBe("gone");
+  it("renders an edge mention as a clickable 'connection' link (no name)", () => {
+    expect(mentionsToMarkdown(`[[edge:z]] here`, labels, sources)).toBe(
+      `[connection](poet://edge/z) here`
+    );
+  });
+  it("renders a lane mention with its name, falling back to 'lane'", () => {
+    expect(mentionsToMarkdown(`to [[lane:${L}]]`, labels, sources, lanes)).toBe(
+      `to [Procurement Manager](poet://lane/${L})`
+    );
+    expect(mentionsToMarkdown(`to [[lane:other]]`, labels, sources, lanes)).toBe(
+      `to [lane](poet://lane/other)`
+    );
   });
   it("escapes both [ and ] in a label so the link stays valid", () => {
     const l = new Map([[N, "Step [final]"]]);

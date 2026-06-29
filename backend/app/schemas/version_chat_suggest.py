@@ -130,7 +130,14 @@ class MentionSource(BaseModel):
     quote: str | None = None
 
 
+class GroupSummary(BaseModel):
+    """One-line purpose of a bundle of related suggestions sharing a `group`."""
+    id: str = Field(min_length=1)
+    summary: str = Field(min_length=1, max_length=500)
+
+
 class ChatSuggestResponse(BaseModel):
     message: str
     suggestions: list[ChatSuggestion] = Field(default_factory=list)
     mention_sources: list[MentionSource] = Field(default_factory=list)
+    group_summaries: list[GroupSummary] = Field(default_factory=list)

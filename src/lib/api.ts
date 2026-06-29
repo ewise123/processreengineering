@@ -63,6 +63,7 @@ import type {
   VersionDiff,
   VersionSummary,
 } from "@/lib/types";
+import { formatErrorDetail } from "@/lib/error-detail";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -83,10 +84,12 @@ async function request<T>(
     body,
   });
   if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`;
+    const fallback = `${res.status} ${res.statusText}`;
+    let detail = fallback;
     try {
-      const data = (await res.json()) as { detail?: string };
-      if (data.detail) detail = data.detail;
+      // FastAPI 422s return `detail` as an array of validation errors; pass the
+      // whole body to the formatter so it never stringifies to "[object Object]".
+      detail = formatErrorDetail(await res.json(), fallback);
     } catch {
       // ignore non-JSON error bodies
     }

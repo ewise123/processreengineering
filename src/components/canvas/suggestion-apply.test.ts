@@ -204,7 +204,7 @@ describe("planBundle", () => {
     const bundle = bundleSuggestions([sg("a", { kind: "relabel_node", node_ref: "GONE", new_label: "X" })])[0];
     const plan = planBundle(bundle, idx());
     expect(plan.applyable).toBe(false);
-    expect(plan.reason).toMatch(/no longer/i);
+    expect(plan.reason).toMatch(/not on the current map/i);
   });
   it("marks a bundle unapplyable when a consumed tmp is never produced", () => {
     // "ghost" is neither produced in-plan nor a real graph ref, so it trips the
@@ -212,7 +212,7 @@ describe("planBundle", () => {
     const bundle = bundleSuggestions([sg("a", { kind: "add_edge", from_ref: "N1", to_ref: "ghost" })])[0];
     const plan = planBundle(bundle, idx());
     expect(plan.applyable).toBe(false);
-    expect(plan.reason).toMatch(/no longer/i);
+    expect(plan.reason).toMatch(/not on the current map/i);
   });
   it("classifies a delete bundle as non-undoable but applyable", () => {
     const bundle = bundleSuggestions([sg("a", { kind: "remove_edge", edge_ref: "E1" })])[0];

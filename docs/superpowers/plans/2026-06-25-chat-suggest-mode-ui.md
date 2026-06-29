@@ -443,6 +443,16 @@ describe("planBundle", () => {
     expect(plan.undoable).toBe(true);
     expect(plan.steps.map((s) => s.kind)).toEqual(["create_node", "create_edge"]);
   });
+  it("reorders so a tmp producer precedes its consumer even when emitted consumer-first", () => {
+    // Backend emits the add_edge (consumer of t1) BEFORE the add_node (producer).
+    const bundle = bundleSuggestions([
+      sg("b", { kind: "add_edge", from_ref: "N1", to_ref: "t1" }),
+      sg("a", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "New" }),
+    ])[0];
+    const plan = planBundle(bundle, idx());
+    expect(plan.applyable).toBe(true);
+    expect(plan.steps.map((s) => s.kind)).toEqual(["create_node", "create_edge"]);
+  });
   it("marks a bundle unapplyable when a real ref no longer exists", () => {
     const bundle = bundleSuggestions([sg("a", { kind: "relabel_node", node_ref: "GONE", new_label: "X" })])[0];
     const plan = planBundle(bundle, idx());
@@ -514,18 +524,49 @@ const SET_BY_KIND: Record<"node" | "edge" | "lane", keyof Pick<GraphIndex, "node
   lane: "laneIds",
 };
 
-/** Build an ordered, validated plan for one bundle. Refs that match a tmp
- * produced earlier in the plan are treated as in-plan; all other refs must
- * exist in the current graph index. */
+/** Order a bundle's suggestions so a tmp_id producer always precedes any
+ * suggestion that consumes it. `bundleSuggestions` preserves document order,
+ * and the backend usually emits producer-first — but we must not rely on it,
+ * because the executor resolves tmp refs at run time as create-steps execute.
+ * Stable DFS topological order; cycles (shouldn't happen) are broken safely. */
+function orderByDependency(suggestions: ChatSuggestion[]): ChatSuggestion[] {
+  const producerOf = new Map<string, ChatSuggestion>();
+  for (const s of suggestions) if (s.op.temp_id) producerOf.set(s.op.temp_id, s);
+  const out: ChatSuggestion[] = [];
+  const done = new Set<string>();
+  const onStack = new Set<string>();
+  const visit = (s: ChatSuggestion) => {
+    if (done.has(s.id) || onStack.has(s.id)) return; // skip finished / break cycles
+    onStack.add(s.id);
+    for (const ref of consumedRefs(s.op)) {
+      const producer = producerOf.get(ref);
+      if (producer && producer.id !== s.id) visit(producer);
+    }
+    onStack.delete(s.id);
+    done.add(s.id);
+    out.push(s);
+  };
+  for (const s of suggestions) visit(s);
+  return out;
+}
+
+/** Build an ordered, validated plan for one bundle. Suggestions are reordered so
+ * tmp producers precede consumers; a tmp ref produced ANYWHERE in the plan counts
+ * as in-plan (order-independent), and every other ref must exist in the current
+ * graph index, else the bundle is marked unapplyable. */
 export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
-  const steps = bundle.suggestions.flatMap((s) => opToSteps(s.op));
-  const produced = new Set<string>();
+  const steps = orderByDependency(bundle.suggestions).flatMap((s) => opToSteps(s.op));
+  // Every tmp produced anywhere in this plan — validation is order-independent.
+  const producedAll = new Set<string>();
+  for (const step of steps) {
+    if ("tempId" in step && step.tempId) producedAll.add(step.tempId);
+  }
   let applyable = true;
   let reason: string | undefined;
 
   for (const step of steps) {
     for (const { ref, set } of stepRealRefs(step)) {
-      if (produced.has(ref)) continue; // created earlier in this plan
+      if (producedAll.has(ref)) continue; // created within this plan
       if (!index[SET_BY_KIND[set]].has(ref)) {
         applyable = false;
         reason = `A referenced ${set} no longer exists on the map.`;
@@ -533,11 +574,6 @@ export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
       }
     }
     if (!applyable) break;
-    if ((step.kind === "create_node" || step.kind === "create_lane") && step.tempId) {
-      produced.add(step.tempId);
-    } else if (step.kind === "create_edge" && step.tempId) {
-      produced.add(step.tempId);
-    }
   }
 
   return { bundleId: bundle.id, steps, undoable: bundle.undoable, applyable, reason };

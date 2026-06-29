@@ -159,10 +159,8 @@ export interface BpmnCanvasHandle {
   /** Select a node (drives Properties panel + chat context) from outside
    * the canvas, e.g. clicking a node link in the Issues tab. */
   selectNode: (id: UUID) => void;
-  /** Clear the current selection (used by the chat context tab's ✕). */
+  /** Clear the current selection (used by the chat when a message is sent). */
   clearSelection: () => void;
-  /** Remove a single object id from the current selection (chat context ✕). */
-  deselectId: (id: UUID) => void;
   /** Pan/zoom to an object by id, select it, and flash it briefly. Handles
    * both nodes and edges (used by chat mention links). */
   navigateTo: (ref: { kind: "node" | "edge"; id: UUID }) => void;
@@ -1115,7 +1113,23 @@ function BpmnCanvas({
     onSaveStatusChange?.(status, error);
   }, [status, error, onSaveStatusChange]);
 
-  // Notify parent of selection so it can drive side panels.
+  // A signature of the single-selected node's panel-relevant fields. The emit
+  // effect below depends on it so a selected node edited from ELSEWHERE — an
+  // applied chat suggestion, an undo/redo — re-emits a fresh selection and the
+  // Properties panel reflects it without a reselect. Excludes position so a
+  // plain drag of the selected node doesn't churn the selection; a cross-lane
+  // drag changes laneId and re-emits, which is what we want.
+  const selectedNodeSig = useMemo(() => {
+    if (selectedIds.size !== 1) return null;
+    const id = [...selectedIds][0];
+    const n = nodes.find((x) => x.id === id);
+    return n
+      ? JSON.stringify([n.label, n.kind, n.type, n.laneId, n.description ?? null])
+      : null;
+  }, [selectedIds, nodes]);
+
+  // Notify parent of selection so it can drive side panels. `selectedNodeSig` is
+  // a re-emit trigger (the body reads the live node via nodesRef), not used here.
   useEffect(() => {
     if (!onSelectionChange) return;
     const ids = [...selectedIds];
@@ -1145,7 +1159,7 @@ function BpmnCanvas({
     const nodeIds = ids.filter((id) => nodesRef.current.some((n) => n.id === id));
     const edgeIds = ids.filter((id) => edgesRef.current.some((e) => e.id === id));
     onSelectionChange({ kind: "multi", nodeIds, edgeIds });
-  }, [selectedIds, onSelectionChange]);
+  }, [selectedIds, onSelectionChange, selectedNodeSig]);
 
   useEffect(() => {
     onCountsChange?.({
@@ -1875,12 +1889,6 @@ function BpmnCanvas({
         focusNodeInViewport(id);
       },
       clearSelection,
-      deselectId: (id) =>
-        setSelectedIds((prev) => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        }),
       navigateTo: (refTarget) => {
         setSelectedIds(new Set([refTarget.id]));
         if (refTarget.kind === "edge") focusEdgeInViewport(refTarget.id);
