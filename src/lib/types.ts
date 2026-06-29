@@ -71,6 +71,7 @@ export interface Claim {
   subject: string;
   normalized: Record<string, unknown>;
   confidence: number | null;
+  source: string;
   created_at: string;
   updated_at: string;
 }
@@ -83,6 +84,7 @@ export interface ClaimConflict {
   detected_by: string;
   resolution_status: string;
   resolution_notes: string | null;
+  detection_reason: string | null;
   created_at: string;
 }
 
@@ -108,13 +110,9 @@ export interface ProcessModel {
   updated_at: string;
   latest_version_id: UUID | null;
   latest_version_number: number | null;
-  latest_source_segment_id?: UUID | null;
-  latest_source_run_status?:
-    | "draft"
-    | "accepted"
-    | "archived"
-    | "superseded"
-    | null;
+  process_id?: UUID | null;
+  process_name?: string | null;
+  unreconciled_claim_count?: number;
 }
 
 export interface ProcessVersion {
@@ -217,6 +215,7 @@ export interface LaneUpdate {
   height_px?: number;
   color?: string;
   collapsed?: boolean;
+  reason?: string;
 }
 
 export interface NodeUpdate {
@@ -226,6 +225,7 @@ export interface NodeUpdate {
   x?: number;
   relative_y?: number;
   description?: string;
+  reason?: string;
 }
 
 export interface NodeCreate {
@@ -246,6 +246,7 @@ export interface EdgeUpdate {
   label?: string | null;
   bend_x?: number | null;
   bend_y?: number | null;
+  reason?: string;
 }
 
 export interface CitationDetail {
@@ -323,6 +324,7 @@ export interface NodeIssueDetail {
   resolution_status: string;
   detected_by: string;
   resolution_notes: string | null;
+  detection_reason: string | null;
   this_claim: ClaimSummary;
   other_claim: ClaimSummary;
 }
@@ -428,7 +430,7 @@ export interface ProcessMapGenerateRequest {
   focus?: string | null;
   map_type?: string | null;
   scope_input_ids?: UUID[] | null;
-  segment_id?: UUID | null;
+  process_id?: UUID | null;
 }
 
 export interface ProcessMapGenerateResult {
@@ -441,6 +443,120 @@ export interface ProcessMapGenerateResult {
   edge_count: number;
   node_link_count: number;
   bpmn_xml_size: number;
+}
+
+export interface Process {
+  id: UUID;
+  project_id: UUID;
+  name: string;
+  description: string;
+  order_index: number;
+  status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+  claim_count: number;
+  map_count: number;
+}
+
+export interface TriageClaim {
+  id: UUID;
+  kind: string;
+  subject: string;
+  source: string;
+}
+
+export interface ProcessSuggestion {
+  id: UUID;
+  batch_id: UUID;
+  project_id: UUID;
+  kind: "process_discovery" | "map_reconcile";
+  process_id: UUID | null;
+  version_id: UUID | null;
+  op: string;
+  payload: Record<string, unknown>;
+  rationale: string;
+  confidence: number | null;
+  status: "pending" | "accepted" | "rejected";
+  outcome: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface SuggestBatchResult {
+  batch_id: UUID;
+  suggestion_count: number;
+}
+
+export interface ClaimMatchCandidate {
+  claim_id: UUID;
+  subject: string;
+  kind: string;
+  confidence: number | null;
+  rationale: string;
+  in_other_processes: boolean;
+}
+
+export interface SuggestClaimsResult {
+  candidates: ClaimMatchCandidate[];
+}
+
+export type ReconcileOp =
+  | "add_step"
+  | "recite_node"
+  | "flag_stale_node"
+  | "relabel_node";
+
+export interface ReconcileSuggestion {
+  id: UUID;
+  batch_id: UUID;
+  op: ReconcileOp;
+  /** Op-specific payload with resolved UUIDs. See the SP-7c op vocabulary. */
+  payload: Record<string, unknown>;
+  rationale: string;
+  confidence: number | null;
+  status: "pending" | "accepted" | "rejected";
+}
+
+export interface ReconcileBatch {
+  /** null when the delta was empty and no LLM call was made. */
+  batch_id: UUID | null;
+  version_id: UUID;
+  empty: boolean;
+  suggestions: ReconcileSuggestion[];
+}
+
+export interface AcceptSuggestionResult {
+  suggestion_id: UUID;
+  status: string;
+  outcome: string;
+  process_id?: UUID | null;
+  linked?: number;
+}
+
+export interface BatchAcceptResult {
+  batch_id: UUID;
+  accepted: number;
+  skipped: number;
+}
+
+export type ChangeActorKind = "user" | "ai" | "system";
+export type ChangeSource = "generation" | "manual" | "chat" | "reconcile" | "import" | "migration";
+
+export interface ChangeEvent {
+  id: UUID;
+  created_at: string;
+  target_type: "node" | "edge" | "lane" | "version";
+  target_id: UUID;
+  kind: string;
+  reason: string;
+  actor_kind: ChangeActorKind;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  cited_claim_ids: UUID[] | null;
+  has_thinking: boolean;
+  reasoning_trace: unknown;
+  source: ChangeSource;
+  version_id: UUID | null;
 }
 
 export const INPUT_TYPES = [
@@ -481,48 +597,7 @@ export const CLAIM_KINDS = [
   "gateway_condition",
 ] as const;
 
-export interface ProcessSegment {
-  id: UUID;
-  detection_run_id: UUID;
-  name: string;
-  description: string;
-  order_index: number;
-  claim_count: number;
-  confidence: number | null;
-  is_unassigned: boolean;
-  claims: Array<{ id: UUID; kind: string; subject: string }>;
-}
-
-export interface DetectionRunDetail {
-  id: UUID;
-  project_id: UUID;
-  status: "draft" | "accepted" | "archived" | "superseded";
-  claim_count_at_run: number;
-  model_used: string | null;
-  reasoning_summary: string | null;
-  created_at: string;
-  segments: ProcessSegment[];
-  unassigned_segment: ProcessSegment;
-}
-
-export interface DetectionRunListRow {
-  id: UUID;
-  status: "draft" | "accepted" | "archived" | "superseded";
-  claim_count_at_run: number;
-  segment_count: number;
-  created_at: string;
-}
-
-export interface AcceptDetectionRunResult {
-  run_id: UUID;
-  accepted_segment_count: number;
-}
-
-export interface DetectProcessesRequest {
-  scope_input_ids?: UUID[] | null;
-}
-
-export type AiEditAction = "relabel" | "describe" | "validate" | "suggest_next";
+export type AiEditAction = "relabel" | "describe" | "validate" | "suggest_next" | "decompose";
 
 export interface RelabelProposal {
   proposed_name: string;
@@ -559,12 +634,42 @@ export interface SuggestNextProposal {
   steps: SuggestedStep[];
 }
 
+export interface SubStep {
+  proposed_name: string;
+  proposed_type: string;
+  role: string;
+  edge_label: string | null;
+  rationale: string;
+  cited_claim_ids: UUID[];
+}
+
+export interface DecomposeProposal {
+  sub_steps: SubStep[];
+}
+
+export interface DecomposeRequest {
+  sub_steps: SubStep[];
+}
+
+export interface DecomposeResult {
+  child_model_id: UUID;
+  child_version_id: UUID;
+}
+
+export interface AncestryCrumb {
+  model_id: UUID;
+  version_id: UUID | null;
+  level: string;
+  label: string;
+}
+
 export interface AiEditResponse {
   action: AiEditAction;
   relabel?: RelabelProposal | null;
   describe?: DescribeProposal | null;
   validate?: ValidateProposal | null;
   suggest_next?: SuggestNextProposal | null;
+  decompose?: DecomposeProposal | null;
 }
 
 export interface AiProposedStepRequest {
@@ -591,4 +696,64 @@ export interface ViewerTarget {
   inputName: string;
   sectionRef: Record<string, unknown> | null;
   quote: string | null;
+}
+
+export interface ClaimCreate {
+  kind: string;
+  subject: string;
+  normalized?: Record<string, unknown>;
+}
+
+export interface ClaimUpdate {
+  kind?: string;
+  subject?: string;
+  normalized?: Record<string, unknown>;
+}
+
+export interface ClaimImpactMap {
+  model_id: UUID;
+  name: string;
+}
+
+export interface ClaimImpact {
+  claim_id: UUID;
+  node_link_count: number;
+  maps: ClaimImpactMap[];
+}
+
+export interface ConflictResolve {
+  resolution_status: string;
+  resolution_notes?: string | null;
+}
+
+export interface NodeClaimLinkRequest {
+  claim_ids: UUID[];
+  link_kind?: string;
+}
+
+export interface NodeClaimLinkResult {
+  node_id: UUID;
+  linked_claim_ids: UUID[];
+  added_count: number;
+  already_linked_count: number;
+}
+
+export interface BlankMapRequest {
+  name: string;
+  level: string;
+}
+
+export interface BlankMapResult {
+  model_id: UUID;
+  version_id: UUID;
+  name: string;
+  level: string;
+  lane_id: UUID;
+  start_node_id: UUID;
+  end_node_id: UUID;
+}
+
+export interface ChangeLogPage {
+  items: ChangeEvent[];
+  next_cursor: string | null;
 }

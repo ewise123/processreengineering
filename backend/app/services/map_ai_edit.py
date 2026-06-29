@@ -123,6 +123,38 @@ SUGGEST_TOOL = {
     },
 }
 
+DECOMPOSE_TOOL = {
+    "name": "propose_decompose",
+    "description": (
+        "Break the selected step into the finer sub-steps that compose it, grounded in the "
+        "sources. Order them as they flow. Empty array if the sources don't support a breakdown."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "sub_steps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "proposed_name": {"type": "string"},
+                        "proposed_type": {"type": "string", "enum": _NODE_TYPES},
+                        "role": {
+                            "type": "string",
+                            "description": "Actor/system performing this sub-step; becomes a child-map lane.",
+                        },
+                        "edge_label": {"type": ["string", "null"]},
+                        "rationale": {"type": "string"},
+                        "cited_claim_refs": _CITED,
+                    },
+                    "required": ["proposed_name", "proposed_type", "role", "rationale", "cited_claim_refs"],
+                },
+            }
+        },
+        "required": ["sub_steps"],
+    },
+}
+
 _ACTION_INSTRUCTIONS = {
     "relabel": (
         "Focus on the currently selected step. Propose a clearer, source-faithful label. "
@@ -140,6 +172,12 @@ _ACTION_INSTRUCTIONS = {
     "suggest_next": (
         "Focus on the currently selected step. Propose plausible NEXT steps grounded in the "
         "sources. If the sources don't support a next step, return an empty array rather than guessing."
+    ),
+    "decompose": (
+        "Focus on the currently selected step. Break it into the concrete sub-steps that "
+        "compose it — the level of detail one tier finer. Order them as they flow and give "
+        "each a role (the actor or system that performs it). Use only what the sources "
+        "support; if they don't support a breakdown, return an empty array rather than inventing one."
     ),
 }
 
@@ -196,3 +234,7 @@ def report_gaps(*, map_context_text: str, selected_label: str | None) -> dict:
 
 def propose_next_steps(*, map_context_text: str, selected_label: str | None) -> dict:
     return _run(SUGGEST_TOOL, "suggest_next", map_context_text, selected_label)
+
+
+def propose_decompose(*, map_context_text: str, selected_label: str | None) -> dict:
+    return _run(DECOMPOSE_TOOL, "decompose", map_context_text, selected_label)

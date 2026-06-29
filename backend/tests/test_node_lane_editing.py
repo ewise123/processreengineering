@@ -82,7 +82,7 @@ def test_patch_node_type_persists(client, db):
     proj, _version, _lane, node, _claim = _seed_map(db)
     resp = client.patch(
         f"/api/v2/projects/{proj.id}/nodes/{node.id}",
-        json={"type": "gateway_exclusive"},
+        json={"type": "gateway_exclusive", "reason": "Convert task to gateway"},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["type"] == "gateway_exclusive"
@@ -103,7 +103,7 @@ def test_patch_node_type_preserves_claim_links(client, db):
     proj, _v, _l, node, claim = _seed_map(db)
     client.patch(
         f"/api/v2/projects/{proj.id}/nodes/{node.id}",
-        json={"type": "subprocess"},
+        json={"type": "subprocess", "reason": "Convert task to subprocess"},
     )
     db.expire_all()
     links = (

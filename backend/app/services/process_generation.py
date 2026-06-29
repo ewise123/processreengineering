@@ -140,6 +140,81 @@ LEVEL_INSTRUCTIONS = {
 }
 
 
+BEST_PRACTICE_PROMPT = """You are a business process analyst. Produce a BPMN 2.0 process map for a NAMED process using GENERIC, industry best-practice knowledge — there are no client documents to reference. Design the process the way a well-run organization would typically run it.
+
+Return ONLY a valid JSON object in this exact format — no markdown, no explanation:
+{
+  "process_name": "Short name of the process",
+  "steps": [
+    {
+      "id": "step_1",
+      "type": "userTask",
+      "name": "Imperative verb + object (max 40 chars)",
+      "role": "Actor or department performing this step",
+      "claim_refs": []
+    }
+  ],
+  "gateways": [
+    {
+      "id": "gw_1",
+      "type": "exclusive",
+      "name": "Decision question?",
+      "after_step": "step_2",
+      "yes_label": "Yes",
+      "no_label": "No",
+      "yes_to": "step_3",
+      "no_to": "step_4",
+      "claim_refs": []
+    }
+  ]
+}
+
+BPMN 2.0 RULES — follow these precisely:
+
+TASK TYPES — choose the most accurate for each step:
+  "userTask"         — a human performs the activity (default for most manual steps)
+  "serviceTask"      — an automated system or IT service performs the activity with no human intervention
+  "manualTask"       — physical or offline work performed by a person without a system
+  "businessRuleTask" — applying a business rule, policy check, or automated decision engine
+  "sendTask"         — sending a message, email, or notification to an external party
+  "receiveTask"      — waiting to receive a message, document, or trigger from an external party
+
+TASK NAMING — imperative verb + object (the action performed, not a noun phrase):
+  CORRECT: "Review application", "Submit claim form", "Approve payment"
+  WRONG:   "Application review", "Claim form submission", "Payment approval"
+  Do NOT start the name with the actor/role — the actor is shown in the swimlane header.
+
+GATEWAY TYPES:
+  "exclusive"  — exactly one outgoing path (XOR — most decisions)
+  "parallel"   — ALL outgoing paths simultaneously (AND)
+  "inclusive"  — one or more outgoing paths (OR)
+
+GATEWAY NAMING — must be a question:
+  CORRECT: "Application complete?", "Approval granted?", "Risk level acceptable?"
+  WRONG:   "Check application", "Decision", "Approval"
+
+GATEWAY CONDITIONS — always use exactly "Yes" and "No" for yes_label/no_label.
+  For parallel gateways, omit yes_label and no_label.
+
+GATEWAY ROUTING:
+- yes_to is ALWAYS the step immediately after the gateway in sequence — do not set explicitly.
+- no_to MUST point to a DIFFERENT step than the one immediately after the gateway. If unclear, omit (No will route to End).
+- A gateway with both Yes and No going to the same step is invalid — use a task instead.
+
+BEST-PRACTICE RULES:
+- These steps and gateways are best-practice ASSUMPTIONS, not facts drawn from any document.
+- claim_refs MUST always be an empty array [] — there are no claims to cite.
+- Cover the typical end-to-end flow a competent team would follow for this process.
+
+ADDITIONAL RULES:
+- The number of steps is defined by the detail level instruction below — follow it precisely.
+- Step IDs must be unique snake_case strings.
+- The "role" field is REQUIRED for every step. If unclear, use "Process Team".
+- Group related steps under the same role name so swimlanes are meaningful.
+- Include gateways only where there is a clear decision or split.
+- If no clear branches exist, return an empty gateways array."""
+
+
 @dataclass
 class GeneratedStructure:
     process_name: str
@@ -211,6 +286,14 @@ def generate_structure_from_claims(
         f"Claims:\n{numbered}"
     )
 
+    return _call_and_parse(system_prompt, user_message, process_name)
+
+
+def _call_and_parse(
+    system_prompt: str, user_message: str, process_name: str | None
+) -> GeneratedStructure:
+    """Run one Claude completion and parse its JSON into a GeneratedStructure.
+    Shared by the claim-based and best-practice generators."""
     client = _get_client()
     message = client.messages.create(
         model=GENERATION_MODEL,
@@ -239,3 +322,40 @@ def generate_structure_from_claims(
         steps=parsed.get("steps", []) or [],
         gateways=parsed.get("gateways", []) or [],
     )
+
+
+def generate_structure_from_best_practices(
+    *,
+    level: str = "2",
+    process_name: str,
+    focus: str | None = None,
+    map_type: str | None = None,
+) -> GeneratedStructure:
+    """Call Claude to produce a starter structure from GENERIC best-practice
+    knowledge for a named process — no claims, no client documents. Every
+    emitted step/gateway carries an empty claim_refs array."""
+    level_note = LEVEL_INSTRUCTIONS.get(level, LEVEL_INSTRUCTIONS["2"])
+    system_prompt = (
+        BEST_PRACTICE_PROMPT + f"\n\nIMPORTANT — Detail level instruction:\n{level_note}"
+    )
+
+    focus_note = ""
+    if focus:
+        focus_note += f'\n\nNarrow the scope to: "{focus}".'
+    if map_type == "current_state":
+        focus_note += (
+            "\n\nMAP TYPE — CURRENT STATE: Show how this process TYPICALLY operates today, "
+            "including the manual steps and handoffs a common implementation would have."
+        )
+    elif map_type == "future_state":
+        focus_note += (
+            "\n\nMAP TYPE — FUTURE STATE: Design the OPTIMISED best-practice process, "
+            "with inefficiencies removed and automation applied where sensible."
+        )
+
+    user_message = (
+        f'Generate the best-practice BPMN structure for the process named "{process_name}".'
+        f"{focus_note}\n\nThe process_name field should be: \"{process_name}\"."
+    )
+
+    return _call_and_parse(system_prompt, user_message, process_name)

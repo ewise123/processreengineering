@@ -60,6 +60,8 @@ export function AiEditCacheProvider({ children }: { children: ReactNode }) {
       });
       try {
         const res = await api.aiEditNode(projectId, modelId, versionId, nodeId, action);
+        // suggest_next manages per-card removal via pendingSteps; decompose is a
+        // single-accept card read straight off result.decompose (no pendingSteps).
         patch(nodeId, {
           loading: false,
           loadingAction: null,

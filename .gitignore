@@ -50,3 +50,19 @@ __pycache__/
 
 # client interview transcripts / sample source documents — keep local only
 *_transcript.txt
+/docs/transcripts/
+
+# agentation + AI tooling MCP configs — local dev only
+.mcp.json
+.agents/
+.codex/
+.cursor/
+.gemini/
+.zed/
+.vscode/mcp.json
+opencode.json
+config/mcporter.json
+skills-lock.json
+
+# graphify generated output
+/graphify-out/
