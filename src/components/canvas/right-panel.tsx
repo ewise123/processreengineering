@@ -66,8 +66,6 @@ export function RightPanel({
   selected,
   onFocusNode,
   onNavigate,
-  onClearSelection,
-  onRemoveContext,
   reviewState,
   onSendRequest,
   onNavigateVersion,
@@ -87,10 +85,6 @@ export function RightPanel({
   onFocusNode: (id: UUID) => void;
   /** Teleport + flash any object (node/edge) on the canvas. Used by chat mentions. */
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
-  /** Clear the canvas selection. Used by the chat context tab's ✕. */
-  onClearSelection: () => void;
-  /** Remove a single id from the canvas selection (per-chip ✕ in context tab). */
-  onRemoveContext: (id: UUID) => void;
   reviewState?: ReviewState;
   onSendRequest: () => void;
   onNavigateVersion?: (versionId: UUID) => void;
@@ -231,8 +225,6 @@ export function RightPanel({
             selected={selected}
             nodes={nodes}
             onNavigate={onNavigate}
-            onClearSelection={onClearSelection}
-            onRemoveContext={onRemoveContext}
             onOpenSource={onOpenSource}
             onApplySuggestions={onApplySuggestions}
             graph={graph}

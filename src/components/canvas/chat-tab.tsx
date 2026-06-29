@@ -4,25 +4,26 @@ import { Pause, Play, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useMutation } from "@tanstack/react-query";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 
 import { api } from "@/lib/api";
 import type {
   ChatSuggestion,
   ChatTurn,
+  GroupSummary,
   MentionSource,
   ObjectRef,
   ProcessGraph,
   UUID,
   ViewerTarget,
 } from "@/lib/types";
-import { mentionsToMarkdown } from "./mention-markdown";
+import { MentionMarkdown } from "./mention-view";
 import {
   selectionChips,
   selectionToContextRefs,
   type SelectedObject,
 } from "./chat-context";
 import { browserChatSessionStore } from "./chat-session";
+import { toRequestHistory } from "./chat-history";
 import { restoreAfterCancel, type PendingSend } from "./chat-cancel";
 import { bundleSuggestions, indexGraph, planBundle, type Bundle, type BundlePlan, type BatchResult } from "./suggestion-apply";
 import { SuggestionList, type CardStatus } from "./suggestion-card";
@@ -32,6 +33,7 @@ export type ChatItem = ChatTurn & {
   sources?: MentionSource[];
   suggestions?: ChatSuggestion[];
   suggestionStatus?: Record<string, CardStatus>;
+  groupSummaries?: GroupSummary[];
 };
 
 const SUGGESTED_PROMPTS: Record<"ask" | "suggest", string[]> = {
@@ -54,8 +56,6 @@ export function ChatTab({
   selected,
   nodes,
   onNavigate,
-  onClearSelection,
-  onRemoveContext,
   onOpenSource,
   onApplySuggestions,
   graph,
@@ -66,8 +66,6 @@ export function ChatTab({
   selected: SelectedObject[];
   nodes: { id: UUID; name: string; type: string; lane_id: UUID | null }[];
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
-  onClearSelection: () => void;
-  onRemoveContext: (id: UUID) => void;
   onOpenSource: (t: ViewerTarget) => void;
   onApplySuggestions: (plan: BundlePlan) => Promise<BatchResult>;
   graph: ProcessGraph;
@@ -89,6 +87,9 @@ export function ChatTab({
   // In-memory undo handles, keyed by bundle id. Not persisted — reloaded applied
   // cards won't show an inline Undo, by design.
   const undoHandles = useRef<Map<string, () => Promise<void>>>(new Map());
+  // Per-bundle apply-failure message, shown on the card instead of a generic
+  // "Failed". Keyed by bundle id (unique across the thread).
+  const [bundleErrorById, setBundleErrorById] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setHistory(sessionStore.load(versionId) as ChatItem[]);
@@ -102,7 +103,27 @@ export function ChatTab({
 
   const graphIndex = useMemo(() => indexGraph(graph), [graph]);
 
-  const chips = selectionChips(selected, labelById);
+  // The chat keeps its OWN context list, decoupled from the live canvas
+  // selection (#3). A non-empty canvas selection REPLACES it; deselecting
+  // (clicking empty canvas, Escape, etc.) leaves it intact — so the attached
+  // context isn't silently lost before the message is sent. The context tab's
+  // ✕ controls edit THIS list only; they no longer deselect the canvas node or
+  // close the Properties panel.
+  const [chatContext, setChatContext] = useState<SelectedObject[]>([]);
+  // Key on the SET of selected ids, not the array reference: a graph refetch
+  // (e.g. after applying a suggestion) hands us a new `selected` array with the
+  // same ids, and we must NOT re-sync then — otherwise a context the user cleared
+  // by sending would silently re-attach. A real selection change (different ids)
+  // replaces the list; deselecting (empty) leaves it intact.
+  const selectedIdsKey = selected.map((s) => s.id).join("|");
+  useEffect(() => {
+    if (selected.length > 0) setChatContext(selected);
+    // selectedIdsKey is derived from `selected`; re-sync only when the id SET
+    // changes, hence the narrowed dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIdsKey]);
+
+  const chips = selectionChips(chatContext, labelById);
 
   const ask = useMutation({
     mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal; mode: "ask" | "suggest" }) =>
@@ -113,7 +134,10 @@ export function ChatTab({
         {
           // Send only the backend contract fields (ChatTurn = role + content);
           // client-only metadata like contextNote/sources must not be resent.
-          history: input.history.map(({ role, content }) => ({ role, content })),
+          // toRequestHistory also coerces empty/whitespace content to a
+          // placeholder — suggest-mode replies can have empty prose, and the
+          // server rejects content shorter than 1 char (422).
+          history: toRequestHistory(input.history),
           user_message: input.userMessage,
           mode: input.mode,
           context_refs: input.contextRefs,
@@ -134,6 +158,7 @@ export function ChatTab({
           sources: data.mention_sources,
           suggestions: data.suggestions.length ? data.suggestions : undefined,
           suggestionStatus: {},
+          groupSummaries: data.group_summaries.length ? data.group_summaries : undefined,
         },
       ];
       sessionStore.save(versionId, next);
@@ -157,9 +182,8 @@ export function ChatTab({
   const submit = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || ask.isPending) return;
-    // Capture the attached context refs + note NOW — onClearSelection() below
-    // empties `selected`, so reading it lazily inside mutationFn would race.
-    const contextRefs = selectionToContextRefs(selected);
+    // Capture the attached context refs + note NOW from the chat's own list.
+    const contextRefs = selectionToContextRefs(chatContext);
     const note = chips.length ? chips.map((c) => c.label).join(", ") : undefined;
     // Capture mode at submit time so a later toggle doesn't change an in-flight request.
     const currentMode = mode;
@@ -180,11 +204,12 @@ export function ChatTab({
       signal: controller.signal,
       mode: currentMode,
     });
-    // Clear the selection on send: the context tab slides away immediately and the
-    // attached objects are recorded on the message itself (contextNote, shown under
-    // the prompt). A paused ask therefore resends without context unless objects are
-    // re-selected — consistent with the now-empty context tab.
-    onClearSelection();
+    // Clear the chat context on send: the tab slides away and the attached objects
+    // are recorded on the message itself (contextNote, shown under the prompt). The
+    // canvas selection is deliberately left alone — so the Properties panel stays
+    // open and reflects an applied suggestion live, and selection stays decoupled
+    // from chat context (#3).
+    setChatContext([]);
   };
 
   const pause = () => {
@@ -232,8 +257,17 @@ export function ChatTab({
     const res = await onApplySuggestions(plan);
     if (res.ok) {
       if (res.undo) undoHandles.current.set(bundle.id, res.undo);
+      setBundleErrorById((prev) => {
+        if (!(bundle.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[bundle.id];
+        return next;
+      });
       setBundleStatus(msgIndex, bundle.id, "applied");
     } else {
+      const msg = res.error ?? "Couldn't apply this change.";
+      toast.error(msg);
+      setBundleErrorById((prev) => ({ ...prev, [bundle.id]: msg }));
       setBundleStatus(msgIndex, bundle.id, "failed");
     }
   };
@@ -291,29 +325,55 @@ export function ChatTab({
         </div>
 
         {history.map((m, i) => {
-          const bundles = m.role === "assistant" && m.suggestions
-            ? bundleSuggestions(m.suggestions)
-            : null;
+          // User turns render right-aligned with no avatar.
+          if (m.role !== "assistant") {
+            return (
+              <ChatMsg key={i} turn={m} labelById={labelById} onNavigate={onNavigate} onOpenSource={onOpenSource} />
+            );
+          }
+          // Assistant turns: one ✨ avatar fronting the prose bubble (if any) and
+          // the suggestion cards. A cards-only reply still gets the avatar.
+          const bundles = m.suggestions ? bundleSuggestions(m.suggestions) : null;
+          // Per-message maps so card title/rationale render the same named links
+          // as prose, and a group's purpose summary can be looked up.
+          const sourceNameByClaim = new Map<UUID, string>((m.sources ?? []).map((s) => [s.claim_id, s.input_name]));
+          const sourceTargetByClaim = new Map<UUID, ViewerTarget>(
+            (m.sources ?? []).map((s) => [
+              s.claim_id,
+              { inputId: s.input_id, inputName: s.input_name, sectionRef: s.section_ref, quote: s.quote },
+            ])
+          );
+          const renderText = (text: string) => (
+            <MentionMarkdown
+              text={text}
+              labelById={labelById}
+              sourceNameByClaim={sourceNameByClaim}
+              sourceTargetByClaim={sourceTargetByClaim}
+              onNavigate={onNavigate}
+              onOpenSource={onOpenSource}
+            />
+          );
+          const summaryById = new Map((m.groupSummaries ?? []).map((g) => [g.id, g.summary]));
           return (
-            <div key={i} className="space-y-1">
-              <ChatMsg
-                turn={m}
-                labelById={labelById}
-                onNavigate={onNavigate}
-                onOpenSource={onOpenSource}
-              />
-              {bundles && (
-                <SuggestionList
-                  bundles={bundles}
-                  statusById={m.suggestionStatus ?? {}}
-                  canUndoById={Object.fromEntries(bundles.map((b) => [b.id, undoHandles.current.has(b.id)]))}
-                  onApply={(b) => applyBundle(i, b)}
-                  onUndo={undoBundle}
-                  onDismiss={(id) => setBundleStatus(i, id, "dismissed")}
-                  onNavigate={onNavigate}
-                  nodeLabel={(id) => labelById.get(id)}
-                />
-              )}
+            <div key={i} className="flex items-start gap-2">
+              <Sparkles size={16} className="mt-1 flex-shrink-0 text-indigo-500" />
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <ChatMsg turn={m} labelById={labelById} onNavigate={onNavigate} onOpenSource={onOpenSource} />
+                {bundles && (
+                  <SuggestionList
+                    bundles={bundles}
+                    statusById={m.suggestionStatus ?? {}}
+                    canUndoById={Object.fromEntries(bundles.map((b) => [b.id, undoHandles.current.has(b.id)]))}
+                    onApply={(b) => applyBundle(i, b)}
+                    onUndo={undoBundle}
+                    onDismiss={(id) => setBundleStatus(i, id, "dismissed")}
+                    onRestore={(id) => setBundleStatus(i, id, "pending")}
+                    renderText={renderText}
+                    summaryById={summaryById}
+                    errorById={bundleErrorById}
+                  />
+                )}
+              </div>
             </div>
           );
         })}
@@ -367,7 +427,9 @@ export function ChatTab({
                     {c.label}
                   </button>
                   <button
-                    onClick={() => onRemoveContext(c.id)}
+                    onClick={() =>
+                      setChatContext((curr) => curr.filter((s) => s.id !== c.id))
+                    }
                     title="Remove from context"
                     className="absolute right-0.5 top-1/2 hidden -translate-y-1/2 rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 group-hover:block"
                   >
@@ -376,7 +438,7 @@ export function ChatTab({
                 </span>
               ))}
               <button
-                onClick={onClearSelection}
+                onClick={() => setChatContext([])}
                 title="Clear context"
                 className="ml-auto flex h-4 w-4 items-center justify-center rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-700"
               >
@@ -489,6 +551,9 @@ function ChatMsg({
       </div>
     );
   }
+  // A suggest-mode reply can have empty prose (only suggestion cards). Don't
+  // render an empty assistant bubble — the cards render separately beneath it.
+  if (!turn.content.trim()) return null;
   // Build this message's own claim→source maps from the sources attached to it.
   const sourceNameByClaim = new Map<UUID, string>(
     (turn.sources ?? []).map((s) => [s.claim_id, s.input_name])
@@ -499,59 +564,18 @@ function ChatMsg({
       { inputId: s.input_id, inputName: s.input_name, sectionRef: s.section_ref, quote: s.quote },
     ])
   );
-  const md = mentionsToMarkdown(turn.content, labelById, sourceNameByClaim);
+  // Just the prose bubble — the ✨ avatar is rendered once at the row level so
+  // it also fronts a cards-only (empty-prose) reply.
   return (
-    <div className="flex items-start gap-2">
-      <Sparkles size={16} className="mt-1 flex-shrink-0 text-indigo-500" />
-      <div className="min-w-0 flex-1">
-        <div className="poet-chat-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] leading-relaxed text-slate-800">
-          <ReactMarkdown
-            // Keep poet:// intact (the default transform would strip it) but run
-            // every other URL through react-markdown's default sanitizer so we
-            // don't reintroduce javascript:/data: link injection.
-            urlTransform={(url) =>
-              url.startsWith("poet://") ? url : defaultUrlTransform(url)
-            }
-            components={{
-              p: ({ children }) => <span className="block">{children}</span>,
-              // Assistant prose is grounded text, never remote media — block all
-              // images so a model-supplied <img> can't beacon out.
-              img: () => null,
-              a: ({ href, children }) => {
-                const m = /^poet:\/\/(node|claim)\/(.+)$/.exec(href ?? "");
-                if (m && m[1] === "node") {
-                  const id = m[2];
-                  return (
-                    <button
-                      onClick={() => onNavigate({ kind: "node", id })}
-                      className="mx-0.5 inline rounded border border-indigo-200 bg-indigo-50 px-1 font-medium text-indigo-700 hover:bg-indigo-100"
-                      title="Jump to this step"
-                    >
-                      {children}
-                    </button>
-                  );
-                }
-                if (m && m[1] === "claim") {
-                  const id = m[2];
-                  const tgt = sourceTargetByClaim.get(id);
-                  return (
-                    <button
-                      onClick={() => tgt && onOpenSource(tgt)}
-                      className="mx-0.5 inline rounded border border-slate-300 bg-white px-1 text-slate-600 hover:bg-slate-100"
-                      title={tgt ? `Open ${tgt.inputName}` : "Source"}
-                    >
-                      {children}
-                    </button>
-                  );
-                }
-                return <span>{children}</span>;
-              },
-            }}
-          >
-            {md}
-          </ReactMarkdown>
-        </div>
-      </div>
+    <div className="poet-chat-md rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] leading-relaxed text-slate-800">
+      <MentionMarkdown
+        text={turn.content}
+        labelById={labelById}
+        sourceNameByClaim={sourceNameByClaim}
+        sourceTargetByClaim={sourceTargetByClaim}
+        onNavigate={onNavigate}
+        onOpenSource={onOpenSource}
+      />
     </div>
   );
 }

@@ -410,10 +410,16 @@ export interface ChatSuggestRequest {
   context_refs: ObjectRef[];
 }
 
+export interface GroupSummary {
+  id: string;
+  summary: string;
+}
+
 export interface ChatSuggestResponse {
   message: string;
   suggestions: ChatSuggestion[];
   mention_sources: MentionSource[];
+  group_summaries: GroupSummary[];
 }
 
 export interface ProcessMapGenerateRequest {
