@@ -1851,11 +1851,17 @@ def _build_suggestion(raw: dict, ctx, index: int):
     except (ValueError, TypeError, KeyError):
         return None  # malformed op -> dropped, never reaches the client
 
+    # Normalize the group to a trimmed string (or None): the model can emit a
+    # non-string or whitespace-padded value, which would otherwise miss the
+    # later group_summaries match.
+    raw_group = raw.get("group")
+    group = raw_group.strip() if isinstance(raw_group, str) and raw_group.strip() else None
+
     # Resolve [[N3]]/[[C1]] mentions in title + rationale into [[kind:uuid]] the
     # same way prose is resolved, so the UI renders named, clickable links there.
     return ChatSuggestion(
         id=f"sg-{index}-{uuid4().hex[:8]}",
-        group=raw.get("group"),
+        group=group,
         title=_resolve_mention_refs(str(raw.get("title") or op.kind.value), ctx)[:300],
         op=op,
         affected_refs=affected,
@@ -1867,15 +1873,18 @@ def _build_suggestion(raw: dict, ctx, index: int):
 def _drop_orphaned_consumers(suggestions: list[ChatSuggestion]) -> list[ChatSuggestion]:
     """Remove suggestions that consume a `tmp:` ref with no surviving producer.
 
-    A producer is any suggestion carrying that `temp_id`. If the model's
-    producing op (e.g. an add_node) is dropped during build, its `tmp:` id is
-    left dangling on the consumers (the add_edge ops that point at it). The
-    frontend rejects an entire bundle the moment one ref is unresolvable, so we
-    prune the orphans server-side and ship only the internally-consistent ops.
-    Runs to a fixpoint in case a pruned consumer was itself a producer."""
+    A producer is an op that actually creates a referenceable object — add_node
+    (a node) or add_lane (a lane). If the model's producing op is dropped during
+    build, its `tmp:` id is left dangling on the consumers (the add_edge ops that
+    point at it). The frontend rejects an entire bundle the moment one ref is
+    unresolvable, so we prune the orphans server-side and ship only the
+    internally-consistent ops. Only genuine producers count, so a malformed op
+    that carries a stray `temp_id` can't keep a consumer alive. Runs to a fixpoint
+    in case a pruned consumer was itself a producer."""
+    producer_kinds = {OpKind.ADD_NODE, OpKind.ADD_LANE}
     kept = list(suggestions)
     while True:
-        produced = {s.op.temp_id for s in kept if s.op.temp_id}
+        produced = {s.op.temp_id for s in kept if s.op.kind in producer_kinds and s.op.temp_id}
         survivors = []
         for s in kept:
             consumed = (

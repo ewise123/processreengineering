@@ -92,6 +92,15 @@ export function ChatTab({
   const [bundleErrorById, setBundleErrorById] = useState<Record<string, string>>({});
 
   useEffect(() => {
+    // Switching threads (version change): drop any in-flight reply from the old
+    // version and clear ALL per-thread transient state, so stale undo handles or
+    // apply errors can't leak into the new conversation if a bundle id recurs.
+    genRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    pendingRef.current = null;
+    undoHandles.current.clear();
+    setBundleErrorById({});
     setHistory(sessionStore.load(versionId) as ChatItem[]);
   }, [versionId, sessionStore]);
 
@@ -100,6 +109,14 @@ export function ChatTab({
     for (const n of nodes) m.set(n.id, n.name);
     return m;
   }, [nodes]);
+
+  // Lane id → name, so a suggestion card's [[lane:uuid]] mention (e.g. a
+  // move-to-lane destination) renders the lane's name instead of being dropped.
+  const laneNameById = useMemo(() => {
+    const m = new Map<UUID, string>();
+    for (const l of graph.lanes) m.set(l.id, l.name);
+    return m;
+  }, [graph]);
 
   const graphIndex = useMemo(() => indexGraph(graph), [graph]);
 
@@ -235,6 +252,10 @@ export function ChatTab({
     ask.reset();
     abortRef.current = null;
     pendingRef.current = null;
+    // Clear per-thread transient state too, so a later bundle can't inherit a
+    // stale Undo handle or error message from the cleared conversation.
+    undoHandles.current.clear();
+    setBundleErrorById({});
     sessionStore.clear(versionId);
     setHistory([]);
   };
@@ -349,6 +370,7 @@ export function ChatTab({
               labelById={labelById}
               sourceNameByClaim={sourceNameByClaim}
               sourceTargetByClaim={sourceTargetByClaim}
+              laneNameById={laneNameById}
               onNavigate={onNavigate}
               onOpenSource={onOpenSource}
             />

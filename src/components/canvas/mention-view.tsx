@@ -15,6 +15,7 @@ export function MentionMarkdown({
   labelById,
   sourceNameByClaim,
   sourceTargetByClaim,
+  laneNameById,
   onNavigate,
   onOpenSource,
 }: {
@@ -22,10 +23,13 @@ export function MentionMarkdown({
   labelById: Map<UUID, string>;
   sourceNameByClaim: Map<UUID, string>;
   sourceTargetByClaim: Map<UUID, ViewerTarget>;
+  /** Lane id → name, so `[[lane:uuid]]` mentions (e.g. a move-to-lane target)
+   * render the lane's name. Optional — chat prose never emits lane mentions. */
+  laneNameById?: Map<UUID, string>;
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
   onOpenSource: (t: ViewerTarget) => void;
 }) {
-  const md = mentionsToMarkdown(text, labelById, sourceNameByClaim);
+  const md = mentionsToMarkdown(text, labelById, sourceNameByClaim, laneNameById);
   return (
     <ReactMarkdown
       // Keep poet:// intact (the default transform would strip it) but run every
@@ -38,18 +42,28 @@ export function MentionMarkdown({
         // so a model-supplied <img> can't beacon out.
         img: () => null,
         a: ({ href, children }) => {
-          const m = /^poet:\/\/(node|claim)\/(.+)$/.exec(href ?? "");
-          if (m && m[1] === "node") {
+          const m = /^poet:\/\/(node|claim|edge|lane)\/(.+)$/.exec(href ?? "");
+          if (m && (m[1] === "node" || m[1] === "edge")) {
+            const kind = m[1];
             const id = m[2];
             return (
               <button
                 type="button"
-                onClick={() => onNavigate({ kind: "node", id })}
+                onClick={() => onNavigate({ kind, id })}
                 className="mx-0.5 inline rounded border border-indigo-200 bg-indigo-50 px-1 font-medium text-indigo-700 hover:bg-indigo-100"
-                title="Jump to this step"
+                title={kind === "node" ? "Jump to this step" : "Jump to this connection"}
               >
                 {children}
               </button>
+            );
+          }
+          if (m && m[1] === "lane") {
+            // Lanes have no canvas focus target — render as a non-clickable chip
+            // showing the lane name.
+            return (
+              <span className="mx-0.5 inline rounded border border-slate-200 bg-slate-100 px-1 font-medium text-slate-600">
+                {children}
+              </span>
             );
           }
           if (m && m[1] === "claim") {

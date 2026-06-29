@@ -19,7 +19,7 @@ const ACTION_LABEL: Record<OpKind, string> = {
   remove_edge: "Remove link",
   relabel_edge: "Label link",
   reroute_edge: "Reroute",
-  move_to_lane: "Move lane",
+  move_to_lane: "Move to lane",
   add_lane: "Add lane",
   rename_lane: "Rename lane",
   decompose: "Break down",

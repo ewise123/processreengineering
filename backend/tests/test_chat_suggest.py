@@ -132,7 +132,7 @@ def test_suggest_mode_ignores_non_list_suggestions():
     from app.schemas.version_chat_suggest import ChatMode
     fake = _FakeClient([_ToolBlock("propose_changes", {"suggestions": {"oops": "not a list"}})])
     with patch.object(map_chat_suggest, "_get_client", return_value=fake):
-        message, raw, _groups = map_chat_suggest.run_chat_suggest(
+        _message, raw, _groups = map_chat_suggest.run_chat_suggest(
             history=[], user_message="x", map_context_text="...", mode=ChatMode.SUGGEST)
     assert raw == []
 
@@ -194,7 +194,7 @@ def test_build_suggestion_add_node_accepts_name_as_label():
     Accept it as the label so the add_node isn't dropped — a dropped producer
     orphans the add_edge ops that point at its temp_id and sinks the bundle."""
     from app.api.v2 import process_maps as pm_api
-    ctx, (n1, _n2, _e1, l1, _c1) = _ctx_stub()
+    ctx, (_n1, _n2, _e1, _l1, _c1) = _ctx_stub()
     raw = {"kind": "add_node", "temp_id": "tmp:1", "lane_ref": "L1",
            "node_type": "task", "name": "Manager Approval", "near_node_ref": "N1",
            "title": "Add approval", "rationale": "needed", "cited_claim_refs": []}
@@ -218,7 +218,7 @@ def test_drop_orphaned_consumers_removes_dangling_tmp_refs():
     """A suggestion that consumes a tmp: ref with no producer in the set is
     dropped, so the frontend never rejects a whole bundle over a dangling ref."""
     from app.api.v2 import process_maps as pm_api
-    ctx, (n1, _n2, _e1, _l1, _c1) = _ctx_stub()
+    ctx, (_n1, _n2, _e1, _l1, _c1) = _ctx_stub()
     # add_edge from a NEW (missing) node tmp:1 to existing N1 -> orphan.
     orphan = pm_api._build_suggestion(
         {"kind": "add_edge", "from_ref": "tmp:1", "to_ref": "N1",
@@ -234,7 +234,7 @@ def test_drop_orphaned_consumers_removes_dangling_tmp_refs():
 def test_drop_orphaned_consumers_keeps_satisfied_tmp_refs():
     """A consumer whose producer IS present survives."""
     from app.api.v2 import process_maps as pm_api
-    ctx, (n1, _n2, _e1, _l1, _c1) = _ctx_stub()
+    ctx, (_n1, _n2, _e1, _l1, _c1) = _ctx_stub()
     producer = pm_api._build_suggestion(
         {"kind": "add_node", "temp_id": "tmp:1", "lane_ref": "L1",
          "node_type": "task", "new_label": "New step",
@@ -604,7 +604,7 @@ def test_build_suggestion_resolves_mentions_in_title_and_rationale():
 def test_endpoint_returns_group_summaries_only_for_used_groups(db):
     from app.api.v2 import process_maps as pm_api
     from app.schemas.version_chat_suggest import ChatSuggestRequest
-    project, version, n1, claim = _seed(db)
+    project, version, _n1, _claim = _seed(db)
 
     def fake_service(*, history, user_message, map_context_text, mode):
         return ("Bundled.", [
@@ -628,7 +628,7 @@ def test_endpoint_mention_sources_include_claims_cited_in_rationale(db):
     from app.schemas.version_chat_suggest import ChatSuggestRequest
     from app.models.input import Chunk, DocumentSection, Input
     from app.models.claim import ClaimCitation
-    project, version, n1, claim = _seed(db)
+    project, version, _n1, claim = _seed(db)
     inp = Input(project_id=project.id, name="SOP.pdf", type="document"); db.add(inp); db.flush()
     sec = DocumentSection(input_id=inp.id, kind="section", order_index=0, ref={"page": 1}, text="t")
     db.add(sec); db.flush()
