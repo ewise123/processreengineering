@@ -23,7 +23,7 @@ import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType } from "./layout";
 import { sizeForNodeType } from "./node-type";
-import { placeProposedStep } from "./ai-edit";
+import { placeNewNodeIn, placeProposedStep } from "./ai-edit";
 import { edgeFocusCenter } from "./edge-focus";
 import { normalizeMarquee, nodesInMarquee, edgesInMarquee } from "./selection";
 import {
@@ -530,21 +530,15 @@ function BpmnCanvas({
 
   // Pick a world position for a newly-created suggestion node: offset from the
   // anchor node when one is given, else a default slot in the target lane.
+  // Delegates to the pure placeNewNodeIn helper (ai-edit.ts) so preview logic
+  // can reuse the exact same placement algorithm.
   const placeNewNode = useCallback(
-    (laneId: UUID | null, nearNodeId: UUID | null): { laneId: UUID; x: number; relativeY: number } | null => {
-      const near = nearNodeId ? nodesRef.current.find((n) => n.id === nearNodeId) : null;
-      const resolvedLane = laneId ?? near?.laneId ?? lanesRef.current[0]?.id ?? null;
-      if (!resolvedLane) return null;
-      if (near) {
-        const pos = placeProposedStep({ x: near.x, relativeY: near.relativeY, w: near.w });
-        return { laneId: resolvedLane, x: pos.x, relativeY: pos.relativeY };
-      }
-      const inLane = nodesRef.current.filter((n) => n.laneId === resolvedLane);
-      const x = inLane.length ? Math.max(...inLane.map((n) => n.x + n.w)) + 60 : 80;
-      return { laneId: resolvedLane, x, relativeY: 40 };
-    },
+    (laneId: UUID | null, nearNodeId: UUID | null) =>
+      placeNewNodeIn(nodesRef.current, lanesRef.current, laneId, nearNodeId) as
+        | { laneId: UUID; x: number; relativeY: number }
+        | null,
     // Empty deps intentional: reads only via stable refs (nodesRef/lanesRef)
-    // and the module-level placeProposedStep, so it never needs to re-create.
+    // and the module-level placeNewNodeIn, so it never needs to re-create.
     []
   );
 
