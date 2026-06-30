@@ -24,6 +24,7 @@ import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType, recomputeY } from "./layout";
 import { sizeForNodeType } from "./node-type";
 import { placeNewNodeIn, placeProposedStep } from "./ai-edit";
+import { applyPlanToCanvas, diffCanvas, type CanvasState, type CanvasDiff } from "./suggestion-shadow";
 import { edgeFocusCenter } from "./edge-focus";
 import { normalizeMarquee, nodesInMarquee, edgesInMarquee } from "./selection";
 import {
@@ -177,6 +178,11 @@ export interface BpmnCanvasHandle {
    * rolling back on failure. Undoable plans record a single grouped undo entry
    * (Cmd+Z) and return an inline `undo`; delete-containing plans do neither. */
   applySuggestionBatch: (plan: BundlePlan) => Promise<BatchResult>;
+  /** Compute a non-committal preview of a plan and render it as ghosts. Returns
+   * the diff so the caller (card) can summarize it. Does NOT persist anything. */
+  previewPlan: (plan: BundlePlan) => CanvasDiff;
+  /** Exit preview mode and drop the shadow, restoring the live render. */
+  clearPreview: () => void;
 }
 
 interface BpmnCanvasProps {
@@ -247,6 +253,9 @@ function BpmnCanvas({
     y: number;
     items: ContextMenuItem[];
   } | null>(null);
+  const [preview, setPreview] = useState<{ shadow: CanvasState; diff: CanvasDiff } | null>(null);
+  const previewRef = useRef<{ shadow: CanvasState; diff: CanvasDiff } | null>(null);
+  previewRef.current = preview;
 
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
@@ -1290,6 +1299,7 @@ function BpmnCanvas({
       toggleSelection(id);
       return;
     }
+    if (previewRef.current) return; // suspend edits while previewing a suggestion
     const isGroupDrag =
       selectedIdsRef.current.has(id) && selectedIdsRef.current.size > 1;
     // Defer selection change for a node that's already part of a multi-selection:
@@ -1344,6 +1354,7 @@ function BpmnCanvas({
 
   const onStartBendDrag = useCallback(
     (e: MouseEvent, edgeId: UUID, orientation: EdgeOrientation) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       e.stopPropagation();
       const edge = edgesRef.current.find((ed) => ed.id === edgeId);
       if (!edge) return;
@@ -1387,6 +1398,7 @@ function BpmnCanvas({
 
   const onStartConnect = useCallback(
     (e: MouseEvent, sourceId: UUID, side: ConnectSide) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       e.stopPropagation();
       selectOnly(sourceId);
       const { x, y } = toWorld(e.clientX, e.clientY);
@@ -1715,6 +1727,7 @@ function BpmnCanvas({
   };
 
   const onCanvasDrop = async (e: ReactDragEvent<SVGSVGElement>) => {
+    if (previewRef.current) return; // suspend edits while previewing a suggestion
     const kind = e.dataTransfer.getData(PALETTE_DRAG_MIME) as CanvasNodeKind;
     if (!kind) return;
     e.preventDefault();
@@ -1883,6 +1896,16 @@ function BpmnCanvas({
     clipboard.copy({ nodes, edges });
   }, [clipboard]);
 
+  const previewPlan = useCallback((plan: BundlePlan): CanvasDiff => {
+    const live: CanvasState = { nodes: nodesRef.current, edges: edgesRef.current, lanes: lanesRef.current };
+    const shadow = applyPlanToCanvas(live, plan);
+    const diff = diffCanvas(live, shadow);
+    setPreview({ shadow, diff });
+    return diff;
+  }, []);
+
+  const clearPreview = useCallback(() => setPreview(null), []);
+
   // Placed here (not with the other hooks above) so copySelectionImpl and
   // moveSelectionToLaneImpl are already defined and can be real dependencies.
   useImperativeHandle(
@@ -1907,6 +1930,8 @@ function BpmnCanvas({
       copySelection: copySelectionImpl,
       moveSelectionToLane: moveSelectionToLaneImpl,
       applySuggestionBatch,
+      previewPlan,
+      clearPreview,
     }),
     [
       deleteNodeImpl,
@@ -1921,6 +1946,8 @@ function BpmnCanvas({
       copySelectionImpl,
       moveSelectionToLaneImpl,
       applySuggestionBatch,
+      previewPlan,
+      clearPreview,
     ]
   );
 
@@ -2236,6 +2263,7 @@ function BpmnCanvas({
 
   const addLaneAt = useCallback(
     async (atIndex: number) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       // Flush pending lane patches before mutating the lane set so we don't
       // commit stale order_index updates against shifted IDs.
       await flush();
