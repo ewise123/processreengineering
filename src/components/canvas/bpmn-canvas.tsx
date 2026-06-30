@@ -201,6 +201,14 @@ interface BpmnCanvasProps {
   onDrillIntoNode?: (childModelId: UUID) => void;
 }
 
+/** Change-log reasons for applied-suggestion semantic edits. `planBundle` fills
+ * each step's `reason` from the suggestion's rationale; APPLIED_REASON_FALLBACK
+ * only guards a step that somehow reached the executor without one. The inverse
+ * (undo) is a user-initiated revert, so it logs its own plain reason and is NOT
+ * marked `ai_applied`. */
+const APPLIED_REASON_FALLBACK = "Applied AI suggestion";
+const REVERT_REASON = "Reverted an applied AI suggestion";
+
 /** Pure helper: recompute `y` offsets for a lane list after insertions/deletions.
  * Module-level (not a hook) so both the canvas body and `runStep` can call it. */
 function recomputeY(ls: CanvasLane[]): CanvasLane[] {
@@ -695,6 +703,8 @@ function BpmnCanvas({
             apiPatch.lane_id = laneId;
             localPatch.laneId = laneId;
           }
+          apiPatch.reason = step.reason ?? APPLIED_REASON_FALLBACK;
+          apiPatch.ai_applied = true;
           const prev = { label: before.label, description: before.description, laneId: before.laneId };
           setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...localPatch } : n)));
           // Push the inverse BEFORE the API call so a forward failure can still
@@ -702,11 +712,16 @@ function BpmnCanvas({
           // a harmless no-op on the server if the forward call never landed.
           inverses.push(async () => {
             setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...prev } : n)));
-            await api.updateNode(projectId, id, {
-              name: prev.label,
-              description: prev.description,
-              lane_id: prev.laneId ?? undefined,
-            });
+            // Mirror the forward step: only restore the fields it touched, so an
+            // undo never writes a spurious change to an untouched field. A
+            // describe_node applied to a node that had no description is reverted
+            // with "" (an explicit empty string the backend persists) rather than
+            // `undefined`, which a PATCH drops and so can't clear the field.
+            const inversePatch: NodeUpdate = { reason: REVERT_REASON };
+            if (step.name !== undefined) inversePatch.name = prev.label;
+            if (step.description !== undefined) inversePatch.description = prev.description ?? "";
+            if (step.laneRef !== undefined) inversePatch.lane_id = prev.laneId ?? undefined;
+            await api.updateNode(projectId, id, inversePatch);
           });
           await api.updateNode(projectId, id, apiPatch);
           break;
@@ -785,9 +800,13 @@ function BpmnCanvas({
           // Push the inverse BEFORE the API call (see update_node note).
           inverses.push(async () => {
             setEdges((curr) => curr.map((e) => (e.id === id ? { ...e, label: oldLabel } : e)));
-            await api.updateEdge(projectId, id, { label: oldLabel });
+            await api.updateEdge(projectId, id, { label: oldLabel, reason: REVERT_REASON });
           });
-          await api.updateEdge(projectId, id, { label: step.label });
+          await api.updateEdge(projectId, id, {
+            label: step.label,
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
+          });
           break;
         }
         case "reroute_edge": {
@@ -855,9 +874,13 @@ function BpmnCanvas({
           // Push the inverse BEFORE the API call (see update_node note).
           inverses.push(async () => {
             setLanes((curr) => curr.map((l) => (l.id === id ? { ...l, label: oldName } : l)));
-            await api.updateLane(projectId, id, { name: oldName });
+            await api.updateLane(projectId, id, { name: oldName, reason: REVERT_REASON });
           });
-          await api.updateLane(projectId, id, { name: step.name });
+          await api.updateLane(projectId, id, {
+            name: step.name,
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
+          });
           break;
         }
       }

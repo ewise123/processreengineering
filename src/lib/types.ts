@@ -216,6 +216,7 @@ export interface LaneUpdate {
   color?: string;
   collapsed?: boolean;
   reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface NodeUpdate {
@@ -226,6 +227,7 @@ export interface NodeUpdate {
   relative_y?: number;
   description?: string;
   reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface NodeCreate {
@@ -247,6 +249,7 @@ export interface EdgeUpdate {
   bend_x?: number | null;
   bend_y?: number | null;
   reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface CitationDetail {
