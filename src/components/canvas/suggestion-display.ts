@@ -1,4 +1,4 @@
-import type { SuggestionOp } from "@/lib/types";
+import type { OpKind, SuggestionOp } from "@/lib/types";
 
 /** Pure presentation helpers for suggestion cards: given an op, derive the
  * target object (as a `[[kind:uuid]]` mention string for the mention renderer)
@@ -38,6 +38,28 @@ export function opTarget(op: SuggestionOp): string | null {
     default:
       return null;
   }
+}
+
+/** Ops that rename an existing object — the one attribute they change IS the
+ * name the target mention displays, so the card shows a frozen "old → new"
+ * transition for them instead of a live mention that collapses after apply. */
+const RENAME_KINDS = new Set<OpKind>(["relabel_node", "rename_lane", "relabel_edge"]);
+
+export function isRenameOp(kind: OpKind): boolean {
+  return RENAME_KINDS.has(kind);
+}
+
+/** The frozen before → after for a rename-family op. `before` is the target's
+ * label when proposed (the suggestion's `before_label`), so it stays stable
+ * after the change applies; `null` for non-rename ops. An empty/absent before
+ * (e.g. a previously unlabeled edge) renders as a "(no label)" placeholder. */
+export function renameTransition(
+  op: SuggestionOp,
+  beforeLabel: string | null | undefined
+): { before: string; after: string } | null {
+  if (!isRenameOp(op.kind)) return null;
+  const after = (op.kind === "rename_lane" ? op.name : op.new_label) ?? "";
+  return { before: beforeLabel?.trim() ? beforeLabel : "(no label)", after };
 }
 
 /** The proposed new value to preview under the target (the label/description/etc.

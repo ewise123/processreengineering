@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { OpKind } from "@/lib/types";
 import { isDeleteOp, type Bundle } from "./suggestion-apply";
-import { opPayload, opTarget } from "./suggestion-display";
+import { opPayload, opTarget, renameTransition } from "./suggestion-display";
 
 export type CardStatus = "pending" | "applying" | "applied" | "failed" | "dismissed";
 
@@ -181,7 +181,12 @@ function SuggestionCard({
       <div className="space-y-1">
         {bundle.suggestions.map((s) => {
           const target = opTarget(s.op);
-          const payload = opPayload(s.op);
+          // Rename-family ops show a frozen "old → new" so the preview stays
+          // meaningful after apply (a live mention would collapse to the new
+          // name, reading as a rename to the same name). Other ops keep the
+          // live mention target + proposed-value preview.
+          const transition = renameTransition(s.op, s.before_label);
+          const payload = transition ? null : opPayload(s.op);
           return (
             <div key={s.id} className="rounded border border-slate-200 bg-white/70 px-1.5 py-1.5">
               <div className="flex items-center gap-1.5">
@@ -197,11 +202,17 @@ function SuggestionCard({
                   {target ? renderText(target) : renderText(s.title)}
                 </span>
               </div>
-              {payload && (
+              {transition ? (
+                <div className="mt-1 flex flex-wrap items-center gap-1 rounded bg-slate-100/80 px-1.5 py-1 text-[11px] leading-snug">
+                  <span className="text-slate-400 line-through">{transition.before}</span>
+                  <span className="text-slate-400">→</span>
+                  <span className="font-medium text-slate-700">{transition.after}</span>
+                </div>
+              ) : payload ? (
                 <div className="mt-1 whitespace-pre-wrap rounded bg-slate-100/80 px-1.5 py-1 text-[11px] leading-snug text-slate-700">
                   {payload.hasMention ? renderText(payload.value) : payload.value}
                 </div>
-              )}
+              ) : null}
               {s.rationale && <Reasoning rationale={s.rationale} renderText={renderText} />}
             </div>
           );

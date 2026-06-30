@@ -34,6 +34,10 @@ class MapContext:
     edge_ref_to_id: dict[str, UUID]
     lane_ref_to_id: dict[str, UUID]
     source_target_by_claim: dict[UUID, dict]
+    # id -> current name/label, used to freeze a rename suggestion's "before" value.
+    node_name_by_id: dict[UUID, str]
+    edge_label_by_id: dict[UUID, str | None]
+    lane_name_by_id: dict[UUID, str]
 
 
 def assemble_map_context(
@@ -184,4 +188,7 @@ def assemble_map_context(
         edge_ref_to_id=edge_ref_to_id,
         lane_ref_to_id=lane_ref_to_id,
         source_target_by_claim=source_target_by_claim,
+        node_name_by_id={n.id: n.name for n in nodes},
+        edge_label_by_id={e.id: e.label for e in edges},
+        lane_name_by_id={l.id: l.name for l in lanes},
     )
