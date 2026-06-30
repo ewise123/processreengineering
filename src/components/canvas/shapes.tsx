@@ -15,10 +15,9 @@ const ISSUE_FILL: Record<IssueSeverity, string> = {
 const AI_PROPOSED_STROKE = "#7c3aed";
 const AI_PROPOSED_DASH = "5 3";
 
-// Suggestion-preview ghost styling. Violet = adds/changes (the project's
-// AI/proposed vocabulary); red = removals. `null` = not part of the diff.
+// Suggestion-preview ghost styling. Adds/changes reuse the violet AI-proposed
+// vocabulary (`AI_PROPOSED_STROKE`); removals use red. `null` = not in the diff.
 export type PreviewRole = "added" | "changed" | "removed" | null;
-const PREVIEW_VIOLET = "#7c3aed";
 const PREVIEW_VIOLET_FILL = "#faf5ff";
 const PREVIEW_VIOLET_FADE = "#a78bfa";
 const PREVIEW_RED = "#fca5a5";
@@ -211,7 +210,7 @@ export function NodeShape({
   const baseStroke = previewRole
     ? previewRole === "removed"
       ? PREVIEW_RED
-      : PREVIEW_VIOLET
+      : AI_PROPOSED_STROKE
     : proposed && !selected && !issueStroke
       ? AI_PROPOSED_STROKE
       : stroke;
@@ -521,7 +520,7 @@ export function EdgeArrow({
   // change already shows through the new label text.
   const previewStroke =
     previewRole === "added"
-      ? PREVIEW_VIOLET
+      ? AI_PROPOSED_STROKE
       : previewRole === "removed"
         ? PREVIEW_RED
         : null;

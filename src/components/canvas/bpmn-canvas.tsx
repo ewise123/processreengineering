@@ -39,6 +39,7 @@ import {
   sidePoint,
   type ConnectSide,
   type EdgeOrientation,
+  type PreviewRole,
 } from "./shapes";
 import type {
   CanvasEdge,
@@ -65,10 +66,8 @@ const MIN_SCALE = 0.2;
 const MAX_SCALE = 2.5;
 const ZOOM_STEP = 1.2;
 
-// The role an object plays in an active suggestion preview, used to ghost-style
-// it. `null` = not part of the diff (or no preview active). Style constants live
-// in `shapes.tsx`, where the rect/path/text actually consume them.
-type PreviewRole = "added" | "changed" | "removed" | null;
+// `PreviewRole` is imported from `./shapes`, where the rect/path/text primitives
+// consume it — adds/changes use the violet AI-proposed vocabulary, removals red.
 
 type Drag =
   | {
@@ -2419,9 +2418,10 @@ function BpmnCanvas({
               : "border-violet-200 bg-violet-50 text-violet-700"
           }`}
         >
+          <span aria-hidden="true">{previewHasRemovals ? "⚠" : "⚡"}</span>{" "}
           {previewHasRemovals
-            ? "⚠ Preview removal · impact shown"
-            : `⚡ Preview · ${previewCount} change${previewCount === 1 ? "" : "s"} · not yet saved`}
+            ? `Preview · ${previewCount} change${previewCount === 1 ? "" : "s"} · removals shown`
+            : `Preview · ${previewCount} change${previewCount === 1 ? "" : "s"} · not yet saved`}
         </div>
       )}
       <svg
