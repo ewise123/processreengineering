@@ -59,6 +59,14 @@ export interface CanvasEdge {
   bendX?: number | null;
   /** Y-coordinate of the horizontal mid-segment for vertical-routed edges. */
   bendY?: number | null;
+  /** Pinned exit/entry faces for a manual backtrack edge (top/bottom). When
+   * both are set, routing follows the orthogonal loop instead of geometric
+   * auto-routing. NULL/undefined → auto-routed (the default). */
+  sourceSide?: "top" | "bottom" | null;
+  targetSide?: "top" | "bottom" | null;
+  /** "rework" for manually drawn backtrack loops (rendered amber/dashed);
+   * undefined/"flow" for ordinary forward edges. */
+  kind?: "flow" | "rework";
 }
 
 export interface CanvasLane {

@@ -240,12 +240,17 @@ export interface EdgeCreate {
   source_node_id: UUID;
   target_node_id: UUID;
   label?: string | null;
+  source_side?: "top" | "bottom" | null;
+  target_side?: "top" | "bottom" | null;
+  edge_kind?: "flow" | "rework";
 }
 
 export interface EdgeUpdate {
   label?: string | null;
   bend_x?: number | null;
   bend_y?: number | null;
+  source_side?: "top" | "bottom" | null;
+  target_side?: "top" | "bottom" | null;
   reason?: string;
 }
 
@@ -293,6 +298,9 @@ export interface ProcessEdge {
   condition_text: string | null;
   bend_x?: number | null;
   bend_y?: number | null;
+  source_side?: "top" | "bottom" | null;
+  target_side?: "top" | "bottom" | null;
+  edge_kind?: "flow" | "rework";
 }
 
 export interface ProcessGraph {

@@ -221,6 +221,15 @@ class ChangeTargetType(StrEnum):
     VERSION = "version"
 
 
+class EdgeKind(StrEnum):
+    """Sequence-flow semantics for a process edge. ``REWORK`` marks a manually
+    drawn backtrack/loopback connection so the canvas can style it distinctly;
+    everything else is an ordinary forward flow."""
+
+    FLOW = "flow"
+    REWORK = "rework"
+
+
 class ChangeActorKind(StrEnum):
     USER = "user"
     AI = "ai"

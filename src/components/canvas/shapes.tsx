@@ -15,6 +15,11 @@ const ISSUE_FILL: Record<IssueSeverity, string> = {
 const AI_PROPOSED_STROKE = "#7c3aed";
 const AI_PROPOSED_DASH = "5 3";
 
+/** Manual backtrack/rework edges render amber + dashed so they read as
+ * exception loops rather than forward sequence flow. */
+const REWORK_STROKE = "#d97706";
+const REWORK_DASH = "6 4";
+
 export type ConnectSide = "top" | "right" | "bottom" | "left";
 
 interface SimpleRect {
@@ -36,10 +41,79 @@ export type EdgeOrientation = "horizontal" | "vertical";
  * single straight segment. Picked to match a single grid-cell of slack. */
 const SNAP_STRAIGHT_THRESHOLD = 8;
 
+/** Vertical faces a manual backtrack edge can be pinned to. */
+export type VerticalSide = "top" | "bottom";
+
+/** How far past the node faces the default loop channel sits, before the user
+ * drags it. Roughly one node-height of clearance. */
+const LOOP_OFFSET = 56;
+
+/**
+ * Routing for a manually pinned backtrack/rework edge: leave the source's
+ * top/bottom face, run along a horizontal channel, and enter the target's
+ * top/bottom face — a clean orthogonal loop the user can reshape by dragging
+ * the channel (persisted as bend_y). Unlike `buildEdgePath`'s geometric
+ * branches, the faces here are fixed by the user, not derived from position.
+ */
+export function buildPinnedEdgePath(
+  from: SimpleRect,
+  to: SimpleRect,
+  sourceSide: VerticalSide,
+  targetSide: VerticalSide,
+  bendY?: number | null
+): {
+  d: string;
+  midX: number;
+  midY: number;
+  orientation: EdgeOrientation;
+  midSegment: { x1: number; y1: number; x2: number; y2: number };
+} {
+  const sx = from.x + from.w / 2;
+  const tx = to.x + to.w / 2;
+  const sFaceY = sourceSide === "bottom" ? from.y + from.h : from.y;
+  const tFaceY = targetSide === "bottom" ? to.y + to.h : to.y;
+
+  let channelY: number;
+  if (typeof bendY === "number") {
+    channelY = bendY;
+  } else if (sourceSide === "bottom" && targetSide === "bottom") {
+    channelY = Math.max(sFaceY, tFaceY) + LOOP_OFFSET;
+  } else if (sourceSide === "top" && targetSide === "top") {
+    channelY = Math.min(sFaceY, tFaceY) - LOOP_OFFSET;
+  } else {
+    // Mixed faces: bias the channel to the direction the source exits.
+    channelY = sourceSide === "bottom" ? sFaceY + LOOP_OFFSET : sFaceY - LOOP_OFFSET;
+  }
+
+  return {
+    d: `M ${sx} ${sFaceY} L ${sx} ${channelY} L ${tx} ${channelY} L ${tx} ${tFaceY}`,
+    midX: (sx + tx) / 2,
+    midY: channelY,
+    orientation: "vertical",
+    midSegment: { x1: sx, y1: channelY, x2: tx, y2: channelY },
+  };
+}
+
+/** An edge renders as a backtrack loop when it is explicitly a rework edge OR
+ * when both anchor faces are pinned (which routes through buildPinnedEdgePath).
+ * Keeps styling and routing from ever disagreeing. */
+export function isReworkEdge(
+  edge: Pick<CanvasEdge, "kind" | "sourceSide" | "targetSide">
+): boolean {
+  return edge.kind === "rework" || (!!edge.sourceSide && !!edge.targetSide);
+}
+
 export function buildEdgePath(
   from: SimpleRect,
   to: SimpleRect,
-  overrides?: { bendX?: number | null; bendY?: number | null }
+  overrides?: {
+    bendX?: number | null;
+    bendY?: number | null;
+    /** When both sides are pinned (top/bottom), routing follows the manual
+     * loop in `buildPinnedEdgePath` instead of geometric auto-routing. */
+    sourceSide?: VerticalSide | null;
+    targetSide?: VerticalSide | null;
+  }
 ): {
   d: string;
   midX: number;
@@ -49,6 +123,15 @@ export function buildEdgePath(
    * canvas coordinate system. */
   midSegment: { x1: number; y1: number; x2: number; y2: number };
 } {
+  if (overrides?.sourceSide && overrides?.targetSide) {
+    return buildPinnedEdgePath(
+      from,
+      to,
+      overrides.sourceSide,
+      overrides.targetSide,
+      overrides.bendY
+    );
+  }
   const fc = { x: from.x + from.w / 2, y: from.y + from.h / 2 };
   const tc = { x: to.x + to.w / 2, y: to.y + to.h / 2 };
   const dx = tc.x - fc.x;
@@ -430,10 +513,13 @@ export function EdgeArrow({
   if (!from || !to) return null;
 
   const edgeProposed = isEdgeProposed(from, to);
+  const isRework = isReworkEdge(edge);
 
   const { d, midX, midY, orientation, midSegment } = buildEdgePath(from, to, {
     bendX: edge.bendX,
     bendY: edge.bendY,
+    sourceSide: edge.sourceSide,
+    targetSide: edge.targetSide,
   });
 
   return (
@@ -453,10 +539,26 @@ export function EdgeArrow({
       <path
         d={d}
         fill="none"
-        stroke={selected ? "#0f172a" : edgeProposed ? AI_PROPOSED_STROKE : "#94a3b8"}
+        stroke={
+          selected
+            ? "#0f172a"
+            : isRework
+              ? REWORK_STROKE
+              : edgeProposed
+                ? AI_PROPOSED_STROKE
+                : "#94a3b8"
+        }
         strokeWidth={selected ? 2.5 : 1.5}
-        strokeDasharray={selected ? undefined : edgeProposed ? AI_PROPOSED_DASH : undefined}
-        markerEnd="url(#poet-arrow)"
+        strokeDasharray={
+          isRework
+            ? REWORK_DASH
+            : selected
+              ? undefined
+              : edgeProposed
+                ? AI_PROPOSED_DASH
+                : undefined
+        }
+        markerEnd={isRework ? "url(#poet-arrow-rework)" : "url(#poet-arrow)"}
       />
       {/* Hit-area for click */}
       <path d={d} fill="none" stroke="transparent" strokeWidth={12} />
