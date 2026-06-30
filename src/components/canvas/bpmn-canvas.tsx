@@ -21,9 +21,10 @@ import type { BundlePlan, BatchResult, MutationStep } from "./suggestion-apply";
 import { CanvasContextMenu, type ContextMenuItem } from "./canvas-context-menu";
 import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
-import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType } from "./layout";
+import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType, recomputeY } from "./layout";
 import { sizeForNodeType } from "./node-type";
-import { placeProposedStep } from "./ai-edit";
+import { placeNewNodeIn, placeProposedStep } from "./ai-edit";
+import { applyPlanToCanvas, diffCanvas, type CanvasState, type CanvasDiff } from "./suggestion-shadow";
 import { edgeFocusCenter } from "./edge-focus";
 import { normalizeMarquee, nodesInMarquee, edgesInMarquee } from "./selection";
 import {
@@ -38,6 +39,7 @@ import {
   sidePoint,
   type ConnectSide,
   type EdgeOrientation,
+  type PreviewRole,
 } from "./shapes";
 import type {
   CanvasEdge,
@@ -63,6 +65,9 @@ const PASTE_OFFSET = 24;
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 2.5;
 const ZOOM_STEP = 1.2;
+
+// `PreviewRole` is imported from `./shapes`, where the rect/path/text primitives
+// consume it — adds/changes use the violet AI-proposed vocabulary, removals red.
 
 type Drag =
   | {
@@ -177,6 +182,11 @@ export interface BpmnCanvasHandle {
    * rolling back on failure. Undoable plans record a single grouped undo entry
    * (Cmd+Z) and return an inline `undo`; delete-containing plans do neither. */
   applySuggestionBatch: (plan: BundlePlan) => Promise<BatchResult>;
+  /** Compute a non-committal preview of a plan and render it as ghosts. Returns
+   * the diff so the caller (card) can summarize it. Does NOT persist anything. */
+  previewPlan: (plan: BundlePlan) => CanvasDiff;
+  /** Exit preview mode and drop the shadow, restoring the live render. */
+  clearPreview: () => void;
 }
 
 interface BpmnCanvasProps {
@@ -209,16 +219,6 @@ interface BpmnCanvasProps {
 const APPLIED_REASON_FALLBACK = "Applied AI suggestion";
 const REVERT_REASON = "Reverted an applied AI suggestion";
 
-/** Pure helper: recompute `y` offsets for a lane list after insertions/deletions.
- * Module-level (not a hook) so both the canvas body and `runStep` can call it. */
-function recomputeY(ls: CanvasLane[]): CanvasLane[] {
-  let y = 0;
-  return ls.map((l) => {
-    const out = { ...l, y };
-    y += l.h;
-    return out;
-  });
-}
 
 export const BpmnCanvas = forwardRef<BpmnCanvasHandle, BpmnCanvasProps>(
 function BpmnCanvas({
@@ -257,6 +257,9 @@ function BpmnCanvas({
     y: number;
     items: ContextMenuItem[];
   } | null>(null);
+  const [preview, setPreview] = useState<{ shadow: CanvasState; diff: CanvasDiff } | null>(null);
+  const previewRef = useRef<{ shadow: CanvasState; diff: CanvasDiff } | null>(null);
+  previewRef.current = preview;
 
   const issuesMap = issuesByNode ?? {};
   const issueCount = Object.keys(issuesMap).length;
@@ -530,21 +533,15 @@ function BpmnCanvas({
 
   // Pick a world position for a newly-created suggestion node: offset from the
   // anchor node when one is given, else a default slot in the target lane.
+  // Delegates to the pure placeNewNodeIn helper (ai-edit.ts) so preview logic
+  // can reuse the exact same placement algorithm.
   const placeNewNode = useCallback(
-    (laneId: UUID | null, nearNodeId: UUID | null): { laneId: UUID; x: number; relativeY: number } | null => {
-      const near = nearNodeId ? nodesRef.current.find((n) => n.id === nearNodeId) : null;
-      const resolvedLane = laneId ?? near?.laneId ?? lanesRef.current[0]?.id ?? null;
-      if (!resolvedLane) return null;
-      if (near) {
-        const pos = placeProposedStep({ x: near.x, relativeY: near.relativeY, w: near.w });
-        return { laneId: resolvedLane, x: pos.x, relativeY: pos.relativeY };
-      }
-      const inLane = nodesRef.current.filter((n) => n.laneId === resolvedLane);
-      const x = inLane.length ? Math.max(...inLane.map((n) => n.x + n.w)) + 60 : 80;
-      return { laneId: resolvedLane, x, relativeY: 40 };
-    },
+    (laneId: UUID | null, nearNodeId: UUID | null) =>
+      placeNewNodeIn(nodesRef.current, lanesRef.current, laneId, nearNodeId) as
+        | { laneId: UUID; x: number; relativeY: number }
+        | null,
     // Empty deps intentional: reads only via stable refs (nodesRef/lanesRef)
-    // and the module-level placeProposedStep, so it never needs to re-create.
+    // and the module-level placeNewNodeIn, so it never needs to re-create.
     []
   );
 
@@ -1030,6 +1027,22 @@ function BpmnCanvas({
         return;
       }
 
+      // While previewing a suggestion the canvas renders a shadow; block every
+      // mutating shortcut (delete / undo / redo / paste) so a stray edit can't
+      // commit against — and desync — the preview. Non-mutating keys (copy,
+      // tool switch, Escape, Space-pan) stay live.
+      if (previewRef.current) {
+        const m = e.metaKey || e.ctrlKey;
+        const mutating =
+          e.key === "Delete" ||
+          e.key === "Backspace" ||
+          (m && ["z", "Z", "y", "Y", "v", "V"].includes(e.key));
+        if (mutating) {
+          e.preventDefault();
+          return;
+        }
+      }
+
       const mod = e.metaKey || e.ctrlKey;
       if (mod && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
@@ -1119,6 +1132,7 @@ function BpmnCanvas({
 
   const toggleLaneCollapse = useCallback(
     (laneId: string) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       const willCollapse = !collapsedLaneIdsRef.current.has(laneId);
       setCollapsedLaneIds((curr) => {
         const next = new Set(curr);
@@ -1192,23 +1206,47 @@ function BpmnCanvas({
     });
   }, [lanes.length, nodes.length, edges.length, onCountsChange]);
 
+  // Preview render sources. While previewing a suggestion, the canvas draws the
+  // UNION of (a) the shadow — which already holds added + changed + surviving
+  // objects with their NEW values — and (b) the live objects the plan REMOVES,
+  // so deletions render struck-through rather than just vanishing. Only RENDER
+  // derivations consume these; all mutation/executor/ref code keeps using the
+  // live `nodes`/`edges`/`lanes`. When `preview` is null these short-circuit to
+  // the live arrays, so non-preview behavior is byte-for-byte identical.
+  const srcNodes = useMemo<CanvasNode[]>(() => {
+    if (!preview) return nodes;
+    const removed = nodes.filter((n) => preview.diff.removedNodeIds.has(n.id));
+    return [...preview.shadow.nodes, ...removed];
+  }, [preview, nodes]);
+
+  const srcEdges = useMemo<CanvasEdge[]>(() => {
+    if (!preview) return edges;
+    const removed = edges.filter((e) => preview.diff.removedEdgeIds.has(e.id));
+    return [...preview.shadow.edges, ...removed];
+  }, [preview, edges]);
+
+  const srcLanes = useMemo<CanvasLane[]>(
+    () => (preview ? preview.shadow.lanes : lanes),
+    [preview, lanes]
+  );
+
   const worldWidth = useMemo(() => {
-    const maxX = nodes.reduce((m, n) => Math.max(m, n.x + n.w), 0);
+    const maxX = srcNodes.reduce((m, n) => Math.max(m, n.x + n.w), 0);
     return Math.max(WORLD_WIDTH_MIN, maxX + WORLD_RIGHT_PADDING);
-  }, [nodes]);
+  }, [srcNodes]);
 
   // Lane geometry as shown on screen: collapsed lanes shrink to a thin strip.
   // The real `lanes` (true heights) are kept for persistence; only display
   // geometry changes, so expanding restores the stored height.
   const displayLanes = useMemo(() => {
     let y = 0;
-    return lanes.map((l) => {
+    return srcLanes.map((l) => {
       const h = collapsedLaneIds.has(l.id) ? COLLAPSED_LANE_HEIGHT : l.h;
       const out = { ...l, y, h };
       y += h;
       return out;
     });
-  }, [lanes, collapsedLaneIds]);
+  }, [srcLanes, collapsedLaneIds]);
 
   const displayLanesRef = useRef(displayLanes);
   displayLanesRef.current = displayLanes;
@@ -1220,7 +1258,7 @@ function BpmnCanvas({
 
   const renderNodes: ResolvedNode[] = useMemo(() => {
     const laneMap = new Map(displayLanes.map((l) => [l.id, l]));
-    return nodes
+    return srcNodes
       .filter((n) => !(n.laneId && collapsedLaneIds.has(n.laneId)))
       .map((n) => {
         const lane = n.laneId ? laneMap.get(n.laneId) : undefined;
@@ -1229,10 +1267,51 @@ function BpmnCanvas({
         void _ignore;
         return { ...rest, y };
       });
-  }, [nodes, displayLanes, collapsedLaneIds]);
+  }, [srcNodes, displayLanes, collapsedLaneIds]);
 
   const renderNodesRef = useRef(renderNodes);
   renderNodesRef.current = renderNodes;
+
+  // Classify a render object by its role in the active preview diff so the JSX
+  // can ghost-style it. Returns null when not previewing (or unchanged).
+  const nodePreviewRole = useCallback(
+    (id: string): PreviewRole => {
+      const d = preview?.diff;
+      if (!d) return null;
+      if (d.addedNodeIds.has(id)) return "added";
+      if (d.removedNodeIds.has(id)) return "removed";
+      if (d.changedNodeIds.has(id)) return "changed";
+      return null;
+    },
+    [preview]
+  );
+
+  const edgePreviewRole = useCallback(
+    (id: string): PreviewRole => {
+      const d = preview?.diff;
+      if (!d) return null;
+      if (d.addedEdgeIds.has(id)) return "added";
+      if (d.removedEdgeIds.has(id)) return "removed";
+      if (d.changedEdgeIds.has(id)) return "changed";
+      return null;
+    },
+    [preview]
+  );
+
+  // Total object-level changes summarized in the preview banner.
+  const previewCount = preview
+    ? preview.diff.addedNodeIds.size +
+      preview.diff.changedNodeIds.size +
+      preview.diff.removedNodeIds.size +
+      preview.diff.addedEdgeIds.size +
+      preview.diff.changedEdgeIds.size +
+      preview.diff.removedEdgeIds.size +
+      preview.diff.addedLaneIds.size +
+      preview.diff.changedLaneIds.size
+    : 0;
+  const previewHasRemovals = preview
+    ? preview.diff.removedNodeIds.size + preview.diff.removedEdgeIds.size > 0
+    : false;
 
   const toWorld = useCallback(
     (sx: number, sy: number) => {
@@ -1306,6 +1385,7 @@ function BpmnCanvas({
       toggleSelection(id);
       return;
     }
+    if (previewRef.current) return; // suspend edits while previewing a suggestion
     const isGroupDrag =
       selectedIdsRef.current.has(id) && selectedIdsRef.current.size > 1;
     // Defer selection change for a node that's already part of a multi-selection:
@@ -1360,6 +1440,7 @@ function BpmnCanvas({
 
   const onStartBendDrag = useCallback(
     (e: MouseEvent, edgeId: UUID, orientation: EdgeOrientation) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       e.stopPropagation();
       const edge = edgesRef.current.find((ed) => ed.id === edgeId);
       if (!edge) return;
@@ -1403,6 +1484,7 @@ function BpmnCanvas({
 
   const onStartConnect = useCallback(
     (e: MouseEvent, sourceId: UUID, side: ConnectSide) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       e.stopPropagation();
       selectOnly(sourceId);
       const { x, y } = toWorld(e.clientX, e.clientY);
@@ -1731,6 +1813,7 @@ function BpmnCanvas({
   };
 
   const onCanvasDrop = async (e: ReactDragEvent<SVGSVGElement>) => {
+    if (previewRef.current) return; // suspend edits while previewing a suggestion
     const kind = e.dataTransfer.getData(PALETTE_DRAG_MIME) as CanvasNodeKind;
     if (!kind) return;
     e.preventDefault();
@@ -1899,6 +1982,16 @@ function BpmnCanvas({
     clipboard.copy({ nodes, edges });
   }, [clipboard]);
 
+  const previewPlan = useCallback((plan: BundlePlan): CanvasDiff => {
+    const live: CanvasState = { nodes: nodesRef.current, edges: edgesRef.current, lanes: lanesRef.current };
+    const shadow = applyPlanToCanvas(live, plan);
+    const diff = diffCanvas(live, shadow);
+    setPreview({ shadow, diff });
+    return diff;
+  }, []);
+
+  const clearPreview = useCallback(() => setPreview(null), []);
+
   // Placed here (not with the other hooks above) so copySelectionImpl and
   // moveSelectionToLaneImpl are already defined and can be real dependencies.
   useImperativeHandle(
@@ -1923,6 +2016,8 @@ function BpmnCanvas({
       copySelection: copySelectionImpl,
       moveSelectionToLane: moveSelectionToLaneImpl,
       applySuggestionBatch,
+      previewPlan,
+      clearPreview,
     }),
     [
       deleteNodeImpl,
@@ -1937,6 +2032,8 @@ function BpmnCanvas({
       copySelectionImpl,
       moveSelectionToLaneImpl,
       applySuggestionBatch,
+      previewPlan,
+      clearPreview,
     ]
   );
 
@@ -2046,6 +2143,7 @@ function BpmnCanvas({
     (e: MouseEvent, nodeId: UUID) => {
       e.preventDefault();
       e.stopPropagation();
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       const wasSelected = selectedIdsRef.current.has(nodeId);
       if (!wasSelected) selectOnly(nodeId);
       // When the node wasn't already selected we just collapsed to it (size 1);
@@ -2078,6 +2176,7 @@ function BpmnCanvas({
     (e: MouseEvent, edgeId: UUID) => {
       e.preventDefault();
       e.stopPropagation();
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       selectOnly(edgeId);
       setContextMenu({
         x: e.clientX,
@@ -2094,6 +2193,7 @@ function BpmnCanvas({
   const openCanvasMenu = useCallback(
     (e: MouseEvent<SVGSVGElement>) => {
       e.preventDefault();
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       setContextMenu({
         x: e.clientX,
         y: e.clientY,
@@ -2140,6 +2240,7 @@ function BpmnCanvas({
 
   const moveLane = useCallback(
     (laneId: string, targetIdx: number) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       const curr = lanesRef.current;
       const oldIdx = curr.findIndex((l) => l.id === laneId);
       if (oldIdx === -1) return;
@@ -2182,6 +2283,7 @@ function BpmnCanvas({
 
   const resizeLane = useCallback(
     (laneId: string, newH: number) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       const old = lanesRef.current.find((l) => l.id === laneId);
       if (!old) return;
       const oldH = old.h;
@@ -2209,6 +2311,7 @@ function BpmnCanvas({
 
   const renameLane = useCallback(
     async (laneId: string, newName: string) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       const old = lanesRef.current.find((l) => l.id === laneId);
       if (!old || old.label === newName) return;
       const oldName = old.label;
@@ -2237,6 +2340,7 @@ function BpmnCanvas({
 
   const setLaneColor = useCallback(
     (laneId: string, color: string) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       const old = lanesRef.current.find((l) => l.id === laneId);
       if (!old || old.color === color) return;
       const oldColor = old.color;
@@ -2252,6 +2356,7 @@ function BpmnCanvas({
 
   const addLaneAt = useCallback(
     async (atIndex: number) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       // Flush pending lane patches before mutating the lane set so we don't
       // commit stale order_index updates against shifted IDs.
       await flush();
@@ -2290,6 +2395,7 @@ function BpmnCanvas({
 
   const deleteLane = useCallback(
     async (laneId: string) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       if (lanesRef.current.length <= 1) return;
       // Flush pending PATCHes so we don't fire a 404 against a deleted lane.
       await flush();
@@ -2329,6 +2435,20 @@ function BpmnCanvas({
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      {preview && (
+        <div
+          className={`pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-full border px-3 py-1 text-xs font-semibold shadow-sm ${
+            previewHasRemovals
+              ? "border-rose-200 bg-rose-50 text-rose-700"
+              : "border-violet-200 bg-violet-50 text-violet-700"
+          }`}
+        >
+          <span aria-hidden="true">{previewHasRemovals ? "⚠" : "⚡"}</span>{" "}
+          {previewHasRemovals
+            ? `Preview · ${previewCount} change${previewCount === 1 ? "" : "s"} · removals shown`
+            : `Preview · ${previewCount} change${previewCount === 1 ? "" : "s"} · not yet saved`}
+        </div>
+      )}
       <svg
         ref={svgRef}
         onMouseDown={onSvgMouseDown}
@@ -2418,10 +2538,10 @@ function BpmnCanvas({
               />
             </g>
           ))}
-          {edges
+          {srcEdges
             .filter((edge) => {
-              const f = nodes.find((n) => n.id === edge.from);
-              const t = nodes.find((n) => n.id === edge.to);
+              const f = srcNodes.find((n) => n.id === edge.from);
+              const t = srcNodes.find((n) => n.id === edge.to);
               const hidden = (n?: CanvasNode) =>
                 !!n?.laneId && collapsedLaneIds.has(n.laneId);
               return !hidden(f) && !hidden(t);
@@ -2432,6 +2552,7 @@ function BpmnCanvas({
                 edge={edge}
                 nodes={renderNodes}
                 selected={selectedIds.has(edge.id)}
+                previewRole={edgePreviewRole(edge.id)}
                 onClick={(id) => selectOnly(id)}
                 onDoubleClick={(id) => {
                   selectOnly(id);
@@ -2441,23 +2562,39 @@ function BpmnCanvas({
                 onStartBendDrag={onStartBendDrag}
               />
             ))}
-          {renderNodes.map((node) => (
-            <NodeShape
-              key={node.id}
-              node={node}
-              selected={selectedIds.has(node.id)}
-              issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
-              reviewBadge={reviewMode ? reviewMap[node.id] ?? null : null}
-              showHandles={tool === "connect"}
-              onMouseDown={onNodeMouseDown}
-              onContextMenu={openNodeMenu}
-              onStartConnect={onStartConnect}
-              onDoubleClick={(id) => {
-                const n = nodesRef.current.find((x) => x.id === id);
-                if (n?.childModelId) onDrillIntoNode?.(n.childModelId);
-              }}
-            />
-          ))}
+          {renderNodes.map((node) => {
+            const previewRole = nodePreviewRole(node.id);
+            // For a changed node, surface the OLD label (struck-through) by
+            // diffing against the live node. Lane-only changes leave labels
+            // equal, so nothing extra is drawn.
+            const liveNode =
+              previewRole === "changed"
+                ? nodes.find((n) => n.id === node.id)
+                : undefined;
+            const previewOldLabel =
+              liveNode && liveNode.label !== node.label
+                ? liveNode.label
+                : null;
+            return (
+              <NodeShape
+                key={node.id}
+                node={node}
+                selected={selectedIds.has(node.id)}
+                issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
+                reviewBadge={reviewMode ? reviewMap[node.id] ?? null : null}
+                showHandles={tool === "connect"}
+                previewRole={previewRole}
+                previewOldLabel={previewOldLabel}
+                onMouseDown={onNodeMouseDown}
+                onContextMenu={openNodeMenu}
+                onStartConnect={onStartConnect}
+                onDoubleClick={(id) => {
+                  const n = nodesRef.current.find((x) => x.id === id);
+                  if (n?.childModelId) onDrillIntoNode?.(n.childModelId);
+                }}
+              />
+            );
+          })}
           {flashId && (() => {
             const pulse = (
               <animate attributeName="opacity" values="1;0.2;1" dur="0.7s" repeatCount="2" />
@@ -2588,6 +2725,7 @@ function BpmnCanvas({
         onSetColor={setLaneColor}
         collapsedLaneIds={collapsedLaneIds}
         onToggleCollapse={toggleLaneCollapse}
+        addedLaneIds={preview?.diff.addedLaneIds}
       />
 
       <ShapePalette />

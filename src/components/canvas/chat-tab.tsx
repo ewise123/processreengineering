@@ -26,6 +26,7 @@ import { browserChatSessionStore } from "./chat-session";
 import { toRequestHistory } from "./chat-history";
 import { restoreAfterCancel, type PendingSend } from "./chat-cancel";
 import { bundleSuggestions, indexGraph, planBundle, type Bundle, type BundlePlan, type BatchResult } from "./suggestion-apply";
+import type { CanvasDiff } from "./suggestion-shadow";
 import { SuggestionList, type CardStatus } from "./suggestion-card";
 
 export type ChatItem = ChatTurn & {
@@ -58,6 +59,8 @@ export function ChatTab({
   onNavigate,
   onOpenSource,
   onApplySuggestions,
+  onPreviewSuggestions,
+  onCancelPreview,
   graph,
 }: {
   projectId: UUID;
@@ -68,6 +71,8 @@ export function ChatTab({
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
   onOpenSource: (t: ViewerTarget) => void;
   onApplySuggestions: (plan: BundlePlan) => Promise<BatchResult>;
+  onPreviewSuggestions?: (plan: BundlePlan) => CanvasDiff | null;
+  onCancelPreview?: () => void;
   graph: ProcessGraph;
 }) {
   const sessionStore = useMemo(() => browserChatSessionStore(), []);
@@ -90,6 +95,7 @@ export function ChatTab({
   // Per-bundle apply-failure message, shown on the card instead of a generic
   // "Failed". Keyed by bundle id (unique across the thread).
   const [bundleErrorById, setBundleErrorById] = useState<Record<string, string>>({});
+  const [previewingId, setPreviewingId] = useState<{ msgIndex: number; bundleId: string } | null>(null);
 
   useEffect(() => {
     // Switching threads (version change): drop any in-flight reply from the old
@@ -101,8 +107,10 @@ export function ChatTab({
     pendingRef.current = null;
     undoHandles.current.clear();
     setBundleErrorById({});
+    onCancelPreview?.(); // clear canvas ghosts so a stale preview can't survive a version switch
+    setPreviewingId(null);
     setHistory(sessionStore.load(versionId) as ChatItem[]);
-  }, [versionId, sessionStore]);
+  }, [versionId, sessionStore, onCancelPreview]);
 
   const labelById = useMemo(() => {
     const m = new Map<UUID, string>();
@@ -256,6 +264,8 @@ export function ChatTab({
     // stale Undo handle or error message from the cleared conversation.
     undoHandles.current.clear();
     setBundleErrorById({});
+    setPreviewingId(null);
+    onCancelPreview?.();
     sessionStore.clear(versionId);
     setHistory([]);
   };
@@ -273,6 +283,14 @@ export function ChatTab({
   };
 
   const applyBundle = async (msgIndex: number, bundle: Bundle) => {
+    if (previewingId) {
+      onCancelPreview?.();
+      // If a different card was previewing, its ghosts are now gone — return it to pending.
+      if (previewingId.bundleId !== bundle.id) {
+        setBundleStatus(previewingId.msgIndex, previewingId.bundleId, "pending");
+      }
+      setPreviewingId(null);
+    }
     setBundleStatus(msgIndex, bundle.id, "applying");
     const plan = planBundle(bundle, graphIndex);
     const res = await onApplySuggestions(plan);
@@ -291,6 +309,32 @@ export function ChatTab({
       setBundleErrorById((prev) => ({ ...prev, [bundle.id]: msg }));
       setBundleStatus(msgIndex, bundle.id, "failed");
     }
+  };
+
+  const previewBundle = (msgIndex: number, bundle: Bundle) => {
+    const plan = planBundle(bundle, graphIndex);
+    if (!plan.applyable) {
+      toast.error(plan.reason ?? "This change can no longer be previewed.");
+      return;
+    }
+    // Only flip the card to "previewing" if the canvas actually rendered the
+    // preview. `onPreviewSuggestions` returns the diff (or null when the canvas
+    // isn't ready); a null means nothing rendered, so leave the card untouched.
+    const diff = onPreviewSuggestions?.(plan) ?? null;
+    if (!diff) return;
+    // Single canvas preview slot: now that the new preview is live, drop the
+    // prior card's "previewing" status (its ghosts have been replaced).
+    if (previewingId && previewingId.bundleId !== bundle.id) {
+      setBundleStatus(previewingId.msgIndex, previewingId.bundleId, "pending");
+    }
+    setPreviewingId({ msgIndex, bundleId: bundle.id });
+    setBundleStatus(msgIndex, bundle.id, "previewing");
+  };
+
+  const cancelPreview = (msgIndex: number, bundleId: string) => {
+    onCancelPreview?.();
+    setPreviewingId(null);
+    setBundleStatus(msgIndex, bundleId, "pending");
   };
 
   const undoBundle = async (bundleId: string) => {
@@ -390,6 +434,8 @@ export function ChatTab({
                     onUndo={undoBundle}
                     onDismiss={(id) => setBundleStatus(i, id, "dismissed")}
                     onRestore={(id) => setBundleStatus(i, id, "pending")}
+                    onPreview={(b) => previewBundle(i, b)}
+                    onCancelPreview={(bundleId) => cancelPreview(i, bundleId)}
                     renderText={renderText}
                     summaryById={summaryById}
                     errorById={bundleErrorById}

@@ -7,7 +7,7 @@ import type { OpKind } from "@/lib/types";
 import { isDeleteOp, type Bundle } from "./suggestion-apply";
 import { opPayload, opTarget, renameTransition } from "./suggestion-display";
 
-export type CardStatus = "pending" | "applying" | "applied" | "failed" | "dismissed";
+export type CardStatus = "pending" | "previewing" | "applying" | "applied" | "failed" | "dismissed";
 
 /** Human-readable verb for each op kind, shown as the per-change badge. */
 const ACTION_LABEL: Record<OpKind, string> = {
@@ -33,6 +33,8 @@ export function SuggestionList({
   onUndo,
   onDismiss,
   onRestore,
+  onPreview,
+  onCancelPreview,
   renderText,
   summaryById,
   errorById,
@@ -44,6 +46,8 @@ export function SuggestionList({
   onUndo: (bundleId: string) => void;
   onDismiss: (bundleId: string) => void;
   onRestore: (bundleId: string) => void;
+  onPreview?: (bundle: Bundle) => void;
+  onCancelPreview?: (bundleId: string) => void;
   /** Render text with `[[kind:uuid]]` mentions as named, clickable links. */
   renderText: (text: string) => ReactNode;
   /** group id → one-line purpose of that bundle. */
@@ -86,6 +90,8 @@ export function SuggestionList({
           onUndo={() => onUndo(b.id)}
           onDismiss={() => onDismiss(b.id)}
           onRestore={() => onRestore(b.id)}
+          onPreview={onPreview ? () => onPreview(b) : undefined}
+          onCancelPreview={onCancelPreview ? () => onCancelPreview(b.id) : undefined}
           renderText={renderText}
         />
       ))}
@@ -112,6 +118,8 @@ function SuggestionCard({
   onUndo,
   onDismiss,
   onRestore,
+  onPreview,
+  onCancelPreview,
   renderText,
 }: {
   bundle: Bundle;
@@ -123,6 +131,8 @@ function SuggestionCard({
   onUndo: () => void;
   onDismiss: () => void;
   onRestore: () => void;
+  onPreview?: () => void;
+  onCancelPreview?: () => void;
   renderText: (text: string) => ReactNode;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -237,6 +247,26 @@ function SuggestionCard({
         </div>
       ) : status === "applying" ? (
         <div className="mt-2 text-[10px] text-slate-500">Applying…</div>
+      ) : status === "previewing" ? (
+        <div className="mt-2 flex items-center gap-1.5">
+          <span className="mr-auto flex items-center gap-1 text-[10px] font-semibold text-violet-700">
+            <span className="h-1.5 w-1.5 rounded-full bg-violet-500" /> Previewing on canvas
+          </span>
+          <button
+            type="button"
+            onClick={runApply}
+            className="rounded bg-slate-800 px-2 py-1 text-[10px] font-semibold text-white hover:bg-slate-700"
+          >
+            Apply
+          </button>
+          <button
+            type="button"
+            onClick={() => onCancelPreview?.()}
+            className="rounded border border-slate-300 px-2 py-1 text-[10px] text-slate-600 hover:bg-slate-100"
+          >
+            Cancel
+          </button>
+        </div>
       ) : confirming ? (
         <div className="mt-2 flex items-center gap-1.5">
           <span className="text-[10px] text-rose-700">Can&apos;t be undone.</span>
@@ -253,6 +283,15 @@ function SuggestionCard({
         </div>
       ) : (
         <div className="mt-2 flex items-center gap-1.5">
+          {!isDelete && onPreview && (
+            <button
+              type="button"
+              onClick={onPreview}
+              className="rounded border border-violet-300 bg-white px-2 py-1 text-[10px] font-semibold text-violet-700 hover:bg-violet-50"
+            >
+              Preview
+            </button>
+          )}
           <button
             type="button"
             onClick={() => (isDelete ? setConfirming(true) : runApply())}

@@ -31,6 +31,7 @@ export function LaneRail({
   onSetColor,
   collapsedLaneIds,
   onToggleCollapse,
+  addedLaneIds,
 }: {
   lanes: CanvasLane[];
   viewport: Viewport;
@@ -42,6 +43,8 @@ export function LaneRail({
   onSetColor: (laneId: string, color: string) => void;
   collapsedLaneIds: Set<string>;
   onToggleCollapse: (laneId: string) => void;
+  /** Lanes newly created by an active suggestion preview — tinted violet. */
+  addedLaneIds?: Set<string>;
 }) {
   const railRef = useRef<HTMLDivElement>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
@@ -306,8 +309,8 @@ export function LaneRail({
                     // collapsing the label to its own width.
                     flexShrink: 0,
                     fontSize: 10,
-                    fontWeight: 600,
-                    color: "#475569",
+                    fontWeight: addedLaneIds?.has(lane.id) ? 700 : 600,
+                    color: addedLaneIds?.has(lane.id) ? "#7c3aed" : "#475569",
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",

@@ -15,6 +15,13 @@ const ISSUE_FILL: Record<IssueSeverity, string> = {
 const AI_PROPOSED_STROKE = "#7c3aed";
 const AI_PROPOSED_DASH = "5 3";
 
+// Suggestion-preview ghost styling. Adds/changes reuse the violet AI-proposed
+// vocabulary (`AI_PROPOSED_STROKE`); removals use red. `null` = not in the diff.
+export type PreviewRole = "added" | "changed" | "removed" | null;
+const PREVIEW_VIOLET_FILL = "#faf5ff";
+const PREVIEW_VIOLET_FADE = "#a78bfa";
+const PREVIEW_RED = "#fca5a5";
+
 export type ConnectSide = "top" | "right" | "bottom" | "left";
 
 interface SimpleRect {
@@ -160,6 +167,8 @@ export function NodeShape({
   issueLevel,
   reviewBadge,
   showHandles,
+  previewRole = null,
+  previewOldLabel = null,
   onMouseDown,
   onContextMenu,
   onStartConnect,
@@ -172,6 +181,11 @@ export function NodeShape({
   /** When true, hover handles are always rendered (e.g. while the connect
    * tool is active). Otherwise they appear on hover or when selected. */
   showHandles?: boolean;
+  /** Role of this node in an active suggestion preview (ghost styling). */
+  previewRole?: PreviewRole;
+  /** The node's pre-suggestion label, shown struck-through above a `changed`
+   * node when the label itself changed. */
+  previewOldLabel?: string | null;
   onMouseDown: (e: MouseEvent, id: string) => void;
   onContextMenu?: (e: MouseEvent, id: string) => void;
   onStartConnect?: (e: MouseEvent, sourceId: UUID, side: ConnectSide) => void;
@@ -184,14 +198,42 @@ export function NodeShape({
 
   const issueStroke = issueLevel ? ISSUE_FILL[issueLevel] : null;
   const stroke = selected ? "#0f172a" : (issueStroke ?? "#475569");
-  const strokeWidth = selected ? 2.5 : issueLevel ? 2 : 1.2;
   const fill = "#ffffff";
 
   // AI-proposed styling: violet dashed outline, only when neither selected nor
   // flagged with an issue (those states take precedence).
   const proposed = node.aiProposed === true;
-  const baseStroke = proposed && !selected && !issueStroke ? AI_PROPOSED_STROKE : stroke;
-  const proposedDash = proposed && !selected && !issueStroke ? AI_PROPOSED_DASH : undefined;
+
+  // Preview ghost styling overrides the resting outline (it's a modal review
+  // state). `added` = dashed violet + tinted fill; `changed` = bumped violet
+  // ring; `removed` = faded red + struck title. Selection still bumps width.
+  const baseStroke = previewRole
+    ? previewRole === "removed"
+      ? PREVIEW_RED
+      : AI_PROPOSED_STROKE
+    : proposed && !selected && !issueStroke
+      ? AI_PROPOSED_STROKE
+      : stroke;
+  const proposedDash =
+    previewRole === "added"
+      ? "5 4"
+      : previewRole
+        ? undefined
+        : proposed && !selected && !issueStroke
+          ? AI_PROPOSED_DASH
+          : undefined;
+  const strokeWidth = previewRole
+    ? selected
+      ? 3
+      : 2.5
+    : selected
+      ? 2.5
+      : issueLevel
+        ? 2
+        : 1.2;
+  const shapeFill = previewRole === "added" ? PREVIEW_VIOLET_FILL : fill;
+  const groupOpacity = previewRole === "removed" ? 0.5 : 1;
+  const titleStruck = previewRole === "removed";
 
   const [hover, setHover] = useState(false);
   const handlesVisible =
@@ -201,6 +243,7 @@ export function NodeShape({
     <g
       transform={`translate(${x},${y})`}
       style={{ cursor: showHandles ? "crosshair" : "move" }}
+      opacity={groupOpacity}
       onMouseDown={(e) => onMouseDown(e, id)}
       onContextMenu={(e) => onContextMenu?.(e, id)}
       onDoubleClick={() => onDoubleClick?.(id)}
@@ -214,19 +257,22 @@ export function NodeShape({
             cx={w / 2}
             cy={h / 2}
             r={w / 2}
-            fill={fill}
+            fill={shapeFill}
             stroke={
               // Can't use baseStroke here: start/end have unique colours that
-              // baseStroke's fallback ("#475569") would silently erase.
-              proposed && !selected && !issueStroke
-                ? AI_PROPOSED_STROKE
-                : kind === "start"
-                  ? "#16a34a"
-                  : kind === "end"
-                    ? "#991b1b"
-                    : "#475569"
+              // baseStroke's fallback ("#475569") would silently erase. A
+              // preview role takes precedence over those resting colours.
+              previewRole
+                ? baseStroke
+                : proposed && !selected && !issueStroke
+                  ? AI_PROPOSED_STROKE
+                  : kind === "start"
+                    ? "#16a34a"
+                    : kind === "end"
+                      ? "#991b1b"
+                      : "#475569"
             }
-            strokeWidth={kind === "end" ? 3.5 : 2}
+            strokeWidth={previewRole ? strokeWidth : kind === "end" ? 3.5 : 2}
             strokeDasharray={proposedDash}
           />
           {selected && (
@@ -246,7 +292,7 @@ export function NodeShape({
         <>
           <polygon
             points={`${w / 2},0 ${w},${h / 2} ${w / 2},${h} 0,${h / 2}`}
-            fill={fill}
+            fill={shapeFill}
             stroke={baseStroke}
             strokeWidth={strokeWidth}
             strokeDasharray={proposedDash}
@@ -270,7 +316,7 @@ export function NodeShape({
             height={h}
             rx={8}
             ry={8}
-            fill={fill}
+            fill={shapeFill}
             stroke={baseStroke}
             strokeWidth={strokeWidth}
             strokeDasharray={proposedDash}
@@ -287,6 +333,18 @@ export function NodeShape({
               <line x1={4} y1={6} x2={10} y2={6} stroke="#475569" strokeWidth={1.2} />
             </g>
           )}
+          {previewOldLabel && (
+            <text
+              x={w / 2}
+              y={-4}
+              textAnchor="middle"
+              fontSize="10"
+              fill={PREVIEW_VIOLET_FADE}
+              textDecoration="line-through"
+            >
+              {previewOldLabel}
+            </text>
+          )}
           <foreignObject x={6} y={10} width={w - 12} height={h - 16}>
             <div
               style={{
@@ -301,6 +359,7 @@ export function NodeShape({
                 height: "100%",
                 padding: "0 2px",
                 fontFamily: "inherit",
+                textDecoration: titleStruck ? "line-through" : undefined,
               }}
             >
               {label}
@@ -320,7 +379,24 @@ export function NodeShape({
               fontFamily: "inherit",
             }}
           >
-            {label}
+            {previewOldLabel && (
+              <span
+                style={{
+                  color: PREVIEW_VIOLET_FADE,
+                  textDecoration: "line-through",
+                  marginRight: 4,
+                }}
+              >
+                {previewOldLabel}
+              </span>
+            )}
+            <span
+              style={{
+                textDecoration: titleStruck ? "line-through" : undefined,
+              }}
+            >
+              {label}
+            </span>
           </div>
         </foreignObject>
       )}
@@ -407,6 +483,7 @@ export function EdgeArrow({
   edge,
   nodes,
   selected,
+  previewRole = null,
   onClick,
   onDoubleClick,
   onContextMenu,
@@ -415,6 +492,8 @@ export function EdgeArrow({
   edge: CanvasEdge;
   nodes: ResolvedNode[];
   selected: boolean;
+  /** Role of this edge in an active suggestion preview (ghost styling). */
+  previewRole?: PreviewRole;
   onClick: (id: string) => void;
   onDoubleClick?: (id: string) => void;
   onContextMenu?: (e: MouseEvent, id: string) => void;
@@ -436,8 +515,35 @@ export function EdgeArrow({
     bendY: edge.bendY,
   });
 
+  // Preview ghost styling: `added` = dashed violet; `removed` = faded + red +
+  // dashed (struck look). `changed`/`null` keep the resting style — a label
+  // change already shows through the new label text.
+  const previewStroke =
+    previewRole === "added"
+      ? AI_PROPOSED_STROKE
+      : previewRole === "removed"
+        ? PREVIEW_RED
+        : null;
+  const edgeStroke = previewStroke
+    ? previewStroke
+    : selected
+      ? "#0f172a"
+      : edgeProposed
+        ? AI_PROPOSED_STROKE
+        : "#94a3b8";
+  const edgeDash =
+    previewRole === "added" || previewRole === "removed"
+      ? "5 4"
+      : selected
+        ? undefined
+        : edgeProposed
+          ? AI_PROPOSED_DASH
+          : undefined;
+  const groupOpacity = previewRole === "removed" ? 0.4 : 1;
+
   return (
     <g
+      opacity={groupOpacity}
       onClick={(e) => {
         e.stopPropagation();
         onClick(edge.id);
@@ -453,9 +559,9 @@ export function EdgeArrow({
       <path
         d={d}
         fill="none"
-        stroke={selected ? "#0f172a" : edgeProposed ? AI_PROPOSED_STROKE : "#94a3b8"}
+        stroke={edgeStroke}
         strokeWidth={selected ? 2.5 : 1.5}
-        strokeDasharray={selected ? undefined : edgeProposed ? AI_PROPOSED_DASH : undefined}
+        strokeDasharray={edgeDash}
         markerEnd="url(#poet-arrow)"
       />
       {/* Hit-area for click */}

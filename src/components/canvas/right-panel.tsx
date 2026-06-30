@@ -56,6 +56,7 @@ import { bucketNodes, reviewByNodeMap } from "./review-summary";
 import { type SelectedObject } from "./chat-context";
 import { ChatTab } from "./chat-tab";
 import type { BundlePlan, BatchResult } from "./suggestion-apply";
+import type { CanvasDiff } from "./suggestion-shadow";
 
 type TabId = "chat" | "versions" | "issues" | "review" | "sources" | "refresh" | "changelog";
 
@@ -85,6 +86,8 @@ export function RightPanel({
   onCollapsedChange,
   initialTab = "chat",
   onApplySuggestions,
+  onPreviewSuggestions,
+  onCancelPreview,
   graph,
 }: {
   projectId: UUID;
@@ -107,6 +110,8 @@ export function RightPanel({
   onCollapsedChange: (next: boolean) => void;
   initialTab?: TabId;
   onApplySuggestions: (plan: BundlePlan) => Promise<BatchResult>;
+  onPreviewSuggestions?: (plan: BundlePlan) => CanvasDiff | null;
+  onCancelPreview?: () => void;
   graph: ProcessGraph;
 }) {
   const [tab, setTab] = useState<TabId>(initialTab);
@@ -240,6 +245,8 @@ export function RightPanel({
             onNavigate={onNavigate}
             onOpenSource={onOpenSource}
             onApplySuggestions={onApplySuggestions}
+            onPreviewSuggestions={onPreviewSuggestions}
+            onCancelPreview={onCancelPreview}
             graph={graph}
           />
         )}

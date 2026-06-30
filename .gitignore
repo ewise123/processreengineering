@@ -66,3 +66,6 @@ skills-lock.json
 
 # graphify generated output
 /graphify-out/
+
+# Superpowers brainstorm visual companion
+.superpowers/
