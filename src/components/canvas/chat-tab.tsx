@@ -317,12 +317,16 @@ export function ChatTab({
       toast.error(plan.reason ?? "This change can no longer be previewed.");
       return;
     }
-    // Single canvas preview slot: starting a new one drops the prior card's
-    // "previewing" status (its ghosts are about to be replaced).
+    // Only flip the card to "previewing" if the canvas actually rendered the
+    // preview. `onPreviewSuggestions` returns the diff (or null when the canvas
+    // isn't ready); a null means nothing rendered, so leave the card untouched.
+    const diff = onPreviewSuggestions?.(plan) ?? null;
+    if (!diff) return;
+    // Single canvas preview slot: now that the new preview is live, drop the
+    // prior card's "previewing" status (its ghosts have been replaced).
     if (previewingId && previewingId.bundleId !== bundle.id) {
       setBundleStatus(previewingId.msgIndex, previewingId.bundleId, "pending");
     }
-    onPreviewSuggestions?.(plan);
     setPreviewingId({ msgIndex, bundleId: bundle.id });
     setBundleStatus(msgIndex, bundle.id, "previewing");
   };

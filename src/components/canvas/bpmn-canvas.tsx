@@ -1027,6 +1027,22 @@ function BpmnCanvas({
         return;
       }
 
+      // While previewing a suggestion the canvas renders a shadow; block every
+      // mutating shortcut (delete / undo / redo / paste) so a stray edit can't
+      // commit against — and desync — the preview. Non-mutating keys (copy,
+      // tool switch, Escape, Space-pan) stay live.
+      if (previewRef.current) {
+        const m = e.metaKey || e.ctrlKey;
+        const mutating =
+          e.key === "Delete" ||
+          e.key === "Backspace" ||
+          (m && ["z", "Z", "y", "Y", "v", "V"].includes(e.key));
+        if (mutating) {
+          e.preventDefault();
+          return;
+        }
+      }
+
       const mod = e.metaKey || e.ctrlKey;
       if (mod && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
@@ -2127,6 +2143,7 @@ function BpmnCanvas({
     (e: MouseEvent, nodeId: UUID) => {
       e.preventDefault();
       e.stopPropagation();
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       const wasSelected = selectedIdsRef.current.has(nodeId);
       if (!wasSelected) selectOnly(nodeId);
       // When the node wasn't already selected we just collapsed to it (size 1);
@@ -2159,6 +2176,7 @@ function BpmnCanvas({
     (e: MouseEvent, edgeId: UUID) => {
       e.preventDefault();
       e.stopPropagation();
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       selectOnly(edgeId);
       setContextMenu({
         x: e.clientX,
@@ -2175,6 +2193,7 @@ function BpmnCanvas({
   const openCanvasMenu = useCallback(
     (e: MouseEvent<SVGSVGElement>) => {
       e.preventDefault();
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       setContextMenu({
         x: e.clientX,
         y: e.clientY,

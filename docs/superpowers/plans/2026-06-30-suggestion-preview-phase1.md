@@ -938,4 +938,3 @@ git commit -m "feat(suggest): wire Preview/Cancel from card through to canvas pr
 - **Type consistency:** `CanvasState`/`CanvasDiff` defined in Task 3-4 are imported unchanged in Tasks 5 and 8; `previewPlan` returns `CanvasDiff` everywhere; `CardStatus` gains `"previewing"` in Task 7 and chat-tab sets exactly that string in Task 8.
 - **Placement parity:** Task 1's `placeNewNodeIn` is the single placement source for both the real executor (`placeNewNode`) and the shadow (`applyPlanToCanvas`), so a previewed add lands where Apply puts it.
 - **No silent divergence:** the shadow reducer mirrors `runStep`'s local effects op-for-op; if a future op kind is added to `MutationStep`, the `default: never` arm in `applyPlanToCanvas` fails the typecheck.
-```
