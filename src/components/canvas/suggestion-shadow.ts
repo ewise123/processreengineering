@@ -132,3 +132,62 @@ export function applyPlanToCanvas(state: CanvasState, plan: BundlePlan): CanvasS
 
   return { nodes, edges, lanes };
 }
+
+export interface CanvasDiff {
+  addedNodeIds: Set<string>;
+  addedEdgeIds: Set<string>;
+  addedLaneIds: Set<string>;
+  removedNodeIds: Set<string>;
+  removedEdgeIds: Set<string>;
+  changedNodeIds: Set<string>; // label / type / laneId / description changed
+  changedEdgeIds: Set<string>; // label changed
+  changedLaneIds: Set<string>; // name changed
+}
+
+/** Compare the live state (before) with the shadow (after) and classify each
+ * object as added / removed / changed. Drives the preview's ghost styling. */
+export function diffCanvas(before: CanvasState, after: CanvasState): CanvasDiff {
+  const beforeNodes = new Map(before.nodes.map((n) => [n.id, n]));
+  const afterNodes = new Map(after.nodes.map((n) => [n.id, n]));
+  const beforeEdges = new Map(before.edges.map((e) => [e.id, e]));
+  const afterEdges = new Map(after.edges.map((e) => [e.id, e]));
+  const beforeLanes = new Map(before.lanes.map((l) => [l.id, l]));
+  const afterLanes = new Map(after.lanes.map((l) => [l.id, l]));
+
+  const addedNodeIds = new Set<string>();
+  const removedNodeIds = new Set<string>();
+  const changedNodeIds = new Set<string>();
+  for (const id of afterNodes.keys()) if (!beforeNodes.has(id)) addedNodeIds.add(id);
+  for (const id of beforeNodes.keys()) if (!afterNodes.has(id)) removedNodeIds.add(id);
+  for (const [id, a] of afterNodes) {
+    const b = beforeNodes.get(id);
+    if (!b) continue;
+    if (a.label !== b.label || a.type !== b.type || a.laneId !== b.laneId || a.description !== b.description) {
+      changedNodeIds.add(id);
+    }
+  }
+
+  const addedEdgeIds = new Set<string>();
+  const removedEdgeIds = new Set<string>();
+  const changedEdgeIds = new Set<string>();
+  for (const id of afterEdges.keys()) if (!beforeEdges.has(id)) addedEdgeIds.add(id);
+  for (const id of beforeEdges.keys()) if (!afterEdges.has(id)) removedEdgeIds.add(id);
+  for (const [id, a] of afterEdges) {
+    const b = beforeEdges.get(id);
+    if (b && a.label !== b.label) changedEdgeIds.add(id);
+  }
+
+  const addedLaneIds = new Set<string>();
+  const changedLaneIds = new Set<string>();
+  for (const id of afterLanes.keys()) if (!beforeLanes.has(id)) addedLaneIds.add(id);
+  for (const [id, a] of afterLanes) {
+    const b = beforeLanes.get(id);
+    if (b && a.label !== b.label) changedLaneIds.add(id);
+  }
+
+  return {
+    addedNodeIds, addedEdgeIds, addedLaneIds,
+    removedNodeIds, removedEdgeIds,
+    changedNodeIds, changedEdgeIds, changedLaneIds,
+  };
+}

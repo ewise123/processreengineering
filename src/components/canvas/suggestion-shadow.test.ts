@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyPlanToCanvas, type CanvasState } from "./suggestion-shadow";
+import { applyPlanToCanvas, diffCanvas, type CanvasState } from "./suggestion-shadow";
 import type { BundlePlan } from "./suggestion-apply";
 import type { CanvasNode, CanvasEdge, CanvasLane } from "./types";
 
@@ -102,5 +102,32 @@ describe("applyPlanToCanvas", () => {
 
     const ren = applyPlanToCanvas(base(), plan([{ kind: "update_lane", laneRef: "L1", name: "Intake" }]));
     expect(ren.lanes.find((l) => l.id === "L1")!.label).toBe("Intake");
+  });
+});
+
+describe("diffCanvas", () => {
+  it("classifies added / removed / changed across nodes, edges, lanes", () => {
+    const before = base();
+    const after = applyPlanToCanvas(before, plan([
+      { kind: "update_node", nodeRef: "A", name: "Renamed" },          // changed node
+      { kind: "delete_node", nodeRef: "B" },                            // removed node (+ cascade E1)
+      { kind: "create_node", tempId: "tmp:1", laneRef: "L1", nodeType: "task", label: "New", nearNodeRef: "A" }, // added node
+      { kind: "create_lane", tempId: "tmp:L", name: "QA" },             // added lane
+      { kind: "update_lane", laneRef: "L1", name: "Intake" },           // changed lane
+    ]));
+    const d = diffCanvas(before, after);
+    expect([...d.changedNodeIds]).toEqual(["A"]);
+    expect([...d.removedNodeIds]).toEqual(["B"]);
+    expect([...d.addedNodeIds]).toEqual(["tmp:1"]);
+    expect([...d.removedEdgeIds]).toEqual(["E1"]); // cascade
+    expect([...d.addedLaneIds]).toEqual(["tmp:L"]);
+    expect([...d.changedLaneIds]).toEqual(["L1"]);
+  });
+
+  it("does not flag an unchanged node as changed", () => {
+    const before = base();
+    const after = applyPlanToCanvas(before, plan([{ kind: "update_node", nodeRef: "A", name: "Renamed" }]));
+    expect(after.nodes.find((n) => n.id === "B")).toBeDefined();
+    expect([...diffCanvas(before, after).changedNodeIds]).not.toContain("B");
   });
 });
