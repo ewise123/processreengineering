@@ -200,6 +200,15 @@ export default function CanvasPage() {
     [queryClient, params.id, params.modelId, params.versionId]
   );
 
+  const handlePreviewSuggestions = useCallback(
+    (plan: BundlePlan) => canvasRef.current?.previewPlan(plan) ?? null,
+    []
+  );
+
+  const handleCancelPreview = useCallback(() => {
+    canvasRef.current?.clearPreview();
+  }, []);
+
   const handleNodeDeleted = useCallback(
     (_id: UUID) => {
       setSelected({ kind: "none" });
@@ -551,6 +560,8 @@ export default function CanvasPage() {
             collapsed={rightCollapsed}
             onCollapsedChange={setRightCollapsed}
             onApplySuggestions={handleApplySuggestions}
+            onPreviewSuggestions={handlePreviewSuggestions}
+            onCancelPreview={handleCancelPreview}
             graph={data}
           />
         </div>
