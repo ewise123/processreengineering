@@ -1116,6 +1116,7 @@ function BpmnCanvas({
 
   const toggleLaneCollapse = useCallback(
     (laneId: string) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       const willCollapse = !collapsedLaneIdsRef.current.has(laneId);
       setCollapsedLaneIds((curr) => {
         const next = new Set(curr);
@@ -2220,6 +2221,7 @@ function BpmnCanvas({
 
   const moveLane = useCallback(
     (laneId: string, targetIdx: number) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       const curr = lanesRef.current;
       const oldIdx = curr.findIndex((l) => l.id === laneId);
       if (oldIdx === -1) return;
@@ -2262,6 +2264,7 @@ function BpmnCanvas({
 
   const resizeLane = useCallback(
     (laneId: string, newH: number) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       const old = lanesRef.current.find((l) => l.id === laneId);
       if (!old) return;
       const oldH = old.h;
@@ -2289,6 +2292,7 @@ function BpmnCanvas({
 
   const renameLane = useCallback(
     async (laneId: string, newName: string) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       const old = lanesRef.current.find((l) => l.id === laneId);
       if (!old || old.label === newName) return;
       const oldName = old.label;
@@ -2317,6 +2321,7 @@ function BpmnCanvas({
 
   const setLaneColor = useCallback(
     (laneId: string, color: string) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       const old = lanesRef.current.find((l) => l.id === laneId);
       if (!old || old.color === color) return;
       const oldColor = old.color;
@@ -2371,6 +2376,7 @@ function BpmnCanvas({
 
   const deleteLane = useCallback(
     async (laneId: string) => {
+      if (previewRef.current) return; // suspend edits while previewing a suggestion
       if (lanesRef.current.length <= 1) return;
       // Flush pending PATCHes so we don't fire a 404 against a deleted lane.
       await flush();

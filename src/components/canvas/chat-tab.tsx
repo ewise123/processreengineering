@@ -107,9 +107,10 @@ export function ChatTab({
     pendingRef.current = null;
     undoHandles.current.clear();
     setBundleErrorById({});
+    onCancelPreview?.(); // clear canvas ghosts so a stale preview can't survive a version switch
     setPreviewingId(null);
     setHistory(sessionStore.load(versionId) as ChatItem[]);
-  }, [versionId, sessionStore]);
+  }, [versionId, sessionStore, onCancelPreview]);
 
   const labelById = useMemo(() => {
     const m = new Map<UUID, string>();
@@ -282,7 +283,14 @@ export function ChatTab({
   };
 
   const applyBundle = async (msgIndex: number, bundle: Bundle) => {
-    if (previewingId) { onCancelPreview?.(); setPreviewingId(null); }
+    if (previewingId) {
+      onCancelPreview?.();
+      // If a different card was previewing, its ghosts are now gone — return it to pending.
+      if (previewingId.bundleId !== bundle.id) {
+        setBundleStatus(previewingId.msgIndex, previewingId.bundleId, "pending");
+      }
+      setPreviewingId(null);
+    }
     setBundleStatus(msgIndex, bundle.id, "applying");
     const plan = planBundle(bundle, graphIndex);
     const res = await onApplySuggestions(plan);
@@ -308,6 +316,11 @@ export function ChatTab({
     if (!plan.applyable) {
       toast.error(plan.reason ?? "This change can no longer be previewed.");
       return;
+    }
+    // Single canvas preview slot: starting a new one drops the prior card's
+    // "previewing" status (its ghosts are about to be replaced).
+    if (previewingId && previewingId.bundleId !== bundle.id) {
+      setBundleStatus(previewingId.msgIndex, previewingId.bundleId, "pending");
     }
     onPreviewSuggestions?.(plan);
     setPreviewingId({ msgIndex, bundleId: bundle.id });
