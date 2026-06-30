@@ -151,6 +151,9 @@ def _ctx_stub():
         edge_ref_to_id={"E1": e1},
         lane_ref_to_id={"L1": l1},
         claim_ref_to_id={"C1": c1},
+        node_name_by_id={n1: "Receive invoice", n2: "Approve"},
+        edge_label_by_id={e1: "if approved"},
+        lane_name_by_id={l1: "Finance"},
     ), (n1, n2, e1, l1, c1)
 
 
@@ -165,6 +168,37 @@ def test_build_suggestion_resolves_node_ref_and_claims():
     assert s.cited_claim_ids == [c1]          # C99 dropped
     assert s.affected_refs[0].id == n1
     assert s.affected_refs[0].kind.value == "node"
+
+
+def test_build_suggestion_captures_before_label_for_rename_family():
+    # The card freezes the target's name as it was when proposed, so it can show
+    # a stable "old -> new" instead of collapsing to the new name after apply.
+    from app.api.v2 import process_maps as pm_api
+    ctx, (n1, _n2, e1, l1, _c1) = _ctx_stub()
+
+    node = pm_api._build_suggestion(
+        {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
+         "title": "t", "rationale": "r", "cited_claim_refs": []}, ctx, index=0)
+    assert node.before_label == "Receive invoice"
+
+    lane = pm_api._build_suggestion(
+        {"kind": "rename_lane", "lane_ref": "L1", "name": "Procurement",
+         "title": "t", "rationale": "r", "cited_claim_refs": []}, ctx, index=1)
+    assert lane.before_label == "Finance"
+
+    edge = pm_api._build_suggestion(
+        {"kind": "relabel_edge", "edge_ref": "E1", "new_label": "if rejected",
+         "title": "t", "rationale": "r", "cited_claim_refs": []}, ctx, index=2)
+    assert edge.before_label == "if approved"
+
+
+def test_build_suggestion_before_label_none_for_non_rename_ops():
+    from app.api.v2 import process_maps as pm_api
+    ctx, (_n1, _n2, _e1, _l1, _c1) = _ctx_stub()
+    s = pm_api._build_suggestion(
+        {"kind": "move_to_lane", "node_ref": "N1", "lane_ref": "L1",
+         "title": "t", "rationale": "r", "cited_claim_refs": []}, ctx, index=0)
+    assert s.before_label is None
 
 
 def test_build_suggestion_keeps_temp_ids_for_new_objects():

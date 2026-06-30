@@ -108,6 +108,10 @@ class ChatSuggestion(BaseModel):
     affected_refs: list[ObjectRef] = Field(default_factory=list)
     rationale: str = Field(default="", max_length=2000)
     cited_claim_ids: list[UUID] = Field(default_factory=list)
+    # For rename-family ops (relabel_node/rename_lane/relabel_edge): the target's
+    # name/label as it was when proposed, so the card can show a stable
+    # "old -> new" transition that doesn't collapse once the change is applied.
+    before_label: str | None = Field(default=None, max_length=500)
 
 
 class ChatTurn(BaseModel):

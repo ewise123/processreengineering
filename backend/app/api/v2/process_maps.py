@@ -1823,6 +1823,7 @@ def _build_suggestion(raw: dict, ctx, index: int):
     if the op is malformed. Mirrors _resolve_refs' fabricated-ref hygiene."""
     op_kwargs = {"kind": raw.get("kind")}
     affected: list[ObjectRef] = []
+    real_id_by_field: dict[str, UUID] = {}
     for field, (map_attr, ref_kind) in _OP_REF_FIELDS.items():
         if field not in raw or raw[field] is None:
             continue
@@ -1833,6 +1834,7 @@ def _build_suggestion(raw: dict, ctx, index: int):
         op_kwargs[field] = resolved_str
         if real_id is not None:
             affected.append(ObjectRef(kind=ref_kind, id=real_id))
+            real_id_by_field[field] = real_id
     # literal (non-ref) fields pass straight through
     for field in ("new_label", "description", "name", "node_type", "edge_label", "sub_steps"):
         if raw.get(field) is not None:
@@ -1870,7 +1872,21 @@ def _build_suggestion(raw: dict, ctx, index: int):
         affected_refs=affected,
         rationale=_resolve_mention_refs(str(raw.get("rationale") or ""), ctx)[:2000],
         cited_claim_ids=_resolve_refs(raw.get("cited_claim_refs"), ctx.claim_ref_to_id),
+        before_label=_rename_before_label(op.kind, real_id_by_field, ctx),
     )
+
+
+def _rename_before_label(kind, real_id_by_field: dict, ctx) -> str | None:
+    """For a rename-family op, the target's current name/label — frozen so the
+    card shows a stable "old -> new" instead of collapsing once applied."""
+    field, attr = {
+        OpKind.RELABEL_NODE: ("node_ref", "node_name_by_id"),
+        OpKind.RENAME_LANE: ("lane_ref", "lane_name_by_id"),
+        OpKind.RELABEL_EDGE: ("edge_ref", "edge_label_by_id"),
+    }.get(kind, (None, None))
+    if field is None or field not in real_id_by_field:
+        return None
+    return getattr(ctx, attr, {}).get(real_id_by_field[field])
 
 
 def _drop_orphaned_consumers(suggestions: list[ChatSuggestion]) -> list[ChatSuggestion]:

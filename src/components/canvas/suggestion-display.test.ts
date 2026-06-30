@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SuggestionOp } from "@/lib/types";
-import { isTmpRef, opPayload, opTarget } from "./suggestion-display";
+import { isTmpRef, opPayload, opTarget, renameTransition } from "./suggestion-display";
 
 const op = (o: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }): SuggestionOp =>
   ({ kind: o.kind, ...o }) as SuggestionOp;
@@ -69,5 +69,28 @@ describe("opPayload", () => {
   it("returns null when there is no value to show", () => {
     expect(opPayload(op({ kind: "remove_node", node_ref: "N-1" }))).toBeNull();
     expect(opPayload(op({ kind: "add_edge", from_ref: "N-1", to_ref: "N-2" }))).toBeNull();
+  });
+});
+
+describe("renameTransition", () => {
+  it("freezes before → after for the rename family", () => {
+    expect(renameTransition(op({ kind: "relabel_node", new_label: "Receive supplier invoice" }), "Receive invoice via email or mail"))
+      .toEqual({ before: "Receive invoice via email or mail", after: "Receive supplier invoice" });
+    expect(renameTransition(op({ kind: "rename_lane", name: "Procurement" }), "Finance"))
+      .toEqual({ before: "Finance", after: "Procurement" });
+    expect(renameTransition(op({ kind: "relabel_edge", new_label: "if rejected" }), "if approved"))
+      .toEqual({ before: "if approved", after: "if rejected" });
+  });
+
+  it("uses a placeholder when there is no prior label (e.g. an unlabeled edge)", () => {
+    expect(renameTransition(op({ kind: "relabel_edge", new_label: "if duplicate" }), null))
+      .toEqual({ before: "(no label)", after: "if duplicate" });
+    expect(renameTransition(op({ kind: "relabel_edge", new_label: "if duplicate" }), "  "))
+      .toEqual({ before: "(no label)", after: "if duplicate" });
+  });
+
+  it("returns null for non-rename ops (they keep the live mention + value preview)", () => {
+    expect(renameTransition(op({ kind: "describe_node", description: "x" }), "anything")).toBeNull();
+    expect(renameTransition(op({ kind: "move_to_lane", node_ref: "N-1", lane_ref: "L-2" }), "anything")).toBeNull();
   });
 });

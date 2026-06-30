@@ -406,6 +406,9 @@ export interface ChatSuggestion {
   affected_refs: ObjectRef[];
   rationale: string;
   cited_claim_ids: UUID[];
+  /** For rename-family ops: the target's name/label when proposed, so the card
+   * shows a stable "old → new" that doesn't collapse once applied. */
+  before_label?: string | null;
 }
 
 export interface ChatSuggestRequest {
