@@ -52,6 +52,17 @@ export function nodeKindFromType(type: string): CanvasNodeKind {
   }
 }
 
+/** Pure helper: recompute `y` offsets for a lane list after insertions/deletions.
+ * Exported so both the canvas body and shadow reducers can call it. */
+export function recomputeY(ls: CanvasLane[]): CanvasLane[] {
+  let y = 0;
+  return ls.map((l) => {
+    const out = { ...l, y };
+    y += l.h;
+    return out;
+  });
+}
+
 export function buildCanvasState(graph: ProcessGraph): {
   nodes: CanvasNode[];
   edges: CanvasEdge[];

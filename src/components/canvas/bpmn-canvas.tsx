@@ -21,7 +21,7 @@ import type { BundlePlan, BatchResult, MutationStep } from "./suggestion-apply";
 import { CanvasContextMenu, type ContextMenuItem } from "./canvas-context-menu";
 import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
-import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType } from "./layout";
+import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType, recomputeY } from "./layout";
 import { sizeForNodeType } from "./node-type";
 import { placeNewNodeIn, placeProposedStep } from "./ai-edit";
 import { edgeFocusCenter } from "./edge-focus";
@@ -209,16 +209,6 @@ interface BpmnCanvasProps {
 const APPLIED_REASON_FALLBACK = "Applied AI suggestion";
 const REVERT_REASON = "Reverted an applied AI suggestion";
 
-/** Pure helper: recompute `y` offsets for a lane list after insertions/deletions.
- * Module-level (not a hook) so both the canvas body and `runStep` can call it. */
-function recomputeY(ls: CanvasLane[]): CanvasLane[] {
-  let y = 0;
-  return ls.map((l) => {
-    const out = { ...l, y };
-    y += l.h;
-    return out;
-  });
-}
 
 export const BpmnCanvas = forwardRef<BpmnCanvasHandle, BpmnCanvasProps>(
 function BpmnCanvas({
