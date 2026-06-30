@@ -65,6 +65,11 @@ const MIN_SCALE = 0.2;
 const MAX_SCALE = 2.5;
 const ZOOM_STEP = 1.2;
 
+// The role an object plays in an active suggestion preview, used to ghost-style
+// it. `null` = not part of the diff (or no preview active). Style constants live
+// in `shapes.tsx`, where the rect/path/text actually consume them.
+type PreviewRole = "added" | "changed" | "removed" | null;
+
 type Drag =
   | {
       type: "node";
@@ -1185,23 +1190,47 @@ function BpmnCanvas({
     });
   }, [lanes.length, nodes.length, edges.length, onCountsChange]);
 
+  // Preview render sources. While previewing a suggestion, the canvas draws the
+  // UNION of (a) the shadow — which already holds added + changed + surviving
+  // objects with their NEW values — and (b) the live objects the plan REMOVES,
+  // so deletions render struck-through rather than just vanishing. Only RENDER
+  // derivations consume these; all mutation/executor/ref code keeps using the
+  // live `nodes`/`edges`/`lanes`. When `preview` is null these short-circuit to
+  // the live arrays, so non-preview behavior is byte-for-byte identical.
+  const srcNodes = useMemo<CanvasNode[]>(() => {
+    if (!preview) return nodes;
+    const removed = nodes.filter((n) => preview.diff.removedNodeIds.has(n.id));
+    return [...preview.shadow.nodes, ...removed];
+  }, [preview, nodes]);
+
+  const srcEdges = useMemo<CanvasEdge[]>(() => {
+    if (!preview) return edges;
+    const removed = edges.filter((e) => preview.diff.removedEdgeIds.has(e.id));
+    return [...preview.shadow.edges, ...removed];
+  }, [preview, edges]);
+
+  const srcLanes = useMemo<CanvasLane[]>(
+    () => (preview ? preview.shadow.lanes : lanes),
+    [preview, lanes]
+  );
+
   const worldWidth = useMemo(() => {
-    const maxX = nodes.reduce((m, n) => Math.max(m, n.x + n.w), 0);
+    const maxX = srcNodes.reduce((m, n) => Math.max(m, n.x + n.w), 0);
     return Math.max(WORLD_WIDTH_MIN, maxX + WORLD_RIGHT_PADDING);
-  }, [nodes]);
+  }, [srcNodes]);
 
   // Lane geometry as shown on screen: collapsed lanes shrink to a thin strip.
   // The real `lanes` (true heights) are kept for persistence; only display
   // geometry changes, so expanding restores the stored height.
   const displayLanes = useMemo(() => {
     let y = 0;
-    return lanes.map((l) => {
+    return srcLanes.map((l) => {
       const h = collapsedLaneIds.has(l.id) ? COLLAPSED_LANE_HEIGHT : l.h;
       const out = { ...l, y, h };
       y += h;
       return out;
     });
-  }, [lanes, collapsedLaneIds]);
+  }, [srcLanes, collapsedLaneIds]);
 
   const displayLanesRef = useRef(displayLanes);
   displayLanesRef.current = displayLanes;
@@ -1213,7 +1242,7 @@ function BpmnCanvas({
 
   const renderNodes: ResolvedNode[] = useMemo(() => {
     const laneMap = new Map(displayLanes.map((l) => [l.id, l]));
-    return nodes
+    return srcNodes
       .filter((n) => !(n.laneId && collapsedLaneIds.has(n.laneId)))
       .map((n) => {
         const lane = n.laneId ? laneMap.get(n.laneId) : undefined;
@@ -1222,10 +1251,51 @@ function BpmnCanvas({
         void _ignore;
         return { ...rest, y };
       });
-  }, [nodes, displayLanes, collapsedLaneIds]);
+  }, [srcNodes, displayLanes, collapsedLaneIds]);
 
   const renderNodesRef = useRef(renderNodes);
   renderNodesRef.current = renderNodes;
+
+  // Classify a render object by its role in the active preview diff so the JSX
+  // can ghost-style it. Returns null when not previewing (or unchanged).
+  const nodePreviewRole = useCallback(
+    (id: string): PreviewRole => {
+      const d = preview?.diff;
+      if (!d) return null;
+      if (d.addedNodeIds.has(id)) return "added";
+      if (d.removedNodeIds.has(id)) return "removed";
+      if (d.changedNodeIds.has(id)) return "changed";
+      return null;
+    },
+    [preview]
+  );
+
+  const edgePreviewRole = useCallback(
+    (id: string): PreviewRole => {
+      const d = preview?.diff;
+      if (!d) return null;
+      if (d.addedEdgeIds.has(id)) return "added";
+      if (d.removedEdgeIds.has(id)) return "removed";
+      if (d.changedEdgeIds.has(id)) return "changed";
+      return null;
+    },
+    [preview]
+  );
+
+  // Total object-level changes summarized in the preview banner.
+  const previewCount = preview
+    ? preview.diff.addedNodeIds.size +
+      preview.diff.changedNodeIds.size +
+      preview.diff.removedNodeIds.size +
+      preview.diff.addedEdgeIds.size +
+      preview.diff.changedEdgeIds.size +
+      preview.diff.removedEdgeIds.size +
+      preview.diff.addedLaneIds.size +
+      preview.diff.changedLaneIds.size
+    : 0;
+  const previewHasRemovals = preview
+    ? preview.diff.removedNodeIds.size + preview.diff.removedEdgeIds.size > 0
+    : false;
 
   const toWorld = useCallback(
     (sx: number, sy: number) => {
@@ -2341,6 +2411,19 @@ function BpmnCanvas({
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      {preview && (
+        <div
+          className={`pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-full border px-3 py-1 text-xs font-semibold shadow-sm ${
+            previewHasRemovals
+              ? "border-rose-200 bg-rose-50 text-rose-700"
+              : "border-violet-200 bg-violet-50 text-violet-700"
+          }`}
+        >
+          {previewHasRemovals
+            ? "⚠ Preview removal · impact shown"
+            : `⚡ Preview · ${previewCount} change${previewCount === 1 ? "" : "s"} · not yet saved`}
+        </div>
+      )}
       <svg
         ref={svgRef}
         onMouseDown={onSvgMouseDown}
@@ -2430,10 +2513,10 @@ function BpmnCanvas({
               />
             </g>
           ))}
-          {edges
+          {srcEdges
             .filter((edge) => {
-              const f = nodes.find((n) => n.id === edge.from);
-              const t = nodes.find((n) => n.id === edge.to);
+              const f = srcNodes.find((n) => n.id === edge.from);
+              const t = srcNodes.find((n) => n.id === edge.to);
               const hidden = (n?: CanvasNode) =>
                 !!n?.laneId && collapsedLaneIds.has(n.laneId);
               return !hidden(f) && !hidden(t);
@@ -2444,6 +2527,7 @@ function BpmnCanvas({
                 edge={edge}
                 nodes={renderNodes}
                 selected={selectedIds.has(edge.id)}
+                previewRole={edgePreviewRole(edge.id)}
                 onClick={(id) => selectOnly(id)}
                 onDoubleClick={(id) => {
                   selectOnly(id);
@@ -2453,23 +2537,39 @@ function BpmnCanvas({
                 onStartBendDrag={onStartBendDrag}
               />
             ))}
-          {renderNodes.map((node) => (
-            <NodeShape
-              key={node.id}
-              node={node}
-              selected={selectedIds.has(node.id)}
-              issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
-              reviewBadge={reviewMode ? reviewMap[node.id] ?? null : null}
-              showHandles={tool === "connect"}
-              onMouseDown={onNodeMouseDown}
-              onContextMenu={openNodeMenu}
-              onStartConnect={onStartConnect}
-              onDoubleClick={(id) => {
-                const n = nodesRef.current.find((x) => x.id === id);
-                if (n?.childModelId) onDrillIntoNode?.(n.childModelId);
-              }}
-            />
-          ))}
+          {renderNodes.map((node) => {
+            const previewRole = nodePreviewRole(node.id);
+            // For a changed node, surface the OLD label (struck-through) by
+            // diffing against the live node. Lane-only changes leave labels
+            // equal, so nothing extra is drawn.
+            const liveNode =
+              previewRole === "changed"
+                ? nodes.find((n) => n.id === node.id)
+                : undefined;
+            const previewOldLabel =
+              liveNode && liveNode.label !== node.label
+                ? liveNode.label
+                : null;
+            return (
+              <NodeShape
+                key={node.id}
+                node={node}
+                selected={selectedIds.has(node.id)}
+                issueLevel={showIssues ? issuesMap[node.id] ?? null : null}
+                reviewBadge={reviewMode ? reviewMap[node.id] ?? null : null}
+                showHandles={tool === "connect"}
+                previewRole={previewRole}
+                previewOldLabel={previewOldLabel}
+                onMouseDown={onNodeMouseDown}
+                onContextMenu={openNodeMenu}
+                onStartConnect={onStartConnect}
+                onDoubleClick={(id) => {
+                  const n = nodesRef.current.find((x) => x.id === id);
+                  if (n?.childModelId) onDrillIntoNode?.(n.childModelId);
+                }}
+              />
+            );
+          })}
           {flashId && (() => {
             const pulse = (
               <animate attributeName="opacity" values="1;0.2;1" dur="0.7s" repeatCount="2" />
@@ -2600,6 +2700,7 @@ function BpmnCanvas({
         onSetColor={setLaneColor}
         collapsedLaneIds={collapsedLaneIds}
         onToggleCollapse={toggleLaneCollapse}
+        addedLaneIds={preview?.diff.addedLaneIds}
       />
 
       <ShapePalette />
