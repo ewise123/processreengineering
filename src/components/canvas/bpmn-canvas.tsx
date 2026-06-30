@@ -712,12 +712,16 @@ function BpmnCanvas({
           // a harmless no-op on the server if the forward call never landed.
           inverses.push(async () => {
             setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...prev } : n)));
-            await api.updateNode(projectId, id, {
-              name: prev.label,
-              description: prev.description,
-              lane_id: prev.laneId ?? undefined,
-              reason: REVERT_REASON,
-            });
+            // Mirror the forward step: only restore the fields it touched, so an
+            // undo never writes a spurious change to an untouched field. A
+            // describe_node applied to a node that had no description is reverted
+            // with "" (an explicit empty string the backend persists) rather than
+            // `undefined`, which a PATCH drops and so can't clear the field.
+            const inversePatch: NodeUpdate = { reason: REVERT_REASON };
+            if (step.name !== undefined) inversePatch.name = prev.label;
+            if (step.description !== undefined) inversePatch.description = prev.description ?? "";
+            if (step.laneRef !== undefined) inversePatch.lane_id = prev.laneId ?? undefined;
+            await api.updateNode(projectId, id, inversePatch);
           });
           await api.updateNode(projectId, id, apiPatch);
           break;

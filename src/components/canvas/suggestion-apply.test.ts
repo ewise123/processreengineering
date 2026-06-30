@@ -291,7 +291,10 @@ describe("reasonForSuggestion", () => {
     const s = sgWith("a", { kind: "relabel_node", node_ref: "N1", new_label: "X" }, {
       rationale: "x".repeat(5000),
     });
-    expect(reasonForSuggestion(s).length).toBeLessThanOrEqual(2000);
+    const reason = reasonForSuggestion(s);
+    expect(reason).toHaveLength(2000);
+    expect(reason.endsWith("…")).toBe(true);
+    expect(reason.slice(0, -1)).toBe("x".repeat(1999));
   });
 });
 
@@ -327,5 +330,23 @@ describe("planBundle reason threading", () => {
     const laneStep = lanePlan.steps[0];
     if (laneStep.kind !== "update_lane") throw new Error("expected update_lane step");
     expect(laneStep.reason).toBe("Owner is Ops.");
+  });
+
+  it("gives each suggestion in a grouped bundle its own reason", () => {
+    // Two suggestions of different kinds, grouped, with distinct rationales — a
+    // regression that reused the first suggestion's reason for the whole bundle
+    // would be caught here.
+    const a = { ...sgWith("a", { kind: "relabel_node", node_ref: "N1", new_label: "Receive PO" }, { rationale: "Reason A." }), group: "g1" };
+    const b = { ...sgWith("b", { kind: "relabel_edge", edge_ref: "E1", new_label: "if approved" }, { rationale: "Reason B." }), group: "g1" };
+    const bundle = bundleSuggestions([a, b])[0];
+    expect(bundle.suggestions).toHaveLength(2);
+    const plan = planBundle(bundle, idx());
+    const nodeStep = plan.steps.find((s) => s.kind === "update_node");
+    const edgeStep = plan.steps.find((s) => s.kind === "update_edge_label");
+    if (nodeStep?.kind !== "update_node" || edgeStep?.kind !== "update_edge_label") {
+      throw new Error("expected one update_node and one update_edge_label step");
+    }
+    expect(nodeStep.reason).toBe("Reason A.");
+    expect(edgeStep.reason).toBe("Reason B.");
   });
 });

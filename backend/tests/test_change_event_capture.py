@@ -73,6 +73,7 @@ def test_update_edge_ai_applied_records_chat_source_and_ai_actor(db):
     ev = max(_events_for(db, edge.id), key=lambda e: e.created_at)
     assert ev.source == "chat"
     assert ev.actor_kind == "ai"
+    assert ev.reason == "branch label"
 
 
 def test_update_lane_ai_applied_records_chat_source_and_ai_actor(db):
@@ -84,6 +85,7 @@ def test_update_lane_ai_applied_records_chat_source_and_ai_actor(db):
     ev = max(_events_for(db, lane.id), key=lambda e: e.created_at)
     assert ev.source == "chat"
     assert ev.actor_kind == "ai"
+    assert ev.reason == "Owner is Ops"
 
 
 def test_update_node_manual_default_stays_manual_user(db):

@@ -269,6 +269,8 @@ const MENTION_NOUN: Record<string, string> = {
   claim: "a cited source",
 };
 
+/** Flatten assistant prose to a single line of plain text, replacing each
+ * `[[kind:uuid]]` mention with its readable noun and collapsing whitespace. */
 function toPlainText(text: string): string {
   return parseMentions(text)
     .map((seg) => (seg.type === "text" ? seg.value : MENTION_NOUN[seg.kind] ?? ""))
@@ -277,6 +279,8 @@ function toPlainText(text: string): string {
     .trim();
 }
 
+/** Truncate to REASON_MAX, appending an ellipsis so the result is never longer
+ * than the backend's limit (the ellipsis replaces the final char of the cap). */
 function cap(text: string): string {
   return text.length <= REASON_MAX ? text : `${text.slice(0, REASON_MAX - 1).trimEnd()}…`;
 }
