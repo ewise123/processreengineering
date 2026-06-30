@@ -76,11 +76,21 @@ describe("applyPlanToCanvas", () => {
     const del = applyPlanToCanvas(base(), plan([{ kind: "delete_edge", edgeRef: "E1" }]));
     expect(del.edges.find((e) => e.id === "E1")).toBeUndefined();
 
-    const s = base();
-    s.nodes.push(node("C", "L1", 520));
+    const s: CanvasState = {
+      nodes: [node("A", "L1", 80), node("B", "L1", 300), node("C", "L1", 520)],
+      edges: [{ ...edge("E1", "A", "B"), label: "approved" }],
+      lanes: [lane("L1")],
+    };
     const rer = applyPlanToCanvas(s, plan([{ kind: "reroute_edge", edgeRef: "E1", fromRef: "A", toRef: "C" }]));
     expect(rer.edges.find((e) => e.id === "E1")).toBeUndefined(); // old gone
     expect(rer.edges.some((e) => e.from === "A" && e.to === "C")).toBe(true); // new present
+    expect(rer.edges.find((e) => e.from === "A" && e.to === "C")!.label).toBe("approved"); // label carried over
+  });
+
+  it("rerouting a non-existent edge ref leaves edges unchanged (no ghost edge)", () => {
+    const out = applyPlanToCanvas(base(), plan([{ kind: "reroute_edge", edgeRef: "MISSING", fromRef: "A", toRef: "B" }]));
+    expect(out.edges.length).toBe(base().edges.length);
+    expect(out.edges.every((e) => e.from !== "" && e.to !== "")).toBe(true);
   });
 
   it("adds a lane (recomputed y) and renames a lane", () => {

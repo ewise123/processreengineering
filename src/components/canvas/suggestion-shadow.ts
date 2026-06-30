@@ -89,14 +89,15 @@ export function applyPlanToCanvas(state: CanvasState, plan: BundlePlan): CanvasS
       case "reroute_edge": {
         const id = resolve(step.edgeRef);
         const before = edges.find((e) => e.id === id);
+        if (!before) break; // stale ref — drop gracefully (the pure reducer can't throw like the executor does)
         edges = edges.filter((e) => e.id !== id);
         edges = [
           ...edges,
           {
             id: `shadow:edge:${synthEdge++}`,
-            from: step.fromRef ? resolve(step.fromRef) : before?.from ?? "",
-            to: step.toRef ? resolve(step.toRef) : before?.to ?? "",
-            label: before?.label ?? null,
+            from: step.fromRef ? resolve(step.fromRef) : before.from,
+            to: step.toRef ? resolve(step.toRef) : before.to,
+            label: before.label,
           },
         ];
         break;
