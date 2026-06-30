@@ -16,7 +16,7 @@ const node = (id: string, laneId: string, x: number, relativeY = 40, w = 120): C
   type: "task",
   kind: "task",
   label: id,
-  laneId: laneId as CanvasNode["id"],
+  laneId: laneId as CanvasNode["laneId"],
   x,
   relativeY,
   w,
@@ -53,7 +53,7 @@ describe("placeNewNodeIn", () => {
     const pos = placeNewNodeIn(nodes, lanes, null, "A");
     expect(pos).not.toBeNull();
     expect(pos!.laneId).toBe("L1");
-    expect(pos!.x).toBeGreaterThan(80);
+    expect(pos!.x).toBe(80 + 120 + 80); // 280 — near.x + near.w + default gap
   });
 
   it("appends after the rightmost node in an explicit lane when no near node", () => {
