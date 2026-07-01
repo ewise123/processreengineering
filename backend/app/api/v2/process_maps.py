@@ -1,4 +1,5 @@
 """Phase 2.5 endpoints: generate process maps from claims, read them back."""
+import logging
 import re
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -13,6 +14,7 @@ from app.api.v2.reviews import _recompute_version_status
 from app.constants import LINEAGE_KEY
 from app.db.session import get_db
 from app.enums import (
+    AgentRunStopReason,
     ChangeActorKind,
     ChangeKind,
     ChangeSource,
@@ -103,6 +105,7 @@ from app.services.map_ai_edit import (
     propose_next_steps,
 )
 from app.services.map_chat import ChatTurn as MapChatTurn, chat as run_map_chat
+from app.services.map_chat_agent import run_chat_agent, assess_grounded
 from app.services.map_context import assemble_map_context
 from app.services.map_reconcile import compute_claim_delta, propose_reconcile
 from app.services import map_reconcile as _map_reconcile_mod
@@ -111,6 +114,7 @@ from app.services.process_generation import (
     generate_structure_from_claims,
 )
 from app.schemas.version_chat_suggest import (
+    ActivityStep,
     ChatMode,
     ChatSuggestRequest,
     ChatSuggestResponse,
@@ -125,8 +129,12 @@ from app.schemas.version_chat_suggest import (
 )
 from app.services.map_chat_suggest import run_chat_suggest
 from app.services.map_consistency import scan_map
+from app.models.agent_run import AgentRun
+from app.services.agent_tools import AgentToolCtx
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
+
+logger = logging.getLogger(__name__)
 
 
 # Map BPMN task types from the AI-emitted structure → our NodeType enum
@@ -2159,6 +2167,86 @@ def _create_proposed_step(
     return node, edge
 
 
+def _mention_sources_from_texts(texts: list[str], ctx) -> list[MentionSource]:
+    """Build mention sources from [[claim:uuid]] tokens in resolved text — the
+    same dedupe/skip-malformed logic the suggest path uses."""
+    out: list[MentionSource] = []
+    seen: set[UUID] = set()
+    for text in texts:
+        for cid_str in re.findall(r"\[\[claim:([0-9a-fA-F-]+)\]\]", text):
+            try:
+                cid = UUID(cid_str)
+            except ValueError:
+                continue
+            if cid in seen:
+                continue
+            seen.add(cid)
+            tgt = ctx.source_target_by_claim.get(cid)
+            if tgt:
+                out.append(MentionSource(claim_id=cid, **tgt))
+    return out
+
+
+def _run_ask_agent(db, project, model_id, version, ctx, focus_refs, payload) -> ChatSuggestResponse:
+    tool_ctx = AgentToolCtx(db=db, project_id=project.id, version=version, mapctx=ctx)
+    history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
+    # Resolve each focused ref to its label so the loop can name the selected
+    # steps inline in the user's turn (reliable deictic resolution).
+    focus_items = [
+        {"ref": r, "label": ctx.node_name_by_id.get(ctx.node_ref_to_id.get(r), "")}
+        for r in focus_refs
+    ]
+
+    def _persist(answer, trace, consulted, cited, in_tok, out_tok, rounds, stop, grounded) -> AgentRun:
+        run = AgentRun(
+            project_id=project.id, model_id=model_id, version_id=version.id,
+            session_id=payload.session_id, created_by=None,
+            question=payload.user_message, answer=answer,
+            tool_calls=trace or [], cited_claim_ids=cited, consulted_claim_ids=consulted,
+            input_tokens=in_tok, output_tokens=out_tok, round_count=rounds,
+            stop_reason=stop, grounded=grounded,
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        return run
+
+    try:
+        result = run_chat_agent(
+            tool_ctx=tool_ctx, skeleton_text=ctx.skeleton_text,
+            focus_items=focus_items,
+            history=history, user_message=payload.user_message,
+        )
+    except Exception as exc:  # infra failure: graceful message, still record the run
+        logger.exception("ask-agent run failed (project=%s version=%s)", project.id, version.id)
+        run = _persist(
+            answer=None, trace=[{"tool": "error", "summary": str(exc), "detail": None}],
+            consulted=[], cited=[], in_tok=0, out_tok=0, rounds=0,
+            stop=AgentRunStopReason.ERROR.value, grounded=True,
+        )
+        return ChatSuggestResponse(
+            message="I hit an error looking that up. Please try again.",
+            suggestions=[], mention_sources=[], group_summaries=[],
+            activity_trace=[], run_id=run.id, grounded=True,
+        )
+
+    resolved = _resolve_mention_refs(result.answer, ctx)
+    mention_sources = _mention_sources_from_texts([resolved], ctx)
+    cited = [str(s.claim_id) for s in mention_sources]
+    grounded = assess_grounded(resolved, cited)
+    run = _persist(
+        answer=resolved, trace=result.trace, consulted=[str(x) for x in result.consulted_claim_ids],
+        cited=cited, in_tok=result.input_tokens, out_tok=result.output_tokens,
+        rounds=result.round_count, stop=result.stop_reason, grounded=grounded,
+    )
+    return ChatSuggestResponse(
+        message=resolved, suggestions=[], mention_sources=mention_sources,
+        group_summaries=[],
+        activity_trace=[ActivityStep(**t) for t in result.trace],
+        run_id=run.id, grounded=grounded,
+    )
+
+
 @router.post(
     "/process-maps/{model_id}/versions/{version_id}/chat-suggest",
     response_model=ChatSuggestResponse,
@@ -2194,6 +2282,10 @@ def chat_suggest(
         for r in payload.context_refs
         if r.kind == RefKind.NODE and r.id in ctx.node_ref_by_id
     ]
+
+    if payload.mode == ChatMode.ASK:
+        return _run_ask_agent(db, project, model_id, version, ctx, focus_refs, payload)
+
     map_text = ctx.text
     if focus_refs:
         map_text += (
@@ -2231,24 +2323,10 @@ def chat_suggest(
     # prose is pure noise next to the card. Questions (no suggestions) keep prose.
     resolved = "" if suggestions else _resolve_mention_refs(message, ctx)
     # Build mention sources from claim refs in the prose AND in the resolved
-    # suggestion titles/rationales (those now carry [[claim:uuid]] too). Guard
-    # against malformed tokens: the regex matches hex-ish strings that aren't
-    # valid UUIDs, so UUID() can raise — skip those. Dedupe, preserving order.
-    mention_sources = []
-    seen_claim_ids: set[UUID] = set()
+    # suggestion titles/rationales (those now carry [[claim:uuid]] too). Shared
+    # with the ask-agent path: dedupes, skips malformed uuids, preserves order.
     claim_texts = [resolved] + [s.title for s in suggestions] + [s.rationale for s in suggestions]
-    for text in claim_texts:
-        for cid_str in re.findall(r"\[\[claim:([0-9a-fA-F-]+)\]\]", text):
-            try:
-                cid = UUID(cid_str)
-            except ValueError:
-                continue
-            if cid in seen_claim_ids:
-                continue
-            seen_claim_ids.add(cid)
-            tgt = ctx.source_target_by_claim.get(cid)
-            if tgt:
-                mention_sources.append(MentionSource(claim_id=cid, **tgt))
+    mention_sources = _mention_sources_from_texts(claim_texts, ctx)
     # Group summaries — only for groups actually present on an emitted suggestion.
     used_groups = {s.group for s in suggestions if s.group}
     group_summaries: list[GroupSummary] = []

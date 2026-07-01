@@ -21,7 +21,7 @@ from app.models.process import (
     ProcessNode,
     ProcessVersion,
 )
-from app.services.map_chat import build_map_context
+from app.services.map_chat import build_map_context, build_skeleton_text
 
 
 @dataclass
@@ -38,6 +38,10 @@ class MapContext:
     node_name_by_id: dict[UUID, str]
     edge_label_by_id: dict[UUID, str | None]
     lane_name_by_id: dict[UUID, str]
+    skeleton_text: str = ""
+    claim_ref_by_id: dict[UUID, str] = None  # type: ignore[assignment]
+    edge_ref_by_id: dict[UUID, str] = None  # type: ignore[assignment]
+    lane_ref_by_id: dict[UUID, str] = None  # type: ignore[assignment]
 
 
 def assemble_map_context(
@@ -172,6 +176,14 @@ def assemble_map_context(
             ref = node_ref_by_id.get(sel.id, "?")
             selected_label = f'{ref} (node) — "{sel.name}"'
 
+    skeleton_text = build_skeleton_text(
+        lanes=lanes_ctx,
+        nodes=nodes_ctx,
+        edges=edges_ctx,
+        selected_label=selected_label,
+    )
+    claim_ref_by_id: dict[UUID, str] = {c.id: f"C{i + 1}" for i, c in enumerate(project_claims)}
+
     text = build_map_context(
         lanes=lanes_ctx,
         nodes=nodes_ctx,
@@ -191,4 +203,8 @@ def assemble_map_context(
         node_name_by_id={n.id: n.name for n in nodes},
         edge_label_by_id={e.id: e.label for e in edges},
         lane_name_by_id={l.id: l.name for l in lanes},
+        skeleton_text=skeleton_text,
+        claim_ref_by_id=claim_ref_by_id,
+        edge_ref_by_id=edge_ref_by_id,
+        lane_ref_by_id=lane_ref_by_id,
     )

@@ -413,12 +413,14 @@ def test_chat_suggest_endpoint_resolves_suggestion(db):
 
 
 def test_chat_suggest_endpoint_ask_mode_has_no_suggestions(db):
+    # Ask mode now routes to the agent loop (run_chat_agent), not run_chat_suggest.
     from app.api.v2 import process_maps as pm_api
     from app.schemas.version_chat_suggest import ChatSuggestRequest
+    from app.services.map_chat_agent import AgentResult
     project, version, n1, claim = _seed(db)
     with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pm_api, "run_chat_suggest",
-                   lambda **k: ("Plain answer.", [], []))
+        mp.setattr(pm_api, "run_chat_agent",
+                   lambda **k: AgentResult(answer="Plain answer."))
         resp = pm_api.chat_suggest(
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(user_message="what is N1?", mode="ask"),
@@ -564,12 +566,14 @@ def test_chat_runs_extra_instructions_into_system(monkeypatch):
 
 
 def test_chat_suggest_ask_message_is_mention_resolved(db):
+    # Ask mode now routes to the agent loop (run_chat_agent), not run_chat_suggest.
     from app.api.v2 import process_maps as pm_api
     from app.schemas.version_chat_suggest import ChatSuggestRequest
+    from app.services.map_chat_agent import AgentResult
     project, version, n1, claim = _seed(db)
     with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pm_api, "run_chat_suggest",
-                   lambda **k: ("See step [[N1]].", [], []))
+        mp.setattr(pm_api, "run_chat_agent",
+                   lambda **k: AgentResult(answer="See step [[N1]]."))
         resp = pm_api.chat_suggest(
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)
@@ -589,20 +593,23 @@ def test_mention_instructions_drop_edges_and_parenthetical():
 
 
 def test_chat_suggest_focuses_on_all_context_nodes(db):
+    # Ask mode now routes to the agent loop (run_chat_agent), which receives the
+    # attached nodes as an explicit `focus_refs` list rather than a text blob.
     from app.api.v2 import process_maps as pm_api
     from app.schemas.version_chat_suggest import ChatSuggestRequest, ObjectRef
     from app.models.process import ProcessNode
+    from app.services.map_chat_agent import AgentResult
     project, version, n1, claim = _seed(db)
     n2 = ProcessNode(version_id=version.id, lane_id=n1.lane_id, type="task", name="Approve", position={}, properties={})
     db.add(n2); db.commit()
     captured = {}
 
-    def fake_service(*, history, user_message, map_context_text, mode):
-        captured["ctx"] = map_context_text
-        return ("ok", [], [])
+    def fake_agent(*, tool_ctx, skeleton_text, focus_items, history, user_message):
+        captured["focus_refs"] = [it["ref"] for it in focus_items]
+        return AgentResult(answer="ok")
 
     with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pm_api, "run_chat_suggest", fake_service)
+        mp.setattr(pm_api, "run_chat_agent", fake_agent)
         pm_api.chat_suggest(
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(
@@ -611,8 +618,7 @@ def test_chat_suggest_focuses_on_all_context_nodes(db):
             ),
             db=db,
         )
-    assert "N1" in captured["ctx"] and "N2" in captured["ctx"]
-    assert "focus" in captured["ctx"].lower()
+    assert "N1" in captured["focus_refs"] and "N2" in captured["focus_refs"]
 
 
 # ---------------------------------------------------------------------------
@@ -621,10 +627,12 @@ def test_chat_suggest_focuses_on_all_context_nodes(db):
 
 
 def test_chat_suggest_attaches_mention_sources_for_cited_claims(db):
+    # Ask mode now routes to the agent loop (run_chat_agent), not run_chat_suggest.
     from app.api.v2 import process_maps as pm_api
     from app.schemas.version_chat_suggest import ChatSuggestRequest
     from app.models.input import Chunk, DocumentSection, Input
     from app.models.claim import ClaimCitation
+    from app.services.map_chat_agent import AgentResult
     project, version, n1, claim = _seed(db)
     inp = Input(project_id=project.id, name="SOP.pdf", type="document")
     db.add(inp); db.flush()
@@ -639,7 +647,8 @@ def test_chat_suggest_attaches_mention_sources_for_cited_claims(db):
     db.commit()
 
     with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pm_api, "run_chat_suggest", lambda **k: ("Per [[C1]] this is logged.", [], []))
+        mp.setattr(pm_api, "run_chat_agent",
+                   lambda **k: AgentResult(answer="Per [[C1]] this is logged."))
         resp = pm_api.chat_suggest(
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)
@@ -652,13 +661,16 @@ def test_chat_suggest_attaches_mention_sources_for_cited_claims(db):
 def test_chat_suggest_skips_malformed_claim_token_without_crashing(db):
     """A non-UUID [[claim:...]] token (e.g. echoed user text) must be skipped,
     not raise ValueError and turn the endpoint into a 500."""
+    # Ask mode now routes to the agent loop (run_chat_agent), not run_chat_suggest.
     from app.api.v2 import process_maps as pm_api
     from app.schemas.version_chat_suggest import ChatSuggestRequest
+    from app.services.map_chat_agent import AgentResult
     project, version, _n1, _claim = _seed(db)
 
     with _pytest.MonkeyPatch.context() as mp:
         # "abc" is hex-ish (matches the regex) but not a valid UUID.
-        mp.setattr(pm_api, "run_chat_suggest", lambda **k: ("See [[claim:abc]] here.", [], []))
+        mp.setattr(pm_api, "run_chat_agent",
+                   lambda **k: AgentResult(answer="See [[claim:abc]] here."))
         resp = pm_api.chat_suggest(
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(user_message="x", mode="ask"), db=db)

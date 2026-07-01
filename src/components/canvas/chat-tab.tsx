@@ -7,6 +7,7 @@ import { useMutation } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
 import type {
+  ActivityStep,
   ChatSuggestion,
   ChatTurn,
   GroupSummary,
@@ -17,6 +18,7 @@ import type {
   ViewerTarget,
 } from "@/lib/types";
 import { MentionMarkdown } from "./mention-view";
+import { traceHeaderLabel } from "./agent-trace";
 import {
   selectionChips,
   selectionToContextRefs,
@@ -40,6 +42,9 @@ export type ChatItem = ChatTurn & {
   suggestions?: ChatSuggestion[];
   suggestionStatus?: Record<string, CardStatus>;
   groupSummaries?: GroupSummary[];
+  activityTrace?: ActivityStep[];
+  grounded?: boolean;
+  runId?: string | null;
 };
 
 const SUGGESTED_PROMPTS: Record<"ask" | "suggest", string[]> = {
@@ -148,6 +153,32 @@ export function ChatTab({
 
   const chips = selectionChips(chatContext, labelById);
 
+  // Persistent, per-conversation attached context (Copilot "working set" style):
+  // the current selection commits into this on send, and the whole set rides
+  // along with EVERY subsequent message — so follow-up questions keep context
+  // even when the canvas selection doesn't change. Reset on New chat.
+  const [sessionContext, setSessionContext] = useState<SelectedObject[]>([]);
+  const sessionChips = selectionChips(sessionContext, labelById);
+  const mergeContext = (base: SelectedObject[], add: SelectedObject[]) => {
+    const seen = new Set(base.map((s) => s.id));
+    return [...base, ...add.filter((s) => !seen.has(s.id))];
+  };
+
+  // A stable per-version chat session id, persisted in sessionStorage alongside
+  // the transcript (survives tab nav, resets on hard reload). Sent with each ask
+  // so agent runs are groupable by conversation. Layer 1 will formalize richer
+  // session lifecycle (new/compact/clear); this is the minimal grouping key.
+  const sessionId = useMemo(() => {
+    if (typeof window === "undefined" || !window.sessionStorage) return null;
+    const k = `poet-chat-sid:${versionId}`;
+    let sid = window.sessionStorage.getItem(k);
+    if (!sid) {
+      sid = crypto.randomUUID();
+      window.sessionStorage.setItem(k, sid);
+    }
+    return sid;
+  }, [versionId]);
+
   const ask = useMutation({
     mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextChips?: ContextChip[]; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal; mode: "ask" | "suggest" }) =>
       api.chatSuggest(
@@ -164,6 +195,7 @@ export function ChatTab({
           user_message: input.userMessage,
           mode: input.mode,
           context_refs: input.contextRefs,
+          session_id: sessionId,
         },
         input.signal
       ),
@@ -182,6 +214,9 @@ export function ChatTab({
           suggestions: data.suggestions.length ? data.suggestions : undefined,
           suggestionStatus: {},
           groupSummaries: data.group_summaries.length ? data.group_summaries : undefined,
+          activityTrace: data.activity_trace ?? [],
+          grounded: data.grounded,
+          runId: data.run_id ?? null,
         },
       ];
       sessionStore.save(versionId, next);
@@ -205,12 +240,15 @@ export function ChatTab({
   const submit = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || ask.isPending) return;
-    // Capture the attached context refs + note NOW from the chat's own list.
-    const contextRefs = selectionToContextRefs(chatContext);
+    // Commit the pending selection into the persistent session context, then
+    // send the WHOLE set — so a follow-up keeps context without re-selecting.
+    const merged = mergeContext(sessionContext, chatContext);
+    const contextRefs = selectionToContextRefs(merged);
     // Snapshot the display chips too, so the sent turn keeps a clickable context
     // row (and a plain-text note as a fallback for older persisted turns).
-    const contextChips = chips.length ? chips : undefined;
-    const note = chips.length ? chips.map((c) => c.label).join(", ") : undefined;
+    const mergedChips = selectionChips(merged, labelById);
+    const contextChips = mergedChips.length ? mergedChips : undefined;
+    const note = mergedChips.length ? mergedChips.map((c) => c.label).join(", ") : undefined;
     // Capture mode at submit time so a later toggle doesn't change an in-flight request.
     const currentMode = mode;
     setDraft("");
@@ -235,7 +273,9 @@ export function ChatTab({
     // are recorded on the message itself (contextNote, shown under the prompt). The
     // canvas selection is deliberately left alone — so the Properties panel stays
     // open and reflects an applied suggestion live, and selection stays decoupled
-    // from chat context (#3).
+    // from chat context (#3). The pending tab clears; the attached objects live on
+    // in the persistent session context and ride along with every later message.
+    setSessionContext(merged);
     setChatContext([]);
   };
 
@@ -266,6 +306,7 @@ export function ChatTab({
     // stale Undo handle or error message from the cleared conversation.
     undoHandles.current.clear();
     setBundleErrorById({});
+    setSessionContext([]);
     sessionStore.clear(versionId);
     setHistory([]);
   };
@@ -395,6 +436,9 @@ export function ChatTab({
               <Sparkles size={16} className="mt-1 flex-shrink-0 text-indigo-500" />
               <div className="min-w-0 flex-1 space-y-1.5">
                 <ChatMsg turn={m} labelById={labelById} onNavigate={onNavigate} onOpenSource={onOpenSource} />
+                {m.role === "assistant" && m.activityTrace && m.activityTrace.length > 0 && (
+                  <ActivityTrace steps={m.activityTrace} />
+                )}
                 {bundles && (
                   <SuggestionList
                     bundles={bundles}
@@ -505,6 +549,14 @@ export function ChatTab({
               ))}
             </div>
           )}
+          {sessionChips.length > 0 && (
+            <SessionContextRow
+              chips={sessionChips}
+              onNavigate={onNavigate}
+              onRemove={(id) => setSessionContext((curr) => curr.filter((s) => s.id !== id))}
+              onClear={() => setSessionContext([])}
+            />
+          )}
           <div className="mb-1.5 inline-flex rounded-md border border-slate-200 p-0.5 text-[10px]">
             {(["ask", "suggest"] as const).map((m) => (
               <button
@@ -564,6 +616,70 @@ export function ChatTab({
   );
 }
 
+/** The persistent, per-conversation attached context ("working set"): the
+ * objects that ride along with every message. Collapsed by default to a
+ * "Context · N ▸" summary so it never eats vertical space as it accumulates;
+ * expands to removable chips. `clear` empties the whole set. */
+function SessionContextRow({
+  chips,
+  onNavigate,
+  onRemove,
+  onClear,
+}: {
+  chips: ContextChip[];
+  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+  onRemove: (id: UUID) => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mb-1.5">
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex items-center gap-0.5 text-[10px] font-medium text-slate-500 hover:text-slate-700"
+        >
+          <ChevronRight size={11} className={"transition-transform " + (open ? "rotate-90" : "")} />
+          Context · {chips.length}
+        </button>
+        <button
+          type="button"
+          onClick={onClear}
+          title="Clear all context"
+          className="ml-1 text-[9.5px] text-slate-400 hover:text-slate-600"
+        >
+          clear
+        </button>
+      </div>
+      {open && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {chips.map((c) => (
+            <span key={`${c.kind}:${c.id}`} className="group relative inline-flex">
+              <button
+                onClick={() => onNavigate({ kind: c.kind, id: c.id })}
+                title="Jump to this step"
+                className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white py-0.5 pl-2 pr-5 text-[10px] text-slate-700 hover:bg-slate-100"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
+                {c.label}
+              </button>
+              <button
+                onClick={() => onRemove(c.id)}
+                title="Remove from context"
+                className="absolute right-0.5 top-1/2 hidden -translate-y-1/2 rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 group-hover:block"
+              >
+                <X size={10} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The grounding context attached to a sent user turn: collapsed to a
  * "Context · N ▸" summary, expanding to clickable step links that teleport +
  * flash the object on the canvas. Default collapsed to keep the turn compact. */
@@ -601,6 +717,37 @@ function ContextRow({
             </button>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** The AI's tool-use trace for an ask-mode answer: collapsed to a "How I found
+ * this · N steps ▸" summary, expanding to an ordered list of tool-call
+ * summaries. Default collapsed to match ContextRow's disclosure style. */
+function ActivityTrace({ steps }: { steps: ActivityStep[] }) {
+  const [open, setOpen] = useState(false);
+  const label = traceHeaderLabel(steps);
+  if (!label) return null;
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex items-center gap-0.5 text-[9.5px] font-medium text-slate-400 hover:text-slate-600"
+      >
+        <ChevronRight size={10} className={"transition-transform " + (open ? "rotate-90" : "")} />
+        {label}
+      </button>
+      {open && (
+        <ol className="mt-0.5 space-y-0.5 pl-3">
+          {steps.map((s, idx) => (
+            <li key={idx} className="text-[10px] leading-snug text-slate-500" title={s.detail ?? undefined}>
+              {s.summary}
+            </li>
+          ))}
+        </ol>
       )}
     </div>
   );
