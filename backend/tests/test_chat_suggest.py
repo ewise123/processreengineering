@@ -759,3 +759,30 @@ def test_endpoint_mention_sources_include_claims_cited_in_rationale(db):
             payload=ChatSuggestRequest(user_message="x", mode="suggest"), db=db)
     # The claim was cited only in a suggestion rationale (not the prose) — still surfaced.
     assert any(s.claim_id == claim.id for s in resp.mention_sources)
+
+
+from app.schemas.version_chat_suggest import OpKind, SuggestionOp
+
+
+def test_change_node_type_op_validates():
+    op = SuggestionOp(kind=OpKind.CHANGE_NODE_TYPE, node_ref="N1", node_type="gateway_exclusive")
+    assert op.kind == OpKind.CHANGE_NODE_TYPE
+
+
+def test_change_node_type_requires_node_ref_and_type():
+    import pytest
+    with pytest.raises(ValueError):
+        SuggestionOp(kind=OpKind.CHANGE_NODE_TYPE, node_ref="N1")  # missing node_type
+
+
+def test_remove_lane_op_validates():
+    op = SuggestionOp(kind=OpKind.REMOVE_LANE, lane_ref="L1")
+    assert op.lane_ref == "L1"
+
+
+def test_set_edge_condition_requires_edge_ref_and_condition():
+    import pytest
+    op = SuggestionOp(kind=OpKind.SET_EDGE_CONDITION, edge_ref="E1", condition_text="amount > 10000")
+    assert op.condition_text == "amount > 10000"
+    with pytest.raises(ValueError):
+        SuggestionOp(kind=OpKind.SET_EDGE_CONDITION, edge_ref="E1")  # missing condition_text

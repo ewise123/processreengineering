@@ -40,6 +40,9 @@ class OpKind(StrEnum):
     ADD_LANE = "add_lane"
     RENAME_LANE = "rename_lane"
     DECOMPOSE = "decompose"
+    CHANGE_NODE_TYPE = "change_node_type"
+    REMOVE_LANE = "remove_lane"
+    SET_EDGE_CONDITION = "set_edge_condition"
 
 
 # Per-kind required op fields. reroute_edge needs edge_ref plus at least one of
@@ -57,6 +60,9 @@ _REQUIRED_BY_KIND: dict[OpKind, tuple[str, ...]] = {
     OpKind.ADD_LANE: ("temp_id", "name"),
     OpKind.RENAME_LANE: ("lane_ref", "name"),
     OpKind.DECOMPOSE: ("node_ref", "sub_steps"),
+    OpKind.CHANGE_NODE_TYPE: ("node_ref", "node_type"),
+    OpKind.REMOVE_LANE: ("lane_ref",),
+    OpKind.SET_EDGE_CONDITION: ("edge_ref", "condition_text"),
 }
 
 
@@ -82,6 +88,7 @@ class SuggestionOp(BaseModel):
     near_node_ref: str | None = None
     edge_label: str | None = Field(default=None, max_length=300)
     sub_steps: list[SubStepInput] | None = None
+    condition_text: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
     def _check_required(self) -> "SuggestionOp":
