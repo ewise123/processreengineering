@@ -251,3 +251,10 @@ class ChangeSource(StrEnum):
     RECONCILE = "reconcile"
     IMPORT = "import"
     MIGRATION = "migration"
+
+
+class AgentRunStopReason(StrEnum):
+    NORMAL = "normal"
+    ROUND_CAP = "round_cap"
+    TOKEN_CAP = "token_cap"
+    ERROR = "error"
