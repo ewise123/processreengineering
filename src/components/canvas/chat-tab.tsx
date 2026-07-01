@@ -7,6 +7,7 @@ import { useMutation } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
 import type {
+  ActivityStep,
   ChatSuggestion,
   ChatTurn,
   GroupSummary,
@@ -17,6 +18,7 @@ import type {
   ViewerTarget,
 } from "@/lib/types";
 import { MentionMarkdown } from "./mention-view";
+import { traceHeaderLabel, showUngroundedWarning } from "./agent-trace";
 import {
   selectionChips,
   selectionToContextRefs,
@@ -40,6 +42,9 @@ export type ChatItem = ChatTurn & {
   suggestions?: ChatSuggestion[];
   suggestionStatus?: Record<string, CardStatus>;
   groupSummaries?: GroupSummary[];
+  activityTrace?: ActivityStep[];
+  grounded?: boolean;
+  runId?: string | null;
 };
 
 const SUGGESTED_PROMPTS: Record<"ask" | "suggest", string[]> = {
@@ -182,6 +187,9 @@ export function ChatTab({
           suggestions: data.suggestions.length ? data.suggestions : undefined,
           suggestionStatus: {},
           groupSummaries: data.group_summaries.length ? data.group_summaries : undefined,
+          activityTrace: data.activity_trace ?? [],
+          grounded: data.grounded,
+          runId: data.run_id ?? null,
         },
       ];
       sessionStore.save(versionId, next);
@@ -395,6 +403,14 @@ export function ChatTab({
               <Sparkles size={16} className="mt-1 flex-shrink-0 text-indigo-500" />
               <div className="min-w-0 flex-1 space-y-1.5">
                 <ChatMsg turn={m} labelById={labelById} onNavigate={onNavigate} onOpenSource={onOpenSource} />
+                {m.role === "assistant" && showUngroundedWarning(m.grounded) && (
+                  <div className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[9.5px] font-medium text-amber-700">
+                    Not grounded in your sources
+                  </div>
+                )}
+                {m.role === "assistant" && m.activityTrace && m.activityTrace.length > 0 && (
+                  <ActivityTrace steps={m.activityTrace} />
+                )}
                 {bundles && (
                   <SuggestionList
                     bundles={bundles}
@@ -601,6 +617,37 @@ function ContextRow({
             </button>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** The AI's tool-use trace for an ask-mode answer: collapsed to a "How I found
+ * this · N steps ▸" summary, expanding to an ordered list of tool-call
+ * summaries. Default collapsed to match ContextRow's disclosure style. */
+function ActivityTrace({ steps }: { steps: ActivityStep[] }) {
+  const [open, setOpen] = useState(false);
+  const label = traceHeaderLabel(steps);
+  if (!label) return null;
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex items-center gap-0.5 text-[9.5px] font-medium text-slate-400 hover:text-slate-600"
+      >
+        <ChevronRight size={10} className={"transition-transform " + (open ? "rotate-90" : "")} />
+        {label}
+      </button>
+      {open && (
+        <ol className="mt-0.5 space-y-0.5 pl-3">
+          {steps.map((s, idx) => (
+            <li key={idx} className="text-[10px] leading-snug text-slate-500" title={s.detail ?? undefined}>
+              {s.summary}
+            </li>
+          ))}
+        </ol>
       )}
     </div>
   );
