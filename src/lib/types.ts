@@ -345,6 +345,12 @@ export interface MentionSource {
   quote: string | null;
 }
 
+export interface ActivityStep {
+  tool: string;
+  summary: string;
+  detail?: string | null;
+}
+
 export interface ChatTurn {
   role: "user" | "assistant";
   content: string;
@@ -416,6 +422,7 @@ export interface ChatSuggestRequest {
   user_message: string;
   mode: ChatMode;
   context_refs: ObjectRef[];
+  session_id?: string | null;
 }
 
 export interface GroupSummary {
@@ -428,6 +435,9 @@ export interface ChatSuggestResponse {
   suggestions: ChatSuggestion[];
   mention_sources: MentionSource[];
   group_summaries: GroupSummary[];
+  activity_trace?: ActivityStep[];
+  run_id?: string | null;
+  grounded?: boolean;
 }
 
 export interface ProcessMapGenerateRequest {
