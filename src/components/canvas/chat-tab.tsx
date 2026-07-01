@@ -60,6 +60,27 @@ const SUGGESTED_PROMPTS: Record<"ask" | "suggest", string[]> = {
   ],
 };
 
+const sidKey = (versionId: UUID) => `poet-chat-sid:${versionId}`;
+
+/** Read the version's stored chat-session id, minting one if absent. */
+function readOrMintSessionId(versionId: UUID): string | null {
+  if (typeof window === "undefined" || !window.sessionStorage) return null;
+  let sid = window.sessionStorage.getItem(sidKey(versionId));
+  if (!sid) {
+    sid = crypto.randomUUID();
+    window.sessionStorage.setItem(sidKey(versionId), sid);
+  }
+  return sid;
+}
+
+/** Rotate to a fresh chat-session id (new conversation), persisting it. */
+function mintSessionId(versionId: UUID): string | null {
+  if (typeof window === "undefined" || !window.sessionStorage) return null;
+  const sid = crypto.randomUUID();
+  window.sessionStorage.setItem(sidKey(versionId), sid);
+  return sid;
+}
+
 export function ChatTab({
   projectId,
   modelId,
@@ -112,6 +133,8 @@ export function ChatTab({
     pendingRef.current = null;
     undoHandles.current.clear();
     setBundleErrorById({});
+    setSessionContext([]);
+    setSessionId(readOrMintSessionId(versionId));
     setHistory(sessionStore.load(versionId) as ChatItem[]);
   }, [versionId, sessionStore]);
 
@@ -164,20 +187,11 @@ export function ChatTab({
     return [...base, ...add.filter((s) => !seen.has(s.id))];
   };
 
-  // A stable per-version chat session id, persisted in sessionStorage alongside
-  // the transcript (survives tab nav, resets on hard reload). Sent with each ask
-  // so agent runs are groupable by conversation. Layer 1 will formalize richer
-  // session lifecycle (new/compact/clear); this is the minimal grouping key.
-  const sessionId = useMemo(() => {
-    if (typeof window === "undefined" || !window.sessionStorage) return null;
-    const k = `poet-chat-sid:${versionId}`;
-    let sid = window.sessionStorage.getItem(k);
-    if (!sid) {
-      sid = crypto.randomUUID();
-      window.sessionStorage.setItem(k, sid);
-    }
-    return sid;
-  }, [versionId]);
+  // Per-conversation chat session id (grouping key for agent_runs), persisted in
+  // sessionStorage per version. Resettable state so it rotates on Clear (new
+  // conversation) and re-derives on version switch. Layer 1 formalizes richer
+  // session lifecycle later.
+  const [sessionId, setSessionId] = useState<string | null>(() => readOrMintSessionId(versionId));
 
   const ask = useMutation({
     mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextChips?: ContextChip[]; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal; mode: "ask" | "suggest" }) =>
@@ -307,6 +321,9 @@ export function ChatTab({
     undoHandles.current.clear();
     setBundleErrorById({});
     setSessionContext([]);
+    // Clear = a new conversation: rotate the session id so its agent_runs aren't
+    // grouped under the previous chat on this version.
+    setSessionId(mintSessionId(versionId));
     sessionStore.clear(versionId);
     setHistory([]);
   };
@@ -511,7 +528,7 @@ export function ChatTab({
                       setChatContext((curr) => curr.filter((s) => s.id !== c.id))
                     }
                     title="Remove from context"
-                    className="absolute right-0.5 top-1/2 hidden -translate-y-1/2 rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 group-hover:block"
+                    className="absolute right-0.5 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-slate-400 opacity-0 transition-opacity hover:bg-slate-200 hover:text-slate-700 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 focus:outline-none focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-slate-400"
                   >
                     <X size={10} />
                   </button>
