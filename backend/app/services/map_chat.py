@@ -90,6 +90,44 @@ def chat(
     return "".join(parts).strip() or "(no response)"
 
 
+def build_skeleton_text(
+    *,
+    lanes: list[dict],
+    nodes: list[dict],
+    edges: list[dict],
+    selected_label: str | None,
+) -> str:
+    """Render ONLY the map structure (lanes/nodes/edges) — no claims. This is
+    the cheap orientation skeleton the agent loop seeds the model with;
+    claims and citations are pulled on demand via tools."""
+    out: list[str] = []
+    if selected_label:
+        out.append(f"Currently selected: {selected_label}")
+        out.append("")
+
+    out.append("LANES:")
+    for lane in lanes:
+        out.append(f"  L{lane['idx']}: {lane['name']}")
+    out.append("")
+
+    out.append("NODES:")
+    for node in nodes:
+        lane_ref = f" (in {node['lane_ref']})" if node.get("lane_ref") else ""
+        out.append(
+            f"  N{node['idx']} [{node['type']}]: {node['label']}{lane_ref}"
+        )
+    out.append("")
+
+    out.append("EDGES:")
+    for edge in edges:
+        label = f" '{edge['label']}'" if edge.get("label") else ""
+        out.append(
+            f"  E{edge['idx']}: {edge['source_ref']} -> {edge['target_ref']}{label}"
+        )
+
+    return "\n".join(out)
+
+
 def build_map_context(
     *,
     lanes: list[dict],
