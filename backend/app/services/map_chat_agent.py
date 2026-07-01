@@ -65,6 +65,20 @@ def assess_grounded(answer: str, cited_claim_refs: list) -> bool:
     return bool(cited_claim_refs)
 
 
+_STOP_REASON_MAP = {
+    "end_turn": AgentRunStopReason.NORMAL.value,
+    "max_tokens": AgentRunStopReason.MAX_TOKENS.value,
+    "refusal": AgentRunStopReason.REFUSAL.value,
+}
+
+
+def _normal_stop_reason(api_stop_reason) -> str:
+    """Map the API's stop_reason on a tool-less (final) response to our enum.
+    A truncated (max_tokens) or refused response is recorded honestly rather
+    than collapsed into 'normal'. Unknown values default to 'normal'."""
+    return _STOP_REASON_MAP.get(api_stop_reason, AgentRunStopReason.NORMAL.value)
+
+
 def _text_of(blocks) -> str:
     return "".join(b.text for b in blocks if getattr(b, "type", None) == "text").strip()
 
@@ -127,7 +141,7 @@ def run_chat_agent(
         tool_uses = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
         if not tool_uses:
             result.answer = _text_of(resp.content) or "(no response)"
-            result.stop_reason = AgentRunStopReason.NORMAL.value
+            result.stop_reason = _normal_stop_reason(getattr(resp, "stop_reason", None))
             break
 
         messages.append({"role": "assistant", "content": _assistant_content(resp.content)})

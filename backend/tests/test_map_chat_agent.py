@@ -52,6 +52,42 @@ def test_normal_stop_returns_answer_and_trace():
     assert result.trace[0]["tool"] == "find_node"
 
 
+def test_max_tokens_stop_is_recorded_honestly():
+    # A tool-less final response that the API truncated (stop_reason max_tokens)
+    # must NOT be mislabeled "normal".
+    fake = _FakeClient([_resp([_Text("Partial answer that got cut off")], stop="max_tokens")])
+    result = _run(fake)
+    assert result.stop_reason == "max_tokens"
+
+
+def test_refusal_stop_is_recorded_honestly():
+    fake = _FakeClient([_resp([], stop="refusal")])
+    result = _run(fake)
+    assert result.stop_reason == "refusal"
+    assert result.answer == "(no response)"
+
+
+def test_multiple_tool_uses_in_one_round_all_dispatched():
+    # Anthropic requires every tool_use in an assistant turn to get a tool_result;
+    # verify the fan-out dispatches ALL blocks in a single round.
+    fake = _FakeClient([
+        _resp([
+            _ToolUse("t1", "find_node", {"query": "a"}),
+            _ToolUse("t2", "search_claims", {"query": "b"}),
+        ]),
+        _resp([_Text("Done. [[C1]]")]),
+    ])
+    result = _run(fake)
+    assert result.stop_reason == "normal"
+    assert len(result.trace) == 2
+    assert {t["tool"] for t in result.trace} == {"find_node", "search_claims"}
+    # The user turn following the assistant tool_use turn must carry BOTH tool_results.
+    tool_turn = fake.calls[1]["messages"][-1]
+    assert tool_turn["role"] == "user"
+    assert len(tool_turn["content"]) == 2
+    assert {b["tool_use_id"] for b in tool_turn["content"]} == {"t1", "t2"}
+
+
 def test_round_cap_forces_graceful_synthesis():
     tool_rounds = [_resp([_ToolUse(f"t{i}", "find_node", {"query": "x"})]) for i in range(map_chat_agent.MAX_ROUNDS)]
     synthesis = _resp([_Text("Best answer with what I have; I could not verify X.")])
