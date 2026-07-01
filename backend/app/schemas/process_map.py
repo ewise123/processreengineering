@@ -97,7 +97,8 @@ class EdgeCreate(BaseModel):
 
 class EdgeUpdate(BaseModel):
     """Partial update for an edge. Empty-string labels are normalized to None
-    on the server so the persisted state matches 'no label'."""
+    on the server so the persisted state matches 'no label'. condition_text
+    gets the same empty-string-to-None treatment."""
 
     label: str | None = Field(default=None, max_length=300)
     condition_text: str | None = None

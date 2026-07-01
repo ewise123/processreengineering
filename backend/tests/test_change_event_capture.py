@@ -147,6 +147,34 @@ def test_update_edge_bend_only_logs_nothing(db):
     assert len(_events_for(db, edge.id)) == before
 
 
+def test_update_edge_condition_requires_reason_and_logs(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.update_edge(project=project, edge_id=edge.id,
+                           payload=EdgeUpdate(condition_text="amount > 10000"), db=db)
+    assert exc.value.status_code == 422
+    assert len(_events_for(db, edge.id)) == 0
+    pm_api.update_edge(project=project, edge_id=edge.id,
+                       payload=EdgeUpdate(condition_text="amount > 10000", reason="gateway guard"), db=db)
+    evs = _events_for(db, edge.id)
+    assert any(e.kind == "set_condition" and e.after.get("condition_text") == "amount > 10000" for e in evs)
+
+
+def test_update_edge_condition_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    pm_api.update_edge(project=project, edge_id=edge.id,
+                       payload=EdgeUpdate(condition_text="amount > 10000", reason="gateway guard", ai_applied=True),
+                       db=db)
+    ev = max(_events_for(db, edge.id), key=lambda e: e.created_at)
+    assert ev.kind == "set_condition"
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.before == {"condition_text": None}
+    assert ev.after == {"condition_text": "amount > 10000"}
+
+
 # ---------------------------------------------------------------------------
 # Lane tests
 # ---------------------------------------------------------------------------

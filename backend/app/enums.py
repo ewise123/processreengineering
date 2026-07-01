@@ -231,6 +231,7 @@ class ChangeKind(StrEnum):
     CREATE = "create"
     RELABEL = "relabel"
     DESCRIBE = "describe"
+    SET_CONDITION = "set_condition"
     RETYPE = "retype"
     RELANE = "relane"
     LINK_CLAIM = "link_claim"
