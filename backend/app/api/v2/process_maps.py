@@ -1889,6 +1889,52 @@ def _rename_before_label(kind, real_id_by_field: dict, ctx) -> str | None:
     return getattr(ctx, attr, {}).get(real_id_by_field[field])
 
 
+def _repair_new_lane_temp_ids(raw_suggestions) -> None:
+    """In-place: recover the producer/consumer link for a "create a lane and move
+    a step into it" bundle.
+
+    The model frequently emits `add_lane` (with a `name` but NO `temp_id`) plus a
+    `move_to_lane`/`add_node` that references the new lane via a `tmp:` `lane_ref`.
+    Without a `temp_id` the add_lane fails validation and is dropped in build,
+    which in turn orphans its consumer (pruned by `_drop_orphaned_consumers`), so
+    the whole change silently vanishes. The model taught only the add_node/add_edge
+    temp_id convention; this is the lane analogue of the add_node `new_label`
+    coalesce. Give each temp_id-less add_lane the tmp lane ref its siblings already
+    point at — matched by the shared `group` when present, or the single
+    unambiguous ref across the bundle otherwise. Only acts when unambiguous."""
+    if not isinstance(raw_suggestions, list):
+        return
+
+    def _is_tmp(v) -> bool:
+        return isinstance(v, str) and v.startswith("tmp:")
+
+    add_lane = OpKind.ADD_LANE.value
+    # tmp lane refs consumed by non-add_lane ops, overall and keyed by group.
+    consumed_all: set[str] = set()
+    consumed_by_group: dict[str, set[str]] = {}
+    for s in raw_suggestions:
+        if not isinstance(s, dict) or s.get("kind") == add_lane:
+            continue
+        ref = s.get("lane_ref")
+        if _is_tmp(ref):
+            consumed_all.add(ref)
+            group = s.get("group")
+            if isinstance(group, str):
+                consumed_by_group.setdefault(group, set()).add(ref)
+
+    needy = [
+        s for s in raw_suggestions
+        if isinstance(s, dict) and s.get("kind") == add_lane and not _is_tmp(s.get("temp_id"))
+    ]
+    for s in needy:
+        group = s.get("group")
+        by_group = consumed_by_group.get(group) if isinstance(group, str) else None
+        if by_group and len(by_group) == 1:
+            s["temp_id"] = next(iter(by_group))
+        elif len(needy) == 1 and len(consumed_all) == 1:
+            s["temp_id"] = next(iter(consumed_all))
+
+
 def _drop_orphaned_consumers(suggestions: list[ChatSuggestion]) -> list[ChatSuggestion]:
     """Remove suggestions that consume a `tmp:` ref with no surviving producer.
 
@@ -2166,6 +2212,11 @@ def chat_suggest(
     except RuntimeError as exc:  # service raises only RuntimeError; _build_suggestion swallows ValueError
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    # The model often creates a lane and moves a step into it but omits the
+    # add_lane's temp_id, only referencing the new lane via a tmp lane_ref on the
+    # move. Recover that producer/consumer link before build so the add_lane
+    # validates instead of being dropped (and its consumer pruned as an orphan).
+    _repair_new_lane_temp_ids(raw_suggestions)
     suggestions = []
     for i, raw in enumerate(raw_suggestions):
         built = _build_suggestion(raw, ctx, index=i)
