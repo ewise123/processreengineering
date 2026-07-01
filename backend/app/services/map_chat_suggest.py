@@ -63,6 +63,11 @@ Rules for suggestions:
 - For a NEW step (add_node), put its label in `new_label` (NOT `name` — `name` is
   only for lanes). Every add_node MUST carry a `temp_id`, and any add_edge that
   wires it in MUST reference that same temp_id.
+- For a NEW lane (add_lane), put its name in `name` and give it a `temp_id`. Any
+  op that places a step in that new lane (a move_to_lane, or an add_node) MUST set
+  its `lane_ref` to that SAME temp_id. Never reference a new lane by its name or
+  its group — only by the add_lane's temp_id. (E.g. add_lane {temp_id: "tmp:1",
+  name: "Approvals"} + move_to_lane {node_ref: "N4", lane_ref: "tmp:1"}.)
 - In `title` and `rationale`, when you mention a step or a source claim, wrap its
   ref in double brackets exactly as in prose ([[N3]] for a step, [[C1]] for a
   claim) — the UI turns these into named, clickable links. Never write a bare

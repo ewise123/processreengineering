@@ -280,6 +280,71 @@ def test_drop_orphaned_consumers_keeps_satisfied_tmp_refs():
     assert kept == [producer, consumer]
 
 
+def test_repair_new_lane_links_missing_temp_id_to_move_consumer():
+    """The model creates a lane and moves a step into it but omits the add_lane's
+    temp_id, referencing the new lane only via a tmp lane_ref on the move. Recover
+    the link (matched by the shared group) so the add_lane validates and its
+    consumer isn't pruned as an orphan — the exact live-repro'd bug."""
+    from app.api.v2 import process_maps as pm_api
+    raw = [
+        {"kind": "add_lane", "name": "Approvals", "group": "approvals-lane",
+         "title": "Add lane", "rationale": "r", "cited_claim_refs": []},
+        {"kind": "move_to_lane", "node_ref": "N1", "lane_ref": "tmp:approvals-lane",
+         "group": "approvals-lane", "title": "Move", "rationale": "r", "cited_claim_refs": []},
+    ]
+    pm_api._repair_new_lane_temp_ids(raw)
+    assert raw[0]["temp_id"] == "tmp:approvals-lane"  # add_lane adopts the consumer's tmp ref
+
+    # And end to end: both ops now survive build + prune with a consistent link.
+    ctx, (n1, _n2, _e1, _l1, _c1) = _ctx_stub()
+    built = [pm_api._build_suggestion(r, ctx, index=i) for i, r in enumerate(raw)]
+    assert all(b is not None for b in built)
+    kept = pm_api._drop_orphaned_consumers([b for b in built if b])
+    kinds = {b.op.kind.value for b in kept}
+    assert kinds == {"add_lane", "move_to_lane"}
+
+
+def test_repair_new_lane_links_unambiguously_without_group():
+    """With no group but a single temp_id-less add_lane and a single consumed tmp
+    lane ref, the link is unambiguous and still recovered."""
+    from app.api.v2 import process_maps as pm_api
+    raw = [
+        {"kind": "add_lane", "name": "Approvals",
+         "title": "Add lane", "rationale": "r", "cited_claim_refs": []},
+        {"kind": "move_to_lane", "node_ref": "N1", "lane_ref": "tmp:9",
+         "title": "Move", "rationale": "r", "cited_claim_refs": []},
+    ]
+    pm_api._repair_new_lane_temp_ids(raw)
+    assert raw[0]["temp_id"] == "tmp:9"
+
+
+def test_repair_new_lane_leaves_valid_temp_id_untouched():
+    """An add_lane that already carries a temp_id is not rewritten."""
+    from app.api.v2 import process_maps as pm_api
+    raw = [
+        {"kind": "add_lane", "name": "Approvals", "temp_id": "tmp:keep", "group": "g",
+         "title": "Add lane", "rationale": "r", "cited_claim_refs": []},
+        {"kind": "move_to_lane", "node_ref": "N1", "lane_ref": "tmp:keep", "group": "g",
+         "title": "Move", "rationale": "r", "cited_claim_refs": []},
+    ]
+    pm_api._repair_new_lane_temp_ids(raw)
+    assert raw[0]["temp_id"] == "tmp:keep"
+
+
+def test_repair_new_lane_skips_when_ambiguous():
+    """Two temp_id-less add_lanes with no group to disambiguate are left alone
+    rather than guessing (they'll drop; the prompt rule is the primary guard)."""
+    from app.api.v2 import process_maps as pm_api
+    raw = [
+        {"kind": "add_lane", "name": "A", "title": "t", "rationale": "r", "cited_claim_refs": []},
+        {"kind": "add_lane", "name": "B", "title": "t", "rationale": "r", "cited_claim_refs": []},
+        {"kind": "move_to_lane", "node_ref": "N1", "lane_ref": "tmp:1",
+         "title": "t", "rationale": "r", "cited_claim_refs": []},
+    ]
+    pm_api._repair_new_lane_temp_ids(raw)
+    assert "temp_id" not in raw[0] and "temp_id" not in raw[1]
+
+
 def test_build_suggestion_resolves_lowercase_ref():
     from app.api.v2 import process_maps as pm_api
     ctx, (n1, _n2, _e1, _l1, _c1) = _ctx_stub()
