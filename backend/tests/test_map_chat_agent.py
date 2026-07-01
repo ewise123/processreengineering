@@ -29,7 +29,7 @@ class _FakeClient:
 def _run(fake, **over):
     kwargs = dict(
         skeleton_text="NODES:\n  N1 [task]: Receive Invoice",
-        selected_label=None, focus_refs=[], history=[], user_message="how are invoices approved?",
+        focus_items=[], history=[], user_message="how are invoices approved?",
     )
     kwargs.update(over)
     def fake_dispatch(ctx, *, name, args):
@@ -50,6 +50,18 @@ def test_normal_stop_returns_answer_and_trace():
     assert result.round_count == 2
     assert len(result.trace) == 1
     assert result.trace[0]["tool"] == "find_node"
+
+
+def test_selection_is_injected_into_the_user_turn():
+    # A selection must land in the user's OWN message (not only the system prompt)
+    # so the model reliably resolves deictic "this" and can't claim it can't see it.
+    fake = _FakeClient([_resp([_Text("These steps have problems. [[C1]]")])])
+    _run(fake, focus_items=[{"ref": "N4", "label": "Approve invoice"}],
+         user_message="this looks really wrong")
+    sent = fake.calls[0]["messages"][-1]["content"]
+    assert "SELECTED" in sent
+    assert "N4" in sent and "Approve invoice" in sent
+    assert "this looks really wrong" in sent
 
 
 def test_max_tokens_stop_is_recorded_honestly():

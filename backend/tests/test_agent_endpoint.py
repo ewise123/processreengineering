@@ -27,7 +27,7 @@ def test_ask_mode_runs_agent_persists_run_and_resolves_citations(db):
     db.add(ClaimCitation(claim_id=claim.id, chunk_id=chunk.id, quote="the clerk receives it"))
     db.commit()
 
-    def fake_agent(*, tool_ctx, skeleton_text, selected_label, focus_refs, history, user_message):
+    def fake_agent(*, tool_ctx, skeleton_text, focus_items, history, user_message):
         return AgentResult(
             answer="Invoices are approved per [[C1]] and step [[N1]].",
             trace=[{"tool": "search_claims", "summary": "Searched claims for 'approve' — 1 result", "detail": "{}"}],

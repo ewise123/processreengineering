@@ -2187,6 +2187,12 @@ def _mention_sources_from_texts(texts: list[str], ctx) -> list[MentionSource]:
 def _run_ask_agent(db, project, model_id, version, ctx, focus_refs, payload) -> ChatSuggestResponse:
     tool_ctx = AgentToolCtx(db=db, project_id=project.id, version=version, mapctx=ctx)
     history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
+    # Resolve each focused ref to its label so the loop can name the selected
+    # steps inline in the user's turn (reliable deictic resolution).
+    focus_items = [
+        {"ref": r, "label": ctx.node_name_by_id.get(ctx.node_ref_to_id.get(r), "")}
+        for r in focus_refs
+    ]
 
     def _persist(answer, trace, consulted, cited, in_tok, out_tok, rounds, stop, grounded) -> AgentRun:
         run = AgentRun(
@@ -2205,7 +2211,7 @@ def _run_ask_agent(db, project, model_id, version, ctx, focus_refs, payload) -> 
     try:
         result = run_chat_agent(
             tool_ctx=tool_ctx, skeleton_text=ctx.skeleton_text,
-            selected_label=ctx.selected_label, focus_refs=focus_refs,
+            focus_items=focus_items,
             history=history, user_message=payload.user_message,
         )
     except Exception as exc:  # infra failure: graceful message, still record the run

@@ -23,10 +23,11 @@ GROUNDING_MIN_CHARS = 200
 
 AGENT_INSTRUCTIONS = """You are investigating an open process map to answer the analyst's question.
 
-You are given only a cheap SKELETON of the map (lanes, steps, and connections — no details). Details, claims, and source quotes are NOT in your context: you must fetch them with tools.
+You start with a cheap SKELETON of the map (lanes, steps, and connections). For step details, claims, and source quotes, use your tools to look them up.
 
 How to work:
-- Call read tools to gather evidence before answering. Prefer investigating over guessing.
+- When the user has steps SELECTED, they are listed with the user's message. Treat words like "this", "these", "here", or "it" as referring to those selected steps. You CAN see the user's selection — never say you can't see their screen or the UI, and don't ask them to re-name steps they've already selected.
+- Call read tools to gather evidence before answering. When the user points at steps and asks what's wrong, look those steps up (get_node_detail / get_neighbors) and check their claims before responding.
 - Cite the claims you consulted. When a fact comes from a claim, reference it by its short ref (e.g. [[C1]]). Reference steps by their short ref (e.g. [[N1]]).
 - If the sources do not support an answer, say so plainly — do not invent steps, owners, timings, or thresholds.
 - If you draw on general process knowledge that is NOT in the sources, label it explicitly as "not grounded in your sources" and frame it as a question.
@@ -97,8 +98,7 @@ def run_chat_agent(
     *,
     tool_ctx,
     skeleton_text: str,
-    selected_label: str | None,
-    focus_refs: list[str],
+    focus_items: list[dict],
     history: list,
     user_message: str,
 ) -> AgentResult:
@@ -111,10 +111,6 @@ def run_chat_agent(
         + "\n\n---\nMap skeleton (structure only — fetch details with tools):\n"
         + skeleton_text
     )
-    if selected_label:
-        system += f"\n\nCurrently selected: {selected_label}"
-    if focus_refs:
-        system += "\n\nThe user attached these steps as the focus; address all: " + ", ".join(focus_refs)
 
     messages: list[dict] = []
     for turn in history:
@@ -122,6 +118,18 @@ def run_chat_agent(
         content = getattr(turn, "content", None) or (turn.get("content") if isinstance(turn, dict) else None)
         if role in ("user", "assistant") and content:
             messages.append({"role": role, "content": content})
+
+    # Inject the current selection into the user's OWN turn (not just the system
+    # prompt) so the model reliably resolves "this"/"these"/"here" to the selected
+    # steps — even across a long/messy history where a passive system line gets
+    # ignored and the model wrongly claims it can't see the selection.
+    if focus_items:
+        sel = "\n".join(f'- {it["ref"]} — "{it["label"]}"' for it in focus_items)
+        user_message = (
+            "[Steps the user has SELECTED on the canvas right now — treat "
+            '"this"/"these"/"here"/"it" as referring to these, and look them up '
+            "with your tools before answering:\n" + sel + "]\n\n" + user_message
+        )
     messages.append({"role": "user", "content": user_message})
 
     trace: list[dict] = []

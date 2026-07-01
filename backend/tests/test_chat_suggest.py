@@ -604,8 +604,8 @@ def test_chat_suggest_focuses_on_all_context_nodes(db):
     db.add(n2); db.commit()
     captured = {}
 
-    def fake_agent(*, tool_ctx, skeleton_text, selected_label, focus_refs, history, user_message):
-        captured["focus_refs"] = focus_refs
+    def fake_agent(*, tool_ctx, skeleton_text, focus_items, history, user_message):
+        captured["focus_refs"] = [it["ref"] for it in focus_items]
         return AgentResult(answer="ok")
 
     with _pytest.MonkeyPatch.context() as mp:
