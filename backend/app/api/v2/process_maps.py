@@ -2313,24 +2313,10 @@ def chat_suggest(
     # prose is pure noise next to the card. Questions (no suggestions) keep prose.
     resolved = "" if suggestions else _resolve_mention_refs(message, ctx)
     # Build mention sources from claim refs in the prose AND in the resolved
-    # suggestion titles/rationales (those now carry [[claim:uuid]] too). Guard
-    # against malformed tokens: the regex matches hex-ish strings that aren't
-    # valid UUIDs, so UUID() can raise — skip those. Dedupe, preserving order.
-    mention_sources = []
-    seen_claim_ids: set[UUID] = set()
+    # suggestion titles/rationales (those now carry [[claim:uuid]] too). Shared
+    # with the ask-agent path: dedupes, skips malformed uuids, preserves order.
     claim_texts = [resolved] + [s.title for s in suggestions] + [s.rationale for s in suggestions]
-    for text in claim_texts:
-        for cid_str in re.findall(r"\[\[claim:([0-9a-fA-F-]+)\]\]", text):
-            try:
-                cid = UUID(cid_str)
-            except ValueError:
-                continue
-            if cid in seen_claim_ids:
-                continue
-            seen_claim_ids.add(cid)
-            tgt = ctx.source_target_by_claim.get(cid)
-            if tgt:
-                mention_sources.append(MentionSource(claim_id=cid, **tgt))
+    mention_sources = _mention_sources_from_texts(claim_texts, ctx)
     # Group summaries — only for groups actually present on an emitted suggestion.
     used_groups = {s.group for s in suggestions if s.group}
     group_summaries: list[GroupSummary] = []
