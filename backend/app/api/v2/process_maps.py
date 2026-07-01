@@ -1078,6 +1078,9 @@ def update_edge(
     old_label = edge.label
     if "label" in payload.model_fields_set:
         edge.label = payload.label or None
+    old_condition = edge.condition_text
+    if "condition_text" in payload.model_fields_set:
+        edge.condition_text = payload.condition_text or None
     if "bend_x" in payload.model_fields_set:
         edge.bend_x = payload.bend_x
     if "bend_y" in payload.model_fields_set:
@@ -1098,6 +1101,28 @@ def update_edge(
             reason=payload.reason.strip(),
             before={"label": old_label},
             after={"label": edge.label},
+            source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+            actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
+        )
+
+    condition_changed = (
+        "condition_text" in payload.model_fields_set
+        and (payload.condition_text or None) != old_condition
+    )
+    if condition_changed:
+        if not (payload.reason and payload.reason.strip()):
+            db.rollback()
+            raise HTTPException(status_code=422, detail="A reason is required to change an edge condition.")
+        record_change(
+            db,
+            target_type=ChangeTargetType.EDGE.value,
+            target_id=edge.id,
+            model_id=model_id_for_version(db, edge.version_id),
+            version_id=edge.version_id,
+            kind=ChangeKind.RELABEL.value,
+            reason=payload.reason.strip(),
+            before={"condition_text": old_condition},
+            after={"condition_text": edge.condition_text},
             source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
             actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
         )

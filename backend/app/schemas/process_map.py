@@ -100,6 +100,7 @@ class EdgeUpdate(BaseModel):
     on the server so the persisted state matches 'no label'."""
 
     label: str | None = Field(default=None, max_length=300)
+    condition_text: str | None = None
     bend_x: float | None = None
     bend_y: float | None = None
     reason: str | None = Field(default=None, max_length=2000)
