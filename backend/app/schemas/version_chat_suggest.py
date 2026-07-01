@@ -124,6 +124,7 @@ class ChatSuggestRequest(BaseModel):
     user_message: str = Field(min_length=1, max_length=4000)
     mode: ChatMode = ChatMode.SUGGEST
     context_refs: list[ObjectRef] = Field(default_factory=list)
+    session_id: str | None = Field(default=None, max_length=100)
 
 
 class MentionSource(BaseModel):
@@ -132,6 +133,12 @@ class MentionSource(BaseModel):
     input_name: str
     section_ref: dict | None = None
     quote: str | None = None
+
+
+class ActivityStep(BaseModel):
+    tool: str
+    summary: str
+    detail: str | None = None
 
 
 class GroupSummary(BaseModel):
@@ -145,3 +152,6 @@ class ChatSuggestResponse(BaseModel):
     suggestions: list[ChatSuggestion] = Field(default_factory=list)
     mention_sources: list[MentionSource] = Field(default_factory=list)
     group_summaries: list[GroupSummary] = Field(default_factory=list)
+    activity_trace: list[ActivityStep] = Field(default_factory=list)
+    run_id: UUID | None = None
+    grounded: bool = True
