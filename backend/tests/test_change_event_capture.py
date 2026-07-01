@@ -372,10 +372,34 @@ def test_delete_lane_logs_delete_event_and_lane_is_gone(db):
     assert ev.target_type == "lane"
     assert ev.target_id == lane_id
     assert ev.source == "manual"
+    assert ev.actor_kind == "user"
     assert ev.before["name"] == lane_name
 
     # object is gone
     assert db.get(ProcessLane, lane_id) is None
+
+
+def test_delete_lane_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    # add a second lane so deletion is allowed
+    new_lane = pm_api.add_lane(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=LaneCreate(name="Lane To Delete", order_index=1),
+        db=db,
+    )
+    lane_id = new_lane.id
+
+    pm_api.delete_lane(project=project, lane_id=lane_id, db=db, ai_applied=True)
+
+    delete_events = [e for e in _events_for(db, lane_id) if e.kind == "delete"]
+    assert len(delete_events) == 1
+    ev = delete_events[0]
+    assert ev.target_type == "lane"
+    assert ev.target_id == lane_id
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
 
 
 # ---------------------------------------------------------------------------

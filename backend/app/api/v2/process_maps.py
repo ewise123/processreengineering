@@ -1602,6 +1602,7 @@ def delete_lane(
     project: Annotated[Project, Depends(get_project_or_404)],
     lane_id: UUID,
     db: Annotated[Session, Depends(get_db)],
+    ai_applied: bool = False,
 ) -> None:
     lane = db.get(ProcessLane, lane_id)
     if lane is None:
@@ -1637,9 +1638,10 @@ def delete_lane(
         model_id=model_id_for_version(db, lane.version_id),
         version_id=lane.version_id,
         kind=ChangeKind.DELETE.value,
-        reason="Deleted",
+        reason="Removed by AI suggestion" if ai_applied else "Deleted",
         before={"name": lane.name},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if ai_applied else ChangeActorKind.USER.value,
     )
     db.delete(lane)
     db.flush()
