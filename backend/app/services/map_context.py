@@ -40,6 +40,8 @@ class MapContext:
     lane_name_by_id: dict[UUID, str]
     skeleton_text: str = ""
     claim_ref_by_id: dict[UUID, str] = None  # type: ignore[assignment]
+    edge_ref_by_id: dict[UUID, str] = None  # type: ignore[assignment]
+    lane_ref_by_id: dict[UUID, str] = None  # type: ignore[assignment]
 
 
 def assemble_map_context(
@@ -203,4 +205,6 @@ def assemble_map_context(
         lane_name_by_id={l.id: l.name for l in lanes},
         skeleton_text=skeleton_text,
         claim_ref_by_id=claim_ref_by_id,
+        edge_ref_by_id=edge_ref_by_id,
+        lane_ref_by_id=lane_ref_by_id,
     )
