@@ -1,4 +1,4 @@
-import type { OpKind, SuggestionOp } from "@/lib/types";
+import type { ChatSuggestion, OpKind, SuggestionOp } from "@/lib/types";
 
 /** Pure presentation helpers for suggestion cards: given an op, derive the
  * target object (as a `[[kind:uuid]]` mention string for the mention renderer)
@@ -6,13 +6,20 @@ import type { OpKind, SuggestionOp } from "@/lib/types";
  * the mapping is unit-testable. */
 
 // A tmp/sub ref points at an object being created in the same bundle — there's
-// no live id to link, so callers show plain text ("the new step") instead.
+// no live id to link. It renders as a distinct `[[new:<ref>]]` chip (the planned
+// name, resolved from the bundle's producers) instead of a clickable mention.
 export const isTmpRef = (r?: string | null): boolean =>
   !!r && (r.startsWith("tmp:") || r.includes("::sub"));
 
-const nodeMention = (r?: string | null) => (r && !isTmpRef(r) ? `[[node:${r}]]` : null);
-const edgeMention = (r?: string | null) => (r && !isTmpRef(r) ? `[[edge:${r}]]` : null);
-const laneMention = (r?: string | null) => (r && !isTmpRef(r) ? `[[lane:${r}]]` : null);
+// A structural ref → its mention token: a `[[new:<ref>]]` chip when the ref
+// points at an object being created in the same bundle, otherwise a clickable
+// `[[kind:uuid]]` mention of the live object. `null` only when the ref is absent.
+const refMention = (kind: "node" | "edge" | "lane", r?: string | null): string | null =>
+  !r ? null : isTmpRef(r) ? `[[new:${r}]]` : `[[${kind}:${r}]]`;
+
+const nodeMention = (r?: string | null) => refMention("node", r);
+const edgeMention = (r?: string | null) => refMention("edge", r);
+const laneMention = (r?: string | null) => refMention("lane", r);
 
 /** The object(s) a suggestion acts on, as a mention string for the renderer. The
  * action verb lives in the card's badge, so the target never repeats it. `null`
@@ -85,4 +92,30 @@ export function opPayload(op: SuggestionOp): { value: string; hasMention: boolea
     default:
       return null;
   }
+}
+
+/** The planned name for every object a bundle creates, keyed by the tmp ref the
+ * consuming ops use to point at it. Mirrors the tmp-id scheme in
+ * `suggestion-apply.ts` (add_node/add_lane → `temp_id`; decompose sub-steps →
+ * `<node_ref>::sub<i>`), so a `[[new:<ref>]]` chip can show the real name. */
+export function bundleNewNames(suggestions: ChatSuggestion[]): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const { op } of suggestions) {
+    if (op.kind === "add_node" && op.temp_id) {
+      names.set(op.temp_id, op.new_label?.trim() || "new step");
+    } else if (op.kind === "add_lane" && op.temp_id) {
+      names.set(op.temp_id, op.name?.trim() || "new lane");
+    } else if (op.kind === "decompose" && op.node_ref) {
+      (op.sub_steps ?? []).forEach((s, i) =>
+        names.set(`${op.node_ref}::sub${i}`, s.proposed_name?.trim() || "new step")
+      );
+    }
+  }
+  return names;
+}
+
+/** The suggestion-list header suffix, always showing how many of the bundles
+ * have been applied (e.g. "0 of 3 applied", "1 of 3 applied"). */
+export function suggestedChangesSuffix(total: number, applied: number): string {
+  return `${applied} of ${total} applied`;
 }

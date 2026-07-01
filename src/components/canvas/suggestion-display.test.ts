@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import type { SuggestionOp } from "@/lib/types";
-import { isTmpRef, opPayload, opTarget, renameTransition } from "./suggestion-display";
+import type { ChatSuggestion, SuggestionOp } from "@/lib/types";
+import {
+  bundleNewNames,
+  isTmpRef,
+  opPayload,
+  opTarget,
+  renameTransition,
+  suggestedChangesSuffix,
+} from "./suggestion-display";
 
 const op = (o: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }): SuggestionOp =>
   ({ kind: o.kind, ...o }) as SuggestionOp;
+
+const suggestion = (o: Partial<ChatSuggestion> & { op: SuggestionOp }): ChatSuggestion =>
+  ({ id: "s", title: "", rationale: "", affected_refs: [], cited_claim_ids: [], ...o }) as ChatSuggestion;
 
 describe("isTmpRef", () => {
   it("flags tmp and decompose sub refs, not real uuids", () => {
@@ -27,12 +37,12 @@ describe("opTarget", () => {
     expect(opTarget(op({ kind: "remove_edge", edge_ref: "E-1" }))).toBe("[[edge:E-1]]");
   });
 
-  it("shows both endpoints for add_edge, with tmp endpoints as plain text", () => {
+  it("shows both endpoints for add_edge, with tmp endpoints as a [[new:…]] chip", () => {
     expect(opTarget(op({ kind: "add_edge", from_ref: "N-1", to_ref: "N-2" }))).toBe(
       "[[node:N-1]] → [[node:N-2]]"
     );
     expect(opTarget(op({ kind: "add_edge", from_ref: "N-1", to_ref: "tmp:1" }))).toBe(
-      "[[node:N-1]] → the new step"
+      "[[node:N-1]] → [[new:tmp:1]]"
     );
   });
 
@@ -66,6 +76,13 @@ describe("opPayload", () => {
     });
   });
 
+  it("previews a move into a not-yet-created lane as a [[new:…]] chip", () => {
+    expect(opPayload(op({ kind: "move_to_lane", node_ref: "N-1", lane_ref: "tmp:2" }))).toEqual({
+      value: "→ [[new:tmp:2]]",
+      hasMention: true,
+    });
+  });
+
   it("returns null when there is no value to show", () => {
     expect(opPayload(op({ kind: "remove_node", node_ref: "N-1" }))).toBeNull();
     expect(opPayload(op({ kind: "add_edge", from_ref: "N-1", to_ref: "N-2" }))).toBeNull();
@@ -92,5 +109,53 @@ describe("renameTransition", () => {
   it("returns null for non-rename ops (they keep the live mention + value preview)", () => {
     expect(renameTransition(op({ kind: "describe_node", description: "x" }), "anything")).toBeNull();
     expect(renameTransition(op({ kind: "move_to_lane", node_ref: "N-1", lane_ref: "L-2" }), "anything")).toBeNull();
+  });
+});
+
+describe("bundleNewNames", () => {
+  it("maps every producer's tmp ref to its planned name", () => {
+    const names = bundleNewNames([
+      suggestion({ op: op({ kind: "add_node", temp_id: "tmp:1", new_label: "Approve invoice" }) }),
+      suggestion({ op: op({ kind: "add_lane", temp_id: "tmp:2", name: "Approvals" }) }),
+      suggestion({
+        op: op({
+          kind: "decompose",
+          node_ref: "N-9",
+          sub_steps: [
+            { proposed_name: "Check total", proposed_type: "task" },
+            { proposed_name: "Sign off", proposed_type: "task" },
+          ],
+        }),
+      }),
+    ]);
+    expect(names.get("tmp:1")).toBe("Approve invoice");
+    expect(names.get("tmp:2")).toBe("Approvals");
+    expect(names.get("N-9::sub0")).toBe("Check total");
+    expect(names.get("N-9::sub1")).toBe("Sign off");
+  });
+
+  it("falls back to a generic name when a producer has no label", () => {
+    const names = bundleNewNames([
+      suggestion({ op: op({ kind: "add_node", temp_id: "tmp:1" }) }),
+      suggestion({ op: op({ kind: "add_lane", temp_id: "tmp:2" }) }),
+    ]);
+    expect(names.get("tmp:1")).toBe("new step");
+    expect(names.get("tmp:2")).toBe("new lane");
+  });
+
+  it("ignores ops that create nothing", () => {
+    const names = bundleNewNames([
+      suggestion({ op: op({ kind: "relabel_node", node_ref: "N-1", new_label: "X" }) }),
+    ]);
+    expect(names.size).toBe(0);
+  });
+});
+
+describe("suggestedChangesSuffix", () => {
+  it("always shows the applied fraction", () => {
+    expect(suggestedChangesSuffix(3, 0)).toBe("0 of 3 applied");
+    expect(suggestedChangesSuffix(3, 1)).toBe("1 of 3 applied");
+    expect(suggestedChangesSuffix(3, 3)).toBe("3 of 3 applied");
+    expect(suggestedChangesSuffix(1, 0)).toBe("0 of 1 applied");
   });
 });

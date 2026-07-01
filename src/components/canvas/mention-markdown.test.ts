@@ -41,6 +41,16 @@ describe("mentionsToMarkdown", () => {
       `to [lane](poet://lane/other)`
     );
   });
+  it("renders a new-object mention as a poet://new link with its planned name", () => {
+    const newNames = new Map([["tmp:1", "Approve invoice"]]);
+    expect(mentionsToMarkdown(`then [[new:tmp:1]]`, labels, sources, lanes, newNames)).toBe(
+      `then [Approve invoice](poet://new/tmp:1)`
+    );
+    // Falls back to a generic label when the tmp ref isn't in the map.
+    expect(mentionsToMarkdown(`[[new:tmp:9]]`, labels, sources, lanes)).toBe(
+      `[new step](poet://new/tmp:9)`
+    );
+  });
   it("escapes both [ and ] in a label so the link stays valid", () => {
     const l = new Map([[N, "Step [final]"]]);
     expect(mentionsToMarkdown(`[[node:${N}]]`, l, sources)).toBe(
