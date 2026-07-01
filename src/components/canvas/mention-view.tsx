@@ -16,6 +16,7 @@ export function MentionMarkdown({
   sourceNameByClaim,
   sourceTargetByClaim,
   laneNameById,
+  newNameByRef,
   onNavigate,
   onOpenSource,
 }: {
@@ -26,10 +27,13 @@ export function MentionMarkdown({
   /** Lane id → name, so `[[lane:uuid]]` mentions (e.g. a move-to-lane target)
    * render the lane's name. Optional — chat prose never emits lane mentions. */
   laneNameById?: Map<UUID, string>;
+  /** tmp ref → planned name, so a `[[new:<ref>]]` chip (a not-yet-created object
+   * a suggestion card references) shows its name. Optional — only cards emit it. */
+  newNameByRef?: Map<string, string>;
   onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
   onOpenSource: (t: ViewerTarget) => void;
 }) {
-  const md = mentionsToMarkdown(text, labelById, sourceNameByClaim, laneNameById);
+  const md = mentionsToMarkdown(text, labelById, sourceNameByClaim, laneNameById, newNameByRef);
   return (
     <ReactMarkdown
       // Keep poet:// intact (the default transform would strip it) but run every
@@ -42,7 +46,20 @@ export function MentionMarkdown({
         // so a model-supplied <img> can't beacon out.
         img: () => null,
         a: ({ href, children }) => {
-          const m = /^poet:\/\/(node|claim|edge|lane)\/(.+)$/.exec(href ?? "");
+          const m = /^poet:\/\/(node|claim|edge|lane|new)\/(.+)$/.exec(href ?? "");
+          if (m && m[1] === "new") {
+            // An object the same bundle creates — no live id to jump to yet, so
+            // a non-clickable violet chip carrying a "new" tag + the planned
+            // name, visually distinct from the blue existing-object links.
+            return (
+              <span className="mx-0.5 inline-flex items-center gap-1 rounded border border-violet-300 bg-violet-50 px-1 align-baseline font-medium text-violet-700">
+                <span className="rounded-sm bg-violet-200 px-1 text-[8px] font-bold uppercase leading-tight tracking-wide text-violet-800">
+                  new
+                </span>
+                {children}
+              </span>
+            );
+          }
           if (m && (m[1] === "node" || m[1] === "edge")) {
             const kind = m[1];
             const id = m[2];

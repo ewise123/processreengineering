@@ -1,6 +1,6 @@
 "use client";
 
-import { Pause, Play, Sparkles, X } from "lucide-react";
+import { ChevronRight, Pause, Play, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useMutation } from "@tanstack/react-query";
@@ -20,16 +20,22 @@ import { MentionMarkdown } from "./mention-view";
 import {
   selectionChips,
   selectionToContextRefs,
+  type ContextChip,
   type SelectedObject,
 } from "./chat-context";
 import { browserChatSessionStore } from "./chat-session";
 import { toRequestHistory } from "./chat-history";
 import { restoreAfterCancel, type PendingSend } from "./chat-cancel";
 import { bundleSuggestions, indexGraph, planBundle, type Bundle, type BundlePlan, type BatchResult } from "./suggestion-apply";
+import { bundleNewNames } from "./suggestion-display";
 import { SuggestionList, type CardStatus } from "./suggestion-card";
 
 export type ChatItem = ChatTurn & {
   contextNote?: string;
+  /** The objects attached as grounding context when this turn was sent, rendered
+   * as a collapsible row of clickable step links. `contextNote` is kept as a
+   * plain-text fallback for turns persisted before refs were stored. */
+  contextRefs?: ContextChip[];
   sources?: MentionSource[];
   suggestions?: ChatSuggestion[];
   suggestionStatus?: Record<string, CardStatus>;
@@ -143,7 +149,7 @@ export function ChatTab({
   const chips = selectionChips(chatContext, labelById);
 
   const ask = useMutation({
-    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal; mode: "ask" | "suggest" }) =>
+    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextChips?: ContextChip[]; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal; mode: "ask" | "suggest" }) =>
       api.chatSuggest(
         projectId,
         modelId,
@@ -166,7 +172,7 @@ export function ChatTab({
       if (vars.gen !== genRef.current) return;
       const next: ChatItem[] = [
         ...vars.history,
-        { role: "user", content: vars.userMessage, contextNote: vars.note },
+        { role: "user", content: vars.userMessage, contextNote: vars.note, contextRefs: vars.contextChips },
         // Carry this message's source mapping ON the message so it survives
         // reload and isn't lost when component state resets.
         {
@@ -201,6 +207,9 @@ export function ChatTab({
     if (!trimmed || ask.isPending) return;
     // Capture the attached context refs + note NOW from the chat's own list.
     const contextRefs = selectionToContextRefs(chatContext);
+    // Snapshot the display chips too, so the sent turn keeps a clickable context
+    // row (and a plain-text note as a fallback for older persisted turns).
+    const contextChips = chips.length ? chips : undefined;
     const note = chips.length ? chips.map((c) => c.label).join(", ") : undefined;
     // Capture mode at submit time so a later toggle doesn't change an in-flight request.
     const currentMode = mode;
@@ -211,11 +220,12 @@ export function ChatTab({
     pendingRef.current = { priorHistory: preSendHistory, text: trimmed };
     const controller = new AbortController();
     abortRef.current = controller;
-    setHistory((curr) => [...curr, { role: "user", content: trimmed, contextNote: note }]);
+    setHistory((curr) => [...curr, { role: "user", content: trimmed, contextNote: note, contextRefs: contextChips }]);
     ask.mutate({
       history: preSendHistory,
       userMessage: trimmed,
       note,
+      contextChips,
       contextRefs,
       gen: genRef.current,
       signal: controller.signal,
@@ -364,6 +374,9 @@ export function ChatTab({
               { inputId: s.input_id, inputName: s.input_name, sectionRef: s.section_ref, quote: s.quote },
             ])
           );
+          // Planned names for objects the suggestions create, so a card's
+          // `[[new:<ref>]]` chip shows the real name instead of "new step".
+          const newNameByRef = m.suggestions ? bundleNewNames(m.suggestions) : undefined;
           const renderText = (text: string) => (
             <MentionMarkdown
               text={text}
@@ -371,6 +384,7 @@ export function ChatTab({
               sourceNameByClaim={sourceNameByClaim}
               sourceTargetByClaim={sourceTargetByClaim}
               laneNameById={laneNameById}
+              newNameByRef={newNameByRef}
               onNavigate={onNavigate}
               onOpenSource={onOpenSource}
             />
@@ -550,6 +564,48 @@ export function ChatTab({
   );
 }
 
+/** The grounding context attached to a sent user turn: collapsed to a
+ * "Context · N ▸" summary, expanding to clickable step links that teleport +
+ * flash the object on the canvas. Default collapsed to keep the turn compact. */
+function ContextRow({
+  chips,
+  onNavigate,
+}: {
+  chips: ContextChip[];
+  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex items-center gap-0.5 text-[9.5px] font-medium text-slate-400 hover:text-slate-600"
+      >
+        <ChevronRight size={10} className={"transition-transform " + (open ? "rotate-90" : "")} />
+        Context · {chips.length}
+      </button>
+      {open && (
+        <div className="flex flex-wrap justify-end gap-1">
+          {chips.map((c) => (
+            <button
+              key={`${c.kind}:${c.id}`}
+              type="button"
+              onClick={() => onNavigate({ kind: c.kind, id: c.id })}
+              title="Jump to this step"
+              className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] text-slate-700 hover:bg-slate-100"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChatMsg({
   turn,
   labelById,
@@ -567,8 +623,13 @@ function ChatMsg({
         <div className="max-w-[85%] rounded-lg bg-slate-900 px-3 py-2 text-[11.5px] leading-relaxed text-white">
           {turn.content}
         </div>
-        {turn.contextNote && (
-          <div className="text-[9.5px] text-slate-400">Context: {turn.contextNote}</div>
+        {turn.contextRefs && turn.contextRefs.length > 0 ? (
+          <ContextRow chips={turn.contextRefs} onNavigate={onNavigate} />
+        ) : (
+          // Fallback for turns persisted before context refs were stored.
+          turn.contextNote && (
+            <div className="text-[9.5px] text-slate-400">Context: {turn.contextNote}</div>
+          )
         )}
       </div>
     );

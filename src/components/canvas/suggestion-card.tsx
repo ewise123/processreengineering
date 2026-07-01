@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { OpKind } from "@/lib/types";
 import { isDeleteOp, type Bundle } from "./suggestion-apply";
-import { opPayload, opTarget, renameTransition } from "./suggestion-display";
+import { opPayload, opTarget, renameTransition, suggestedChangesSuffix } from "./suggestion-display";
 
 export type CardStatus = "pending" | "applying" | "applied" | "failed" | "dismissed";
 
@@ -54,11 +54,12 @@ export function SuggestionList({
   if (bundles.length === 0) return null;
   // Dismissed cards stay visible (dimmed); only still-pending ones feed "Apply all".
   const pending = bundles.filter((b) => (statusById[b.id] ?? "pending") === "pending");
+  const applied = bundles.filter((b) => statusById[b.id] === "applied").length;
   return (
     <div className="mt-2 space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-[10px] font-bold uppercase tracking-wider text-violet-700">
-          Suggested changes · {bundles.length}
+          Suggested changes · {suggestedChangesSuffix(bundles.length, applied)}
         </span>
         {pending.length > 1 && (
           <button
