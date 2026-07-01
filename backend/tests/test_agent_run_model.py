@@ -24,6 +24,8 @@ def test_agent_run_row_roundtrips(db):
     db.commit()
     db.refresh(run)
     assert run.id is not None
+    assert run.created_at is not None  # TimestampMixin server_default fired
+    assert run.updated_at is not None
     assert run.stop_reason == "normal"
     assert run.tool_calls[0]["tool"] == "search_claims"
     assert run.cited_claim_ids == ["11111111-1111-1111-1111-111111111111"]

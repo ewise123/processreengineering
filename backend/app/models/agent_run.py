@@ -16,10 +16,11 @@ from app.db.mixins import IdMixin, TimestampMixin
 
 
 class AgentRun(IdMixin, TimestampMixin, Base):
-    """Not a FK to projects/process_models/process_versions: this is an
-    observability/audit log (like ChangeEvent) and must survive deletion of
-    the entity it was about. See docs/superpowers/specs/
-    2026-07-01-agent-loop-layer0-readonly-design.md."""
+    """No FKs on project_id/model_id/version_id. Unlike ChangeEvent (which keeps
+    FKs on model_id/version_id and drops it only on its polymorphic target_id),
+    AgentRun drops all three: an eval/observability log for a whole run should
+    survive deletion of any of those entities, not just its immediate target.
+    See docs/superpowers/specs/2026-07-01-agent-loop-layer0-readonly-design.md."""
 
     __tablename__ = "agent_runs"
 
