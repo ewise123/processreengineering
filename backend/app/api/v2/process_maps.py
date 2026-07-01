@@ -1,4 +1,5 @@
 """Phase 2.5 endpoints: generate process maps from claims, read them back."""
+import logging
 import re
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -132,6 +133,8 @@ from app.models.agent_run import AgentRun
 from app.services.agent_tools import AgentToolCtx
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
+
+logger = logging.getLogger(__name__)
 
 
 # Map BPMN task types from the AI-emitted structure → our NodeType enum
@@ -2215,6 +2218,7 @@ def _run_ask_agent(db, project, model_id, version, ctx, focus_refs, payload) -> 
             history=history, user_message=payload.user_message,
         )
     except Exception as exc:  # infra failure: graceful message, still record the run
+        logger.exception("ask-agent run failed (project=%s version=%s)", project.id, version.id)
         run = _persist(
             answer=None, trace=[{"tool": "error", "summary": str(exc), "detail": None}],
             consulted=[], cited=[], in_tok=0, out_tok=0, rounds=0,

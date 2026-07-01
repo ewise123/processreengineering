@@ -4,6 +4,7 @@ Every tool is pure-read, takes an AgentToolCtx + short refs (N#, E#, C# — the
 same namespace the model sees in the skeleton), and returns a JSON-serializable
 dict. The read/write split IS the permission boundary: there are no write tools.
 """
+import logging
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -13,6 +14,8 @@ from sqlalchemy.orm import Session
 from app.models.claim import Claim, ClaimConflict
 from app.models.process import NodeClaimLink, ProcessEdge, ProcessNode, ProcessVersion
 from app.services.map_context import MapContext
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,6 +46,10 @@ def search_claims(ctx: AgentToolCtx, *, query: str, k: int = 8) -> dict:
     """Case-insensitive keyword search over claim subject (+ first citation quote).
     v1 has no semantic search — this is a deliberate, testable substitute."""
     q = (query or "").strip().lower()
+    if not q:
+        # Fail closed: a blank query must NOT match every claim (that would mark
+        # arbitrary claims as consulted and make a weak answer look grounded).
+        return {"claims": []}
     claims = ctx.db.scalars(
         select(Claim).where(Claim.project_id == ctx.project_id).order_by(Claim.created_at, Claim.id)
     ).all()
@@ -50,7 +57,7 @@ def search_claims(ctx: AgentToolCtx, *, query: str, k: int = 8) -> dict:
     for c in claims:
         subj = (c.subject or "").lower()
         quote = ctx.mapctx.source_target_by_claim.get(c.id, {}).get("quote") or ""
-        if not q or q in subj or q in quote.lower():
+        if q in subj or q in quote.lower():
             ref = ctx.mapctx.claim_ref_by_id.get(c.id)
             if ref:
                 hits.append({
@@ -286,8 +293,12 @@ def dispatch_tool(ctx: AgentToolCtx, *, name: str, args: dict) -> tuple[dict, st
     try:
         result = fn(ctx, **(args or {}))
     except TypeError as exc:
+        # Argument-shape errors are safe to surface and help the model retry.
         result = {"error": f"bad arguments for {name}: {exc}"}
-    except Exception as exc:  # a tool failure must not kill the loop
-        result = {"error": f"{name} failed: {exc}"}
+    except Exception:  # a tool failure must not kill the loop
+        # Log the real exception; return a GENERIC message so raw SQL/schema/
+        # internal detail never leaks into the user-visible/persisted trace.
+        logger.exception("agent tool %s failed", name)
+        result = {"error": f"{name} failed (internal error)"}
     summary = summarize_tool_call(name, args or {}, result)
     return result, summary, _claim_ids_in_result(ctx, result)

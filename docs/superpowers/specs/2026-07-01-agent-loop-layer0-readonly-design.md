@@ -46,10 +46,10 @@ All six are **read-only** in v1. The read/write split *is* the permission bounda
 | Tool | Input | Returns |
 |------|-------|---------|
 | `search_claims` | `query`, `k` | matching claims: `id`, text, source refs |
-| `find_node` | `query` | nodes by label/semantic match: `id`, label, lane |
-| `get_node_detail` | `id` | label, lane, description, connected edges, citations |
-| `get_neighbors` | `id` | predecessors + successors (gap-detection primitive) |
-| `lookup_citation` | `claim_id` | the source excerpt behind the claim |
+| `find_node` | `query` | nodes by label/semantic match, as short refs: `N#`, label, lane |
+| `get_node_detail` | `node_ref` | label, lane, description, connected edges, citations |
+| `get_neighbors` | `node_ref` | predecessors + successors (gap-detection primitive) |
+| `lookup_citation` | `claim_ref` | the source excerpt behind the claim |
 | `list_conflicts` | — | existing contradiction detections for the map |
 
 **Contract:** every tool returning substantive content returns **stable ids** (claim / source / node) so the answer can cite them. Tool results are returned to the model as clearly delimited **untrusted data** (see §9).
@@ -90,11 +90,10 @@ Everything expensive (descriptions, provenance, source excerpts, deep traversal)
 
 ## 7. Response shape & narration
 
-- **Batch** (no SSE): `{ answer, citations, activity_trace[], run_id }`.
+- **Batch** (no SSE): the existing `ChatSuggestResponse` shape, extended — `message`, `mention_sources`, `activity_trace[]`, `run_id`, `grounded`, with `suggestions=[]` in ask mode.
 - `activity_trace[]` = one **human-readable line per tool call** ("Searched claims for 'invoice approval'", "Read step: Approve Invoice"), each expandable to the raw call + result.
-- Frontend reuses today's markdown + `[[kind:id]]` mention rendering + per-message source links, and adds:
-  - a **collapsible "how I found this"** activity list (default collapsed);
-  - the **"not grounded"** label treatment.
+- Frontend reuses today's markdown + `[[kind:id]]` mention rendering + per-message source links, and adds a **collapsible "how I found this"** activity list (default collapsed).
+- The `grounded` flag is persisted but, per live-testing feedback, **not** surfaced as an ask-mode chip (it was noisy on honest "the sources don't say" answers). A visual grounded/invented signal is deferred to the future write loop's suggestion cards; ask mode relies on the model's inline prose ("not grounded in your sources").
 - **Pause/cancel** stays exactly as today (abort the single fetch via `AbortController`); no change needed because there's no stream.
 - Streaming is the immediate next increment and will replace batch delivery of `activity_trace` with live emission.
 

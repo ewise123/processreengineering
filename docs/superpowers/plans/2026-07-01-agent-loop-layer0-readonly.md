@@ -10,6 +10,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-01-agent-loop-layer0-readonly-design.md`. **Roadmap:** `docs/superpowers/specs/2026-07-01-agent-tool-loop-roadmap.md`.
 
+> **⚠️ Post-review deltas (this plan's code snippets are the ORIGINAL plan; the shipped code differs after review + live-testing):**
+> - `AgentRun` has **no FK** on `project_id`/`model_id`/`version_id` (audit log must survive deletion; the Task 1 snippet's FK was dropped).
+> - `run_chat_agent` takes **`focus_items` (`[{ref,label}]`)**, not `focus_refs`+`selected_label`, and injects the selection into the **user turn** for reliable deictic resolution (Task 6 snippet superseded).
+> - Ask-mode ships **no "not grounded" chip** (noisy); the `grounded` flag is persisted, prose honesty stays. Frontend adds a **persistent collapsible session-context** set + a `session_id` sent per request.
+> - Loop adds a **wall-clock budget** (`MAX_WALL_SECONDS`, `AgentRunStopReason.TIME_CAP`) alongside the round/token caps; `search_claims` **fails closed** on a blank query; `dispatch_tool` **sanitizes** internal errors (logs real, returns generic).
+
 **Deviation from spec (flagged):** The spec's `search_claims` implies semantic search, but there is **no claim-level vector search today** (pgvector exists on `Chunk.embedding` only; claims are filtered by `kind` or bulk-loaded). To keep the tool layer testable and free of an OpenAI dependency, v1 `search_claims` is **case-insensitive keyword search** over claim `subject` (+ citation quote). Semantic search is a noted future upgrade.
 
 **Conventions:**

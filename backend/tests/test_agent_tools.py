@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from app.models.process import ProcessVersion
 from app.services import agent_tools
 from app.services.map_context import assemble_map_context
@@ -23,6 +25,30 @@ def test_search_claims_keyword(db):
     out = agent_tools.search_claims(tctx, query=claim.subject.split()[0], k=5)
     assert out["claims"]
     assert out["claims"][0]["ref"].startswith("C")
+
+
+def test_search_claims_blank_query_fails_closed(db):
+    # A blank/whitespace query must NOT match every claim (grounding hazard).
+    tctx, _, _ = _ctx(db)
+    assert agent_tools.search_claims(tctx, query="   ")["claims"] == []
+
+
+def test_dispatch_sanitizes_internal_tool_errors(db):
+    # A tool that blows up internally must not leak raw exception text (SQL/schema)
+    # into the user-visible/persisted trace.
+    tctx, _, _ = _ctx(db)
+
+    def boom(ctx, **kwargs):
+        raise RuntimeError("secret detail: SELECT * FROM claims WHERE x=1")
+
+    with patch.dict(agent_tools._TOOL_FNS, {"find_node": boom}):
+        result, summary, claim_ids = agent_tools.dispatch_tool(
+            tctx, name="find_node", args={"query": "x"}
+        )
+    assert "internal error" in result["error"]
+    assert "SELECT" not in result["error"] and "secret" not in result["error"]
+    assert "SELECT" not in summary and "secret" not in summary
+    assert claim_ids == set()
 
 
 def test_get_node_detail_resolves_ref(db):

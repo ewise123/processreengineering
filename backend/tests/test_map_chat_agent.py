@@ -110,6 +110,19 @@ def test_round_cap_forces_graceful_synthesis():
     assert "tools" not in fake.calls[-1]
 
 
+def test_wall_clock_budget_forces_synthesis():
+    # Round 1 asks for a tool; the wall-clock deadline is exceeded before round 2,
+    # forcing a graceful-synthesis turn with stop_reason time_cap.
+    fake = _FakeClient([
+        _resp([_ToolUse("t1", "find_node", {"query": "x"})]),
+        _resp([_Text("Out of time — answering with what I have.")]),
+    ])
+    mono = iter([1000.0, 1000.0 + map_chat_agent.MAX_WALL_SECONDS + 1])
+    with patch.object(map_chat_agent.time, "monotonic", lambda: next(mono, 9e9)):
+        result = _run(fake)
+    assert result.stop_reason == "time_cap"
+
+
 def test_token_cap_forces_synthesis():
     fake = _FakeClient([
         _resp([_ToolUse("t1", "find_node", {"query": "x"})], inp=90_000, out=5_000),

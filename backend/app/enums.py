@@ -257,6 +257,7 @@ class AgentRunStopReason(StrEnum):
     NORMAL = "normal"
     ROUND_CAP = "round_cap"
     TOKEN_CAP = "token_cap"
+    TIME_CAP = "time_cap"
     # The model itself stopped abnormally (distinct from our own budget caps):
     # truncated at the per-call output limit, or refused. Recorded honestly so a
     # truncated/refused answer isn't mislabeled "normal" in the agent_run trace.

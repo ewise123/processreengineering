@@ -26,7 +26,7 @@ The engine everything else plugs into. Its shape — especially the tool contrac
 
 **In scope:**
 - The agentic loop: model → tool calls → observations → repeat → answer/propose, with a turn/step/token budget and explicit stopping rules.
-- **Tool surface + read/write split** = the permission boundary. Read tools (`search_claims`, `get_node`, `lookup_citation`, …) run free in-loop. `propose_*` write tools **do not mutate** — they emit suggestion ops that route through the existing card → Apply human gate. Nothing auto-applies.
+- **Tool surface + read/write split** = the permission boundary. Read tools (`search_claims`, `find_node`, `get_node_detail`, `get_neighbors`, `lookup_citation`, `list_conflicts`) run free in-loop. `propose_*` write tools **do not mutate** — they emit suggestion ops that route through the existing card → Apply human gate. Nothing auto-applies.
 - **Retrieval-on-demand as the context strategy** — the loop pulls map/doc slices through tools rather than stuffing the whole map + history into context. This is the real answer to "don't load everything every chat," and it lives here, not in Layer 1.
 - **Grounding enforcement in-loop** — a proposal carries the claims it consulted; ungrounded proposals are flagged, not hidden (ties to the non-sycophantic / gap-detection behaviors in the AI-assistant vision).
 - **Activity narration** — surfacing the *real* tool calls as they happen (the honest version of the "activity" descoped in 2.1b).

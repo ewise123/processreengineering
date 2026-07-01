@@ -6,6 +6,7 @@ See docs/superpowers/specs/2026-07-01-agent-loop-layer0-readonly-design.md.
 """
 import json
 import os
+import time
 from dataclasses import dataclass, field
 
 import anthropic
@@ -19,6 +20,11 @@ AGENT_MODEL = os.getenv("MAP_CHAT_AGENT_MODEL", os.getenv("MAP_CHAT_MODEL", "cla
 MAX_TOKENS = 1500
 MAX_ROUNDS = 6
 MAX_TOKENS_BUDGET = 80_000
+# Total wall-clock budget across ALL rounds. chat_suggest is a sync endpoint, so
+# an unbounded multi-round run would hold a thread-pool worker for minutes and can
+# exhaust the pool under concurrent traffic. The per-call timeout only bounds ONE
+# call; this bounds the whole loop and forces graceful synthesis when exceeded.
+MAX_WALL_SECONDS = 180
 GROUNDING_MIN_CHARS = 200
 
 AGENT_INSTRUCTIONS = """You are investigating an open process map to answer the analyst's question.
@@ -136,6 +142,7 @@ def run_chat_agent(
     consulted: set = set()
     in_tokens = out_tokens = 0
     result = AgentResult(answer="")
+    deadline = time.monotonic() + MAX_WALL_SECONDS
 
     for round_no in range(1, MAX_ROUNDS + 1):
         resp = client.messages.create(
@@ -168,6 +175,10 @@ def run_chat_agent(
         if in_tokens + out_tokens > MAX_TOKENS_BUDGET:
             result.answer = _graceful_synthesis(client, system, messages)
             result.stop_reason = AgentRunStopReason.TOKEN_CAP.value
+            break
+        if time.monotonic() > deadline:
+            result.answer = _graceful_synthesis(client, system, messages)
+            result.stop_reason = AgentRunStopReason.TIME_CAP.value
             break
     else:
         result.answer = _graceful_synthesis(client, system, messages)
