@@ -13,6 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.db.mixins import IdMixin, TimestampMixin
+from app.enums import AgentRunStopReason
 
 
 class AgentRun(IdMixin, TimestampMixin, Base):
@@ -40,5 +41,7 @@ class AgentRun(IdMixin, TimestampMixin, Base):
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     round_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    stop_reason: Mapped[str] = mapped_column(String(20), nullable=False, default="normal")
+    stop_reason: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=AgentRunStopReason.NORMAL.value
+    )
     grounded: Mapped[bool] = mapped_column(nullable=False, default=True)

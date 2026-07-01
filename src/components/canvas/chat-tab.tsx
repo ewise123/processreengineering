@@ -153,6 +153,21 @@ export function ChatTab({
 
   const chips = selectionChips(chatContext, labelById);
 
+  // A stable per-version chat session id, persisted in sessionStorage alongside
+  // the transcript (survives tab nav, resets on hard reload). Sent with each ask
+  // so agent runs are groupable by conversation. Layer 1 will formalize richer
+  // session lifecycle (new/compact/clear); this is the minimal grouping key.
+  const sessionId = useMemo(() => {
+    if (typeof window === "undefined" || !window.sessionStorage) return null;
+    const k = `poet-chat-sid:${versionId}`;
+    let sid = window.sessionStorage.getItem(k);
+    if (!sid) {
+      sid = crypto.randomUUID();
+      window.sessionStorage.setItem(k, sid);
+    }
+    return sid;
+  }, [versionId]);
+
   const ask = useMutation({
     mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextChips?: ContextChip[]; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal; mode: "ask" | "suggest" }) =>
       api.chatSuggest(
@@ -169,6 +184,7 @@ export function ChatTab({
           user_message: input.userMessage,
           mode: input.mode,
           context_refs: input.contextRefs,
+          session_id: sessionId,
         },
         input.signal
       ),
