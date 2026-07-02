@@ -136,3 +136,68 @@ def test_assess_grounded():
     assert map_chat_agent.assess_grounded("long answer " * 20, ["C1"]) is True
     assert map_chat_agent.assess_grounded("long answer " * 20, []) is False
     assert map_chat_agent.assess_grounded("Short, no cites.", []) is True
+
+
+def _ctx_for_agent():
+    from uuid import uuid4
+    n1 = uuid4()
+    return SimpleNamespace(
+        node_ref_to_id={"N1": n1}, edge_ref_to_id={}, lane_ref_to_id={},
+        claim_ref_to_id={}, node_name_by_id={n1: "Receive"}, lane_name_by_id={}, edge_label_by_id={},
+    )
+
+
+def _run_with_ctx(fake, ctx, **over):
+    from app.services import suggestion_ops
+    kwargs = dict(skeleton_text="NODES:\n  N1 [task]: Receive Invoice",
+                  focus_items=[], history=[], user_message="add a step")
+    kwargs.update(over)
+    def fake_dispatch(tool_ctx, *, name, args):
+        return ({"ok": True}, f"ran {name}", set())
+    with patch.object(map_chat_agent, "_get_client", return_value=fake), \
+         patch.object(map_chat_agent, "dispatch_tool", fake_dispatch), \
+         patch.object(map_chat_agent, "validate_proposal_batch",
+                      lambda ops, c, *, start_index: suggestion_ops.validate_proposal_batch(ops, ctx, start_index=start_index)):
+        return map_chat_agent.run_chat_agent(tool_ctx=SimpleNamespace(mapctx=ctx), **kwargs)
+
+
+def test_propose_changes_accumulates_accepted_proposals():
+    ctx = _ctx_for_agent()
+    fake = _FakeClient([
+        _resp([_ToolUse("t1", "propose_changes", {"suggestions": [
+            {"kind": "relabel_node", "node_ref": "N1", "new_label": "Log invoice", "title": "Rename", "rationale": ""}]})]),
+        _resp([_Text("Proposed the rename.")]),
+    ])
+    result = _run_with_ctx(fake, ctx)
+    assert result.stop_reason == "normal"
+    assert len(result.proposals) == 1
+    assert result.proposals[0].op.kind.value == "relabel_node"
+
+
+def test_propose_rejected_op_is_returned_to_model_for_self_correction():
+    ctx = _ctx_for_agent()
+    fake = _FakeClient([
+        _resp([_ToolUse("t1", "propose_changes", {"suggestions": [
+            {"kind": "relabel_node", "node_ref": "N9", "new_label": "x", "title": "t", "rationale": ""}]})]),
+        _resp([_ToolUse("t2", "propose_changes", {"suggestions": [
+            {"kind": "relabel_node", "node_ref": "N1", "new_label": "x", "title": "t", "rationale": ""}]})]),
+        _resp([_Text("Fixed and proposed.")]),
+    ])
+    result = _run_with_ctx(fake, ctx)
+    round1_result = fake.calls[1]["messages"][-1]["content"][0]["content"]
+    assert "N9" in round1_result and "reject" in round1_result.lower()
+    assert len(result.proposals) == 1
+    assert result.proposals[0].op.node_ref == str(ctx.node_ref_to_id["N1"])
+
+
+def test_ops_per_run_cap_truncates_and_notes():
+    ctx = _ctx_for_agent()
+    many = [{"kind": "describe_node", "node_ref": "N1", "description": f"d{i}", "title": "t", "rationale": ""}
+            for i in range(map_chat_agent.MAX_PROPOSED_OPS + 5)]
+    fake = _FakeClient([
+        _resp([_ToolUse("t1", "propose_changes", {"suggestions": many})]),
+        _resp([_Text("done")]),
+    ])
+    result = _run_with_ctx(fake, ctx)
+    assert len(result.proposals) == map_chat_agent.MAX_PROPOSED_OPS
+    assert any("cap" in t["summary"].lower() or "over cap" in t["summary"].lower() for t in result.trace)
