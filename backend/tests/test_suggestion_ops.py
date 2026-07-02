@@ -44,3 +44,19 @@ def test_validate_proposal_batch_orphaned_consumer_is_rejected_not_dropped():
     accepted, rejected = suggestion_ops.validate_proposal_batch(raw_ops, ctx, start_index=0)
     assert accepted == []
     assert {r["kind"] for r in rejected} == {"add_node", "add_edge"}
+
+
+def test_build_suggestion_missing_required_field_gives_actionable_message():
+    # add_node missing new_label: the error must NAME the missing field, not leak a URL.
+    raw = {"kind": "add_node", "temp_id": "tmp:1", "lane_ref": "L1", "node_type": "task", "title": "t", "rationale": ""}
+    sugg, err = suggestion_ops.build_suggestion(raw, _ctx(), index=0)
+    assert sugg is None
+    assert err and "new_label" in err
+    assert "pydantic.dev" not in err
+
+
+def test_validate_proposal_batch_start_index_offsets_reported_indices():
+    ctx = _ctx()
+    raw_ops = [{"kind": "move_to_lane", "node_ref": "N9", "lane_ref": "L1", "title": "t", "rationale": ""}]
+    _, rejected = suggestion_ops.validate_proposal_batch(raw_ops, ctx, start_index=5)
+    assert rejected and rejected[0]["index"] == 5

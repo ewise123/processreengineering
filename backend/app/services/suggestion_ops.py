@@ -249,7 +249,9 @@ def build_suggestion(raw: dict, ctx, index: int) -> tuple[ChatSuggestion | None,
         try:
             SuggestionOp(**{k: raw.get(k) for k in raw if k not in ("title", "rationale", "group", "cited_claim_refs")})
         except Exception as exc:
-            return None, f"{kind}: {str(exc).splitlines()[-1][:160]}"
+            errs = exc.errors() if hasattr(exc, "errors") else None
+            msg = errs[0]["msg"] if errs else str(exc).splitlines()[0]
+            return None, f"{kind}: {msg[:160]}"
         return None, f"{kind}: malformed op."
     return sugg, None
 

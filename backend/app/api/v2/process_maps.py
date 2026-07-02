@@ -126,13 +126,11 @@ from app.schemas.version_chat_suggest import (
 from app.services.map_chat_suggest import run_chat_suggest
 from app.services.map_consistency import scan_map
 from app.services.suggestion_ops import (
-    build_suggestion as _build_suggestion_with_error,
     _build_suggestion_op as _build_suggestion,
     _drop_orphaned_consumers,
     _repair_new_lane_temp_ids,
     _resolve_mention_refs,
     _resolve_refs,
-    validate_proposal_batch,
 )
 from app.models.agent_run import AgentRun
 from app.services.agent_tools import AgentToolCtx
