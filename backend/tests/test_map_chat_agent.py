@@ -201,3 +201,27 @@ def test_ops_per_run_cap_truncates_and_notes():
     result = _run_with_ctx(fake, ctx)
     assert len(result.proposals) == map_chat_agent.MAX_PROPOSED_OPS
     assert any("cap" in t["summary"].lower() or "over cap" in t["summary"].lower() for t in result.trace)
+
+
+def test_suggest_instructions_are_in_the_system_prompt():
+    ctx = _ctx_for_agent()
+    fake = _FakeClient([_resp([_Text("ok")])])
+    _run_with_ctx(fake, ctx)
+    system = fake.calls[0]["system"]
+    assert "propose_changes" in system  # the propose contract is present
+    # a distinctive phrase from SUGGEST_INSTRUCTIONS:
+    assert "One suggestion per discrete change" in system
+
+
+def test_accepted_verdict_carries_op_index():
+    ctx = _ctx_for_agent()
+    fake = _FakeClient([
+        _resp([_ToolUse("t1", "propose_changes", {"suggestions": [
+            {"kind": "relabel_node", "node_ref": "N1", "new_label": "Log invoice", "title": "Rename", "rationale": ""}]})]),
+        _resp([_Text("done")]),
+    ])
+    _run_with_ctx(fake, ctx)
+    # The tool_result JSON sent back for the propose call carries accepted[0].index == 0.
+    import json as _json
+    propose_result = _json.loads(fake.calls[1]["messages"][-1]["content"][0]["content"])
+    assert propose_result["accepted"][0]["index"] == 0

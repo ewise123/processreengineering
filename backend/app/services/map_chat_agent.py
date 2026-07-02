@@ -65,7 +65,10 @@ When to propose vs. converse:
 - If the user gives a DIRECT, actionable instruction to change the map ("add a
   step…", "rename…", "describe…", "remove…", "move…", "connect…", "split…"), call
   `propose_changes` RIGHT AWAY. This holds even mid-conversation — a chatty
-  history never turns a direct command into a discussion. When you do propose:
+  history never turns a direct command into a discussion. If a proposal depends
+  on a fact you haven't verified (e.g. a step's current label, lane, or claims),
+  call a read tool to check it BEFORE proposing — a grounded proposal beats a
+  fast one. When you do propose:
   - Your prose message MUST be empty or a single short clause of framing. Do NOT
     write the proposed content (the new label, the description text, the new
     step's details) out in prose — the card already shows it, so repeating it is
@@ -237,6 +240,14 @@ def _assistant_content(blocks) -> list[dict]:
     return out
 
 
+def _suggestion_index(s) -> int | None:
+    """The submitted-op index encoded in a built suggestion's id (sg-{index}-{hex})."""
+    try:
+        return int(s.id.split("-")[1])
+    except (IndexError, ValueError):
+        return None
+
+
 def _handle_propose(inp: dict, mapctx, proposals: list, raw_groups: list) -> tuple[dict, str]:
     """Validate one propose_changes call against the live map, accumulate accepted
     proposals (honoring MAX_PROPOSED_OPS), and return the per-op verdict the model
@@ -258,7 +269,7 @@ def _handle_propose(inp: dict, mapctx, proposals: list, raw_groups: list) -> tup
     raw_groups.extend(g for g in groups if isinstance(g, dict))
 
     result = {
-        "accepted": [{"index": None, "kind": s.op.kind.value, "title": s.title} for s in accepted],
+        "accepted": [{"index": _suggestion_index(s), "kind": s.op.kind.value, "title": s.title} for s in accepted],
         "rejected": rejected,
     }
     if truncated:
@@ -285,6 +296,7 @@ def run_chat_agent(
         SYSTEM_PROMPT
         + "\n\n---\n" + AGENT_INSTRUCTIONS
         + "\n\n---\n" + MENTION_INSTRUCTIONS
+        + "\n\n---\n" + SUGGEST_INSTRUCTIONS
         + "\n\n---\nMap skeleton (structure only — fetch details with tools):\n"
         + skeleton_text
     )
@@ -341,11 +353,12 @@ def run_chat_agent(
         tool_results = []
         for tu in tool_uses:
             if tu.name == "propose_changes":
-                res, summary = _handle_propose(dict(tu.input or {}), tool_ctx.mapctx, proposals, raw_groups)
+                pinput = dict(tu.input or {})
+                res, summary = _handle_propose(pinput, tool_ctx.mapctx, proposals, raw_groups)
                 trace.append({
                     "tool": "propose_changes",
                     "summary": summary,
-                    "detail": json.dumps({"args": dict(tu.input or {}), "result": res})[:4000],
+                    "detail": json.dumps({"args": pinput, "result": res})[:4000],
                 })
                 tool_results.append({"type": "tool_result", "tool_use_id": tu.id, "content": json.dumps(res)})
                 continue
