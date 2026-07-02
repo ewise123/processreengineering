@@ -124,14 +124,6 @@ from app.schemas.version_chat_suggest import (
 )
 from app.services.map_consistency import scan_map
 from app.services.suggestion_ops import (
-    # _build_suggestion_op / _drop_orphaned_consumers / _repair_new_lane_temp_ids
-    # are no longer called by this module's endpoint logic (the single-shot
-    # suggest path was collapsed into the agent loop), but stay imported here
-    # because tests/test_chat_suggest.py exercises the suggestion_ops helpers
-    # through this module's re-export (`pm_api._build_suggestion(...)` etc.).
-    _build_suggestion_op as _build_suggestion,
-    _drop_orphaned_consumers,
-    _repair_new_lane_temp_ids,
     _resolve_mention_refs,
     _resolve_refs,
 )
