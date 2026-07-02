@@ -87,7 +87,7 @@ def _build_suggestion_op(raw: dict, ctx, index: int):
             affected.append(ObjectRef(kind=ref_kind, id=real_id))
             real_id_by_field[field] = real_id
     # literal (non-ref) fields pass straight through
-    for field in ("new_label", "description", "name", "node_type", "edge_label", "sub_steps"):
+    for field in ("new_label", "description", "name", "node_type", "edge_label", "sub_steps", "condition_text"):
         if raw.get(field) is not None:
             op_kwargs[field] = raw[field]
 

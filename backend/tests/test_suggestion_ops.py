@@ -60,3 +60,19 @@ def test_validate_proposal_batch_start_index_offsets_reported_indices():
     raw_ops = [{"kind": "move_to_lane", "node_ref": "N9", "lane_ref": "L1", "title": "t", "rationale": ""}]
     _, rejected = suggestion_ops.validate_proposal_batch(raw_ops, ctx, start_index=5)
     assert rejected and rejected[0]["index"] == 5
+
+
+def test_set_edge_condition_builds_with_condition_text():
+    ctx = _ctx()
+    ctx.edge_ref_to_id = {"E1": uuid4()}
+    raw = {"kind": "set_edge_condition", "edge_ref": "E1", "condition_text": "amount > 10000", "title": "t", "rationale": ""}
+    sugg, err = suggestion_ops.build_suggestion(raw, ctx, index=0)
+    assert err is None
+    assert sugg.op.condition_text == "amount > 10000"
+
+
+def test_change_node_type_builds_with_node_type():
+    raw = {"kind": "change_node_type", "node_ref": "N1", "node_type": "gateway_exclusive", "title": "t", "rationale": ""}
+    sugg, err = suggestion_ops.build_suggestion(raw, _ctx(), index=0)
+    assert err is None
+    assert sugg.op.node_type == "gateway_exclusive"
