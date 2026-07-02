@@ -5,6 +5,7 @@ import {
   bundleNewNames,
   isProposalGrounded,
   isTmpRef,
+  laneReassignmentTarget,
   opPayload,
   opTarget,
   renameTransition,
@@ -182,5 +183,18 @@ describe("suggestedChangesSuffix", () => {
     expect(suggestedChangesSuffix(3, 1)).toBe("1 of 3 applied");
     expect(suggestedChangesSuffix(3, 3)).toBe("3 of 3 applied");
     expect(suggestedChangesSuffix(1, 0)).toBe("0 of 1 applied");
+  });
+});
+
+describe("laneReassignmentTarget", () => {
+  const lanes = [{ id: "L2", order_index: 1 }, { id: "L1", order_index: 0 }, { id: "L3", order_index: 2 }];
+  it("returns the first remaining lane by order_index", () => {
+    expect(laneReassignmentTarget({ kind: "remove_lane", lane_ref: "L3" }, lanes)).toBe("L1");
+  });
+  it("returns null when the removed lane is the only lane", () => {
+    expect(laneReassignmentTarget({ kind: "remove_lane", lane_ref: "L1" }, [{ id: "L1", order_index: 0 }])).toBeNull();
+  });
+  it("returns null for non-remove_lane ops", () => {
+    expect(laneReassignmentTarget({ kind: "relabel_node", node_ref: "N1", new_label: "x" }, lanes)).toBeNull();
   });
 });

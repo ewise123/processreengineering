@@ -136,3 +136,15 @@ export function suggestedChangesSuffix(total: number, applied: number): string {
 export function isProposalGrounded(s: Pick<ChatSuggestion, "cited_claim_ids">): boolean {
   return (s.cited_claim_ids?.length ?? 0) > 0;
 }
+
+/** For a remove_lane op, the lane its steps get reassigned to: the first
+ * REMAINING lane by order_index (mirrors the backend's fallback). Returns the
+ * target lane id, or null if the op isn't remove_lane or there's no other lane. */
+export function laneReassignmentTarget(
+  op: SuggestionOp,
+  lanes: { id: string; order_index: number }[]
+): string | null {
+  if (op.kind !== "remove_lane" || !op.lane_ref) return null;
+  const others = lanes.filter((l) => l.id !== op.lane_ref).sort((a, b) => a.order_index - b.order_index);
+  return others.length ? others[0].id : null;
+}

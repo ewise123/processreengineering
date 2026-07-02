@@ -423,7 +423,10 @@ export interface ChatSuggestion {
 export interface ChatSuggestRequest {
   history: ChatTurn[];
   user_message: string;
-  mode: ChatMode;
+  /** The backend's agent loop always investigates-and-proposes and ignores
+   * this field; kept optional for backward compatibility with older callers
+   * but no longer sent by the chat UI. */
+  mode?: ChatMode;
   context_refs: ObjectRef[];
   session_id?: string | null;
 }

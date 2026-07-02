@@ -47,18 +47,14 @@ export type ChatItem = ChatTurn & {
   runId?: string | null;
 };
 
-const SUGGESTED_PROMPTS: Record<"ask" | "suggest", string[]> = {
-  ask: [
-    "Find any gaps in this flow",
-    "Which steps lack source citations?",
-    "Compare this against typical processes",
-  ],
-  suggest: [
-    "Add the missing approval step",
-    "Fix the order of these two steps",
-    "Split this step into its sub-steps",
-  ],
-};
+const SUGGESTED_PROMPTS: string[] = [
+  "Find any gaps in this flow",
+  "Which steps lack source citations?",
+  "Add the missing approval step",
+  "Fix the order of these two steps",
+  "Split this step into its sub-steps",
+  "Compare this against typical processes",
+];
 
 const sidKey = (versionId: UUID) => `poet-chat-sid:${versionId}`;
 
@@ -104,7 +100,6 @@ export function ChatTab({
 }) {
   const sessionStore = useMemo(() => browserChatSessionStore(), []);
   const [showExamples, setShowExamples] = useState(false);
-  const [mode, setMode] = useState<"ask" | "suggest">("ask");
   const [history, setHistory] = useState<ChatItem[]>(() => sessionStore.load(versionId) as ChatItem[]);
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -194,7 +189,7 @@ export function ChatTab({
   const [sessionId, setSessionId] = useState<string | null>(() => readOrMintSessionId(versionId));
 
   const ask = useMutation({
-    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextChips?: ContextChip[]; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal; mode: "ask" | "suggest" }) =>
+    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextChips?: ContextChip[]; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal }) =>
       api.chatSuggest(
         projectId,
         modelId,
@@ -207,7 +202,8 @@ export function ChatTab({
           // server rejects content shorter than 1 char (422).
           history: toRequestHistory(input.history),
           user_message: input.userMessage,
-          mode: input.mode,
+          // `mode` deliberately omitted: the backend's agent loop always
+          // investigates-and-proposes and ignores it (see ChatSuggestRequest).
           context_refs: input.contextRefs,
           session_id: sessionId,
         },
@@ -263,8 +259,6 @@ export function ChatTab({
     const mergedChips = selectionChips(merged, labelById);
     const contextChips = mergedChips.length ? mergedChips : undefined;
     const note = mergedChips.length ? mergedChips.map((c) => c.label).join(", ") : undefined;
-    // Capture mode at submit time so a later toggle doesn't change an in-flight request.
-    const currentMode = mode;
     setDraft("");
     // Capture pre-send history snapshot before optimistic update
     const preSendHistory = history;
@@ -281,7 +275,6 @@ export function ChatTab({
       contextRefs,
       gen: genRef.current,
       signal: controller.signal,
-      mode: currentMode,
     });
     // Clear the chat context on send: the tab slides away and the attached objects
     // are recorded on the message itself (contextNote, shown under the prompt). The
@@ -468,6 +461,7 @@ export function ChatTab({
                     renderText={renderText}
                     summaryById={summaryById}
                     errorById={bundleErrorById}
+                    lanes={graph.lanes}
                   />
                 )}
               </div>
@@ -552,7 +546,7 @@ export function ChatTab({
         >
           {showExamples && (
             <div className="mb-1.5 flex flex-wrap gap-1.5">
-              {SUGGESTED_PROMPTS[mode].map((s) => (
+              {SUGGESTED_PROMPTS.map((s) => (
                 <button
                   key={s}
                   onClick={() => {
@@ -574,20 +568,6 @@ export function ChatTab({
               onClear={() => setSessionContext([])}
             />
           )}
-          <div className="mb-1.5 inline-flex rounded-md border border-slate-200 p-0.5 text-[10px]">
-            {(["ask", "suggest"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                className={
-                  "rounded px-2 py-0.5 font-semibold capitalize transition " +
-                  (mode === m ? "bg-slate-900 text-white" : "text-slate-500 hover:text-slate-800")
-                }
-              >
-                {m}
-              </button>
-            ))}
-          </div>
           <div className="flex items-end gap-1.5">
             <button
               onClick={() => setShowExamples((v) => !v)}
