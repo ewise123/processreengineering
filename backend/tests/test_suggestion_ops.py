@@ -76,3 +76,19 @@ def test_change_node_type_builds_with_node_type():
     sugg, err = suggestion_ops.build_suggestion(raw, _ctx(), index=0)
     assert err is None
     assert sugg.op.node_type == "gateway_exclusive"
+
+
+def test_remove_lane_rejected_when_only_one_lane():
+    ctx = _ctx()
+    ctx.lane_ref_to_id = {"L1": next(iter(ctx.lane_ref_to_id.values()))}  # single lane
+    raw = {"kind": "remove_lane", "lane_ref": "L1", "title": "t", "rationale": ""}
+    sugg, err = suggestion_ops.build_suggestion(raw, ctx, index=0)
+    assert sugg is None
+    assert err and "only lane" in err.lower()
+
+
+def test_remove_lane_allowed_with_multiple_lanes():
+    ctx = _ctx()  # _ctx has L1 + L2
+    raw = {"kind": "remove_lane", "lane_ref": "L1", "title": "t", "rationale": ""}
+    sugg, err = suggestion_ops.build_suggestion(raw, ctx, index=0)
+    assert err is None and sugg is not None

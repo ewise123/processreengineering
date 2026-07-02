@@ -244,6 +244,8 @@ def build_suggestion(raw: dict, ctx, index: int) -> tuple[ChatSuggestion | None,
                 f"{kind}: {field} '{raw[field]}' is not a {noun} on the current map. "
                 f"Use find_node/search_claims to get a valid ref, then re-propose."
             )
+    if kind == OpKind.REMOVE_LANE.value and len(getattr(ctx, "lane_ref_to_id", {})) <= 1:
+        return None, "remove_lane: this is the only lane on the map — a process map must keep at least one lane. Do not propose removing it."
     sugg = _build_suggestion_op(raw, ctx, index)
     if sugg is None:
         try:
@@ -282,7 +284,8 @@ def validate_proposal_batch(raw_ops, ctx, *, start_index: int) -> tuple[list[Cha
         if s.id not in survivor_ids:
             rejected.append({
                 "index": None, "kind": s.op.kind.value,
-                "error": (f"{s.op.kind.value}: references a new (tmp:) object whose producing "
-                          "add_node/add_lane was rejected — fix the producer and re-propose both together."),
+                "error": (f"{s.op.kind.value}: references a new (tmp:) object that was not created in THIS "
+                          "propose_changes call. Emit the producing add_node/add_lane and every op referencing "
+                          "its temp id together in one call, then re-propose."),
             })
     return survivors, rejected

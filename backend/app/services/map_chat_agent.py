@@ -15,7 +15,7 @@ from app.enums import AgentRunStopReason, NodeType
 from app.schemas.version_chat_suggest import OpKind
 from app.services.agent_tools import READ_TOOLS, dispatch_tool
 from app.services.map_chat import SYSTEM_PROMPT
-from app.services.suggestion_ops import validate_proposal_batch
+from app.services.suggestion_ops import validate_proposal_batch, _drop_orphaned_consumers
 
 AGENT_MODEL = os.getenv("MAP_CHAT_AGENT_MODEL", os.getenv("MAP_CHAT_MODEL", "claude-sonnet-4-6"))
 MAX_TOKENS = 1500
@@ -96,6 +96,10 @@ Rules for suggestions:
   its `lane_ref` to that SAME temp_id. Never reference a new lane by its name or
   its group — only by the add_lane's temp_id. (E.g. add_lane {temp_id: "tmp:1",
   name: "Approvals"} + move_to_lane {node_ref: "N4", lane_ref: "tmp:1"}.)
+- Emit a NEW object (add_node / add_lane) and EVERY op that references its temp
+  id in the SAME propose_changes call. Temp ids do NOT carry across separate
+  propose_changes calls — a consumer in a later call cannot see a producer from
+  an earlier one.
 - In `title` and `rationale`, when you mention a step or a source claim, wrap its
   ref in double brackets exactly as in prose ([[N3]] for a step, [[C1]] for a
   claim) — the UI turns these into named, clickable links. Never write a bare
@@ -264,6 +268,9 @@ def _handle_propose(inp: dict, mapctx, proposals: list, raw_groups: list) -> tup
     elif len(accepted) > remaining:
         truncated = len(accepted) - remaining
         accepted = accepted[:remaining]
+
+    if truncated:
+        accepted = _drop_orphaned_consumers(accepted)
 
     proposals.extend(accepted)
     raw_groups.extend(g for g in groups if isinstance(g, dict))

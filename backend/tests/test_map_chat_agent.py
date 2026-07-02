@@ -225,3 +225,20 @@ def test_accepted_verdict_carries_op_index():
     import json as _json
     propose_result = _json.loads(fake.calls[1]["messages"][-1]["content"][0]["content"])
     assert propose_result["accepted"][0]["index"] == 0
+
+
+def test_proposals_survive_round_cap():
+    ctx = _ctx_for_agent()
+    # Round 1 proposes a valid op; then the model keeps calling tools until the
+    # round cap forces graceful synthesis — the accepted proposal must still return.
+    # The loop runs exactly MAX_ROUNDS iterations total, so round 1 (propose) plus
+    # MAX_ROUNDS - 1 more tool-use rounds fill the loop; the final response is the
+    # graceful-synthesis turn (mirrors test_round_cap_forces_graceful_synthesis's count).
+    rounds = [_resp([_ToolUse("t1", "propose_changes", {"suggestions": [
+        {"kind": "relabel_node", "node_ref": "N1", "new_label": "Log invoice", "title": "Rename", "rationale": ""}]})])]
+    rounds += [_resp([_ToolUse(f"t{i}", "find_node", {"query": "x"})]) for i in range(map_chat_agent.MAX_ROUNDS - 1)]
+    rounds += [_resp([_Text("Answered with what I have.")])]  # graceful synthesis turn
+    fake = _FakeClient(rounds)
+    result = _run_with_ctx(fake, ctx)
+    assert result.stop_reason == "round_cap"
+    assert len(result.proposals) == 1  # the round-1 proposal survived the cap
