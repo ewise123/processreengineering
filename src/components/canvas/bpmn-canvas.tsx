@@ -704,13 +704,16 @@ function BpmnCanvas({
             localPatch.laneId = laneId;
           }
           if (step.nodeType !== undefined) {
+            const size = sizeForNodeType(step.nodeType);
             apiPatch.type = step.nodeType;
             localPatch.type = step.nodeType;
             localPatch.kind = nodeKindFromType(step.nodeType);
+            localPatch.w = size.w;
+            localPatch.h = size.h;
           }
           apiPatch.reason = step.reason ?? APPLIED_REASON_FALLBACK;
           apiPatch.ai_applied = true;
-          const prev = { label: before.label, description: before.description, laneId: before.laneId, type: before.type, kind: before.kind };
+          const prev = { label: before.label, description: before.description, laneId: before.laneId, type: before.type, kind: before.kind, w: before.w, h: before.h };
           setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...localPatch } : n)));
           // Push the inverse BEFORE the API call so a forward failure can still
           // revert the optimistic local edit. Restoring to the pre-edit value is
@@ -892,8 +895,14 @@ function BpmnCanvas({
         case "delete_lane": {
           const id = resolve(step.laneRef);
           await api.deleteLane(projectId, id, true);
+          // Backend reassigns this lane's nodes to the first REMAINING lane (by order),
+          // not to no lane — mirror it so local state matches the server and the
+          // reassigned nodes keep rendering inside a real lane.
+          const fallback = lanesRef.current.find((l) => l.id !== id);
           setLanes((curr) => recomputeY(curr.filter((l) => l.id !== id)));
-          setNodes((curr) => curr.map((n) => (n.laneId === id ? { ...n, laneId: null } : n)));
+          if (fallback) {
+            setNodes((curr) => curr.map((n) => (n.laneId === id ? { ...n, laneId: fallback.id } : n)));
+          }
           // delete-containing plan: no inverse.
           break;
         }
