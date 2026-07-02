@@ -388,17 +388,20 @@ def _seed(db):
 
 def test_chat_suggest_endpoint_resolves_suggestion(db):
     from app.api.v2 import process_maps as pm_api
-    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    from app.schemas.version_chat_suggest import ChatSuggestRequest, ChatSuggestion, SuggestionOp
+    from app.services.map_chat_agent import AgentResult
     project, version, n1, claim = _seed(db)
-
-    def fake_service(*, history, user_message, map_context_text, mode):
-        return ("Here is a fix.", [
-            {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
-             "title": "Clarify", "rationale": "C1 supports it.",
-             "cited_claim_refs": ["C1", "C99"]}], [])
-
+    # The loop returns already-validated ChatSuggestions (resolved refs) as proposals.
+    sugg = ChatSuggestion(
+        id="sg-0-abcd1234",
+        title="Clarify",
+        op=SuggestionOp(kind="relabel_node", node_ref=str(n1.id), new_label="Receive PO"),
+        rationale="Grounded in the source.",
+        cited_claim_ids=[claim.id],
+    )
     with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pm_api, "run_chat_suggest", fake_service)
+        mp.setattr(pm_api, "run_chat_agent",
+                   lambda **k: AgentResult(answer="Here is a fix.", proposals=[sugg]))
         resp = pm_api.chat_suggest(
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(user_message="improve N1", mode="suggest"),
@@ -406,10 +409,10 @@ def test_chat_suggest_endpoint_resolves_suggestion(db):
         )
     # When suggestion cards are returned, the top-level prose is suppressed — the
     # cards ARE the response, and stray prose only restates the change as noise.
-    assert resp.message == ""
+    assert resp.message == ""            # cards present -> prose suppressed
     assert len(resp.suggestions) == 1
     assert resp.suggestions[0].op.node_ref == str(n1.id)
-    assert resp.suggestions[0].cited_claim_ids == [claim.id]   # C99 dropped
+    assert resp.suggestions[0].cited_claim_ids == [claim.id]
 
 
 def test_chat_suggest_endpoint_ask_mode_has_no_suggestions(db):
@@ -442,20 +445,10 @@ def test_chat_suggest_endpoint_404_for_foreign_model(db):
     assert exc.value.status_code == 404
 
 
-def test_chat_suggest_endpoint_502_on_runtime_error(db):
-    from app.api.v2 import process_maps as pm_api
-    from app.schemas.version_chat_suggest import ChatSuggestRequest
-    project, version, n1, claim = _seed(db)
-    def boom(**k):
-        raise RuntimeError("no key")
-    with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pm_api, "run_chat_suggest", boom)
-        with _pytest.raises(HTTPException) as exc:
-            pm_api.chat_suggest(
-                project=project, model_id=version.model_id, version_id=version.id,
-                payload=ChatSuggestRequest(user_message="hi", mode="suggest"), db=db,
-            )
-    assert exc.value.status_code == 502
+# The unified agent loop no longer raises 502 for a chat service error —
+# _run_chat_agent catches exceptions and returns a graceful 200 with an error
+# message, persisting the run with stop_reason=error. Covered by
+# test_agent_endpoint.py::test_ask_mode_agent_error_is_graceful_and_persisted.
 
 
 def test_consistency_endpoint_reports_findings(db):
@@ -498,26 +491,10 @@ def test_build_suggestion_add_edge_between_two_temp_ids():
     assert s.affected_refs == []  # neither endpoint is a real existing object
 
 
-def test_chat_suggest_endpoint_drops_only_malformed_op_in_batch(db):
-    from app.api.v2 import process_maps as pm_api
-    from app.schemas.version_chat_suggest import ChatSuggestRequest
-    project, version, n1, claim = _seed(db)
-
-    def fake_service(*, history, user_message, map_context_text, mode):
-        return ("Two ideas.", [
-            {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
-             "title": "Good", "rationale": "r", "cited_claim_refs": []},
-            {"kind": "relabel_node", "node_ref": "N1",  # malformed: missing new_label
-             "title": "Bad", "rationale": "r", "cited_claim_refs": []},
-        ], [])
-
-    with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pm_api, "run_chat_suggest", fake_service)
-        resp = pm_api.chat_suggest(
-            project=project, model_id=version.model_id, version_id=version.id,
-            payload=ChatSuggestRequest(user_message="x", mode="suggest"), db=db)
-    assert len(resp.suggestions) == 1               # malformed dropped, good kept
-    assert resp.suggestions[0].title == "Good"
+# Malformed-op dropping is now performed inside the agent loop's propose_changes
+# tool handling (validate_proposal_batch), before the endpoint ever sees a
+# proposal — covered by tests/test_suggestion_ops.py and tests/test_map_chat_agent.py.
+# The endpoint itself only forwards already-validated proposals as cards.
 
 
 # ---------------------------------------------------------------------------
@@ -713,21 +690,28 @@ def test_build_suggestion_resolves_mentions_in_title_and_rationale():
 
 
 def test_endpoint_returns_group_summaries_only_for_used_groups(db):
+    # Group-summary filtering now happens in _run_chat_agent's tail, against
+    # AgentResult.proposals/.group_summaries from the loop.
     from app.api.v2 import process_maps as pm_api
-    from app.schemas.version_chat_suggest import ChatSuggestRequest
-    project, version, _n1, _claim = _seed(db)
+    from app.schemas.version_chat_suggest import ChatSuggestRequest, ChatSuggestion, SuggestionOp
+    from app.services.map_chat_agent import AgentResult
+    project, version, n1, _claim = _seed(db)
 
-    def fake_service(*, history, user_message, map_context_text, mode):
-        return ("Bundled.", [
-            {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
-             "title": "t", "rationale": "r", "group": "g1", "cited_claim_refs": []},
-        ], [
-            {"id": "g1", "summary": "Clean up receiving."},
-            {"id": "ghost", "summary": "Unused group, must be dropped."},
-        ])
+    sugg = ChatSuggestion(
+        id="sg-0-g1", group="g1", title="t",
+        op=SuggestionOp(kind="relabel_node", node_ref=str(n1.id), new_label="Receive PO"),
+        rationale="r",
+    )
 
     with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pm_api, "run_chat_suggest", fake_service)
+        mp.setattr(pm_api, "run_chat_agent", lambda **k: AgentResult(
+            answer="Bundled.",
+            proposals=[sugg],
+            group_summaries=[
+                {"id": "g1", "summary": "Clean up receiving."},
+                {"id": "ghost", "summary": "Unused group, must be dropped."},
+            ],
+        ))
         resp = pm_api.chat_suggest(
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(user_message="x", mode="suggest"), db=db)
@@ -735,25 +719,31 @@ def test_endpoint_returns_group_summaries_only_for_used_groups(db):
 
 
 def test_endpoint_mention_sources_include_claims_cited_in_rationale(db):
+    # Mention-source extraction now happens in _run_chat_agent's tail, scanning
+    # the answer AND the (already-resolved) proposal titles/rationales.
     from app.api.v2 import process_maps as pm_api
-    from app.schemas.version_chat_suggest import ChatSuggestRequest
+    from app.schemas.version_chat_suggest import ChatSuggestRequest, ChatSuggestion, SuggestionOp
     from app.models.input import Chunk, DocumentSection, Input
     from app.models.claim import ClaimCitation
-    project, version, _n1, claim = _seed(db)
+    from app.services.map_chat_agent import AgentResult
+    project, version, n1, claim = _seed(db)
     inp = Input(project_id=project.id, name="SOP.pdf", type="document"); db.add(inp); db.flush()
     sec = DocumentSection(input_id=inp.id, kind="section", order_index=0, ref={"page": 1}, text="t")
     db.add(sec); db.flush()
     chunk = Chunk(section_id=sec.id, char_start=0, char_end=1, text="t"); db.add(chunk); db.flush()
     db.add(ClaimCitation(claim_id=claim.id, chunk_id=chunk.id, quote="t")); db.commit()
 
-    def fake_service(*, history, user_message, map_context_text, mode):
-        return ("No prose mentions here.", [
-            {"kind": "relabel_node", "node_ref": "N1", "new_label": "Receive PO",
-             "title": "Rename it", "rationale": "Backed by [[C1]].", "cited_claim_refs": ["C1"]},
-        ], [])
+    sugg = ChatSuggestion(
+        id="sg-0-rename", title="Rename it",
+        op=SuggestionOp(kind="relabel_node", node_ref=str(n1.id), new_label="Receive PO"),
+        rationale=f"Backed by [[claim:{claim.id}]].",
+        cited_claim_ids=[claim.id],
+    )
 
     with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pm_api, "run_chat_suggest", fake_service)
+        mp.setattr(pm_api, "run_chat_agent", lambda **k: AgentResult(
+            answer="No prose mentions here.", proposals=[sugg],
+        ))
         resp = pm_api.chat_suggest(
             project=project, model_id=version.model_id, version_id=version.id,
             payload=ChatSuggestRequest(user_message="x", mode="suggest"), db=db)

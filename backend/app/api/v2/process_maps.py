@@ -115,7 +115,6 @@ from app.services.process_generation import (
 )
 from app.schemas.version_chat_suggest import (
     ActivityStep,
-    ChatMode,
     ChatSuggestRequest,
     ChatSuggestResponse,
     ChatTurn as SuggestChatTurn,
@@ -123,9 +122,13 @@ from app.schemas.version_chat_suggest import (
     MentionSource,
     RefKind,
 )
-from app.services.map_chat_suggest import run_chat_suggest
 from app.services.map_consistency import scan_map
 from app.services.suggestion_ops import (
+    # _build_suggestion_op / _drop_orphaned_consumers / _repair_new_lane_temp_ids
+    # are no longer called by this module's endpoint logic (the single-shot
+    # suggest path was collapsed into the agent loop), but stay imported here
+    # because tests/test_chat_suggest.py exercises the suggestion_ops helpers
+    # through this module's re-export (`pm_api._build_suggestion(...)` etc.).
     _build_suggestion_op as _build_suggestion,
     _drop_orphaned_consumers,
     _repair_new_lane_temp_ids,
@@ -2017,7 +2020,7 @@ def _mention_sources_from_texts(texts: list[str], ctx) -> list[MentionSource]:
     return out
 
 
-def _run_ask_agent(db, project, model_id, version, ctx, focus_refs, payload) -> ChatSuggestResponse:
+def _run_chat_agent(db, project, model_id, version, ctx, focus_refs, payload) -> ChatSuggestResponse:
     tool_ctx = AgentToolCtx(db=db, project_id=project.id, version=version, mapctx=ctx)
     history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
     # Resolve each focused ref to its label so the loop can name the selected
@@ -2061,17 +2064,39 @@ def _run_ask_agent(db, project, model_id, version, ctx, focus_refs, payload) -> 
         )
 
     resolved = _resolve_mention_refs(result.answer, ctx)
-    mention_sources = _mention_sources_from_texts([resolved], ctx)
+    suggestions = result.proposals  # validated ChatSuggestions (resolved refs) from the loop
+    # When cards are present the cards ARE the response; suppress stray top-level prose.
+    message = "" if suggestions else resolved
+    # Mention sources come from the answer prose AND the cards' titles/rationales.
+    claim_texts = [resolved] + [s.title for s in suggestions] + [s.rationale for s in suggestions]
+    mention_sources = _mention_sources_from_texts(claim_texts, ctx)
     cited = [str(s.claim_id) for s in mention_sources]
     grounded = assess_grounded(resolved, cited)
+    # Group summaries: only for groups actually present on an emitted suggestion.
+    used_groups = {s.group for s in suggestions if s.group}
+    group_summaries: list[GroupSummary] = []
+    seen_groups: set[str] = set()
+    for g in result.group_summaries:
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("id") or "").strip()
+        summary = str(g.get("summary") or "").strip()
+        if not gid or not summary or gid not in used_groups or gid in seen_groups:
+            continue
+        seen_groups.add(gid)
+        try:
+            group_summaries.append(GroupSummary(id=gid, summary=summary[:500]))
+        except ValueError:
+            continue
     run = _persist(
-        answer=resolved, trace=result.trace, consulted=[str(x) for x in result.consulted_claim_ids],
+        answer=resolved, trace=result.trace,
+        consulted=[str(x) for x in result.consulted_claim_ids],
         cited=cited, in_tok=result.input_tokens, out_tok=result.output_tokens,
         rounds=result.round_count, stop=result.stop_reason, grounded=grounded,
     )
     return ChatSuggestResponse(
-        message=resolved, suggestions=[], mention_sources=mention_sources,
-        group_summaries=[],
+        message=message, suggestions=suggestions, mention_sources=mention_sources,
+        group_summaries=group_summaries,
         activity_trace=[ActivityStep(**t) for t in result.trace],
         run_id=run.id, grounded=grounded,
     )
@@ -2088,10 +2113,11 @@ def chat_suggest(
     payload: ChatSuggestRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatSuggestResponse:
-    """Word-style chat. Ask mode answers in prose; suggest mode also returns
-    structured, applyable suggested changes. Never mutates the map. Model claim
-    refs are resolved to UUIDs and fabricated ones dropped; malformed ops are
-    discarded before reaching the client."""
+    """Word-style chat. Every request runs the agent tool loop (`_run_chat_agent`),
+    which can answer in prose and/or accumulate `propose_changes` calls into
+    applyable suggestion cards. Never mutates the map. Model claim refs are
+    resolved to UUIDs and fabricated ones dropped; malformed ops are discarded
+    before they become proposals."""
     model = db.get(ProcessModel, model_id)
     if model is None or model.project_id != project.id:
         raise HTTPException(status_code=404, detail="Process model not found")
@@ -2113,72 +2139,7 @@ def chat_suggest(
         if r.kind == RefKind.NODE and r.id in ctx.node_ref_by_id
     ]
 
-    if payload.mode == ChatMode.ASK:
-        return _run_ask_agent(db, project, model_id, version, ctx, focus_refs, payload)
-
-    map_text = ctx.text
-    if focus_refs:
-        map_text += (
-            "\n\nThe user has attached these steps as the focus of the question; "
-            "address all of them: " + ", ".join(focus_refs)
-        )
-
-    history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
-    try:
-        message, raw_suggestions, raw_groups = run_chat_suggest(
-            history=history,
-            user_message=payload.user_message,
-            map_context_text=map_text,
-            mode=payload.mode,
-        )
-    except RuntimeError as exc:  # service raises only RuntimeError; _build_suggestion swallows ValueError
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    # The model often creates a lane and moves a step into it but omits the
-    # add_lane's temp_id, only referencing the new lane via a tmp lane_ref on the
-    # move. Recover that producer/consumer link before build so the add_lane
-    # validates instead of being dropped (and its consumer pruned as an orphan).
-    _repair_new_lane_temp_ids(raw_suggestions)
-    suggestions = []
-    for i, raw in enumerate(raw_suggestions):
-        built = _build_suggestion(raw, ctx, index=i)
-        if built is not None:
-            suggestions.append(built)
-    # A dropped producing op leaves its temp_id dangling on the ops that consume
-    # it; prune those orphans so the client never sees an unresolvable bundle.
-    suggestions = _drop_orphaned_consumers(suggestions)
-    # When a command yields suggestion cards, the cards ARE the response. Drop any
-    # top-level prose: the model occasionally narrates the change (restating the
-    # node's name or echoing the proposed text) despite the prompt rules, and that
-    # prose is pure noise next to the card. Questions (no suggestions) keep prose.
-    resolved = "" if suggestions else _resolve_mention_refs(message, ctx)
-    # Build mention sources from claim refs in the prose AND in the resolved
-    # suggestion titles/rationales (those now carry [[claim:uuid]] too). Shared
-    # with the ask-agent path: dedupes, skips malformed uuids, preserves order.
-    claim_texts = [resolved] + [s.title for s in suggestions] + [s.rationale for s in suggestions]
-    mention_sources = _mention_sources_from_texts(claim_texts, ctx)
-    # Group summaries — only for groups actually present on an emitted suggestion.
-    used_groups = {s.group for s in suggestions if s.group}
-    group_summaries: list[GroupSummary] = []
-    seen_groups: set[str] = set()
-    for g in raw_groups:
-        if not isinstance(g, dict):
-            continue
-        gid = str(g.get("id") or "").strip()
-        summary = str(g.get("summary") or "").strip()
-        if not gid or not summary or gid not in used_groups or gid in seen_groups:
-            continue
-        seen_groups.add(gid)
-        try:
-            group_summaries.append(GroupSummary(id=gid, summary=summary[:500]))
-        except ValueError:
-            continue
-    return ChatSuggestResponse(
-        message=resolved,
-        suggestions=suggestions,
-        mention_sources=mention_sources,
-        group_summaries=group_summaries,
-    )
+    return _run_chat_agent(db, project, model_id, version, ctx, focus_refs, payload)
 
 
 @router.post(
