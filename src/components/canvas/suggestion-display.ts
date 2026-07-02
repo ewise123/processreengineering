@@ -129,3 +129,10 @@ export function bundleNewNames(suggestions: ChatSuggestion[]): Map<string, strin
 export function suggestedChangesSuffix(total: number, applied: number): string {
   return `${applied} of ${total} applied`;
 }
+
+/** A proposed change is "grounded" when it cites at least one source claim.
+ * Ungrounded proposals (general process knowledge, not from the user's sources)
+ * get a distinct chip on the card — labeled, never hidden. */
+export function isProposalGrounded(s: Pick<ChatSuggestion, "cited_claim_ids">): boolean {
+  return (s.cited_claim_ids?.length ?? 0) > 0;
+}

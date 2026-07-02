@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatSuggestion, SuggestionOp } from "@/lib/types";
 import {
   bundleNewNames,
+  isProposalGrounded,
   isTmpRef,
   opPayload,
   opTarget,
@@ -163,6 +164,15 @@ describe("new op kinds → display", () => {
     expect(opTarget({ kind: "set_edge_condition", edge_ref: "E1", condition_text: "amt > 10000" })).toBe("[[edge:E1]]");
     expect(opPayload({ kind: "set_edge_condition", edge_ref: "E1", condition_text: "amt > 10000" }))
       .toEqual({ value: "amt > 10000", hasMention: false });
+  });
+});
+
+describe("proposal grounding", () => {
+  it("grounded when the suggestion cites at least one claim", () => {
+    expect(isProposalGrounded({ cited_claim_ids: ["11111111-1111-1111-1111-111111111111"] })).toBe(true);
+  });
+  it("not grounded when no claims are cited", () => {
+    expect(isProposalGrounded({ cited_claim_ids: [] })).toBe(false);
   });
 });
 
