@@ -42,6 +42,12 @@ export function opTarget(op: SuggestionOp): string | null {
       return laneMention(op.lane_ref);
     case "add_node":
       return op.near_node_ref ? `after ${nodeMention(op.near_node_ref) ?? "the new step"}` : null;
+    case "change_node_type":
+      return nodeMention(op.node_ref);
+    case "remove_lane":
+      return laneMention(op.lane_ref);
+    case "set_edge_condition":
+      return edgeMention(op.edge_ref);
     default:
       return null;
   }
@@ -89,6 +95,10 @@ export function opPayload(op: SuggestionOp): { value: string; hasMention: boolea
     }
     case "add_edge":
       return op.edge_label ? { value: op.edge_label, hasMention: false } : null;
+    case "change_node_type":
+      return op.node_type ? { value: op.node_type, hasMention: false } : null;
+    case "set_edge_condition":
+      return op.condition_text ? { value: op.condition_text, hasMention: false } : null;
     default:
       return null;
   }

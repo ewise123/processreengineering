@@ -10,8 +10,7 @@ import {
   suggestedChangesSuffix,
 } from "./suggestion-display";
 
-const op = (o: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }): SuggestionOp =>
-  ({ kind: o.kind, ...o }) as SuggestionOp;
+const op = (o: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }): SuggestionOp => o as SuggestionOp;
 
 const suggestion = (o: Partial<ChatSuggestion> & { op: SuggestionOp }): ChatSuggestion =>
   ({ id: "s", title: "", rationale: "", affected_refs: [], cited_claim_ids: [], ...o }) as ChatSuggestion;
@@ -148,6 +147,22 @@ describe("bundleNewNames", () => {
       suggestion({ op: op({ kind: "relabel_node", node_ref: "N-1", new_label: "X" }) }),
     ]);
     expect(names.size).toBe(0);
+  });
+});
+
+describe("new op kinds → display", () => {
+  it("change_node_type targets node + previews type", () => {
+    expect(opTarget({ kind: "change_node_type", node_ref: "N1", node_type: "gateway_exclusive" })).toBe("[[node:N1]]");
+    expect(opPayload({ kind: "change_node_type", node_ref: "N1", node_type: "gateway_exclusive" }))
+      .toEqual({ value: "gateway_exclusive", hasMention: false });
+  });
+  it("remove_lane targets the lane", () => {
+    expect(opTarget({ kind: "remove_lane", lane_ref: "L1" })).toBe("[[lane:L1]]");
+  });
+  it("set_edge_condition targets edge + previews condition", () => {
+    expect(opTarget({ kind: "set_edge_condition", edge_ref: "E1", condition_text: "amt > 10000" })).toBe("[[edge:E1]]");
+    expect(opPayload({ kind: "set_edge_condition", edge_ref: "E1", condition_text: "amt > 10000" }))
+      .toEqual({ value: "amt > 10000", hasMention: false });
   });
 });
 

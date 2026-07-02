@@ -3,7 +3,7 @@ import { parseMentions } from "./mentions";
 
 /** Op kinds that delete or re-point objects. A bundle containing any of these
  * is non-undoable and requires a confirm before applying. */
-const DELETE_OPS = new Set<OpKind>(["remove_node", "remove_edge", "reroute_edge"]);
+const DELETE_OPS = new Set<OpKind>(["remove_node", "remove_edge", "reroute_edge", "remove_lane"]);
 
 export function isDeleteOp(kind: OpKind): boolean {
   return DELETE_OPS.has(kind);
@@ -15,7 +15,7 @@ export function isDeleteOp(kind: OpKind): boolean {
  * the semantic-edit steps carry it (the backend requires a reason for those);
  * `planBundle` fills it from the owning suggestion's rationale. */
 export type MutationStep =
-  | { kind: "update_node"; nodeRef: string; name?: string; description?: string; laneRef?: string; reason?: string }
+  | { kind: "update_node"; nodeRef: string; name?: string; description?: string; laneRef?: string; nodeType?: string; reason?: string }
   | { kind: "delete_node"; nodeRef: string }
   | { kind: "create_node"; tempId: string; laneRef: string | null; nodeType: string; label: string; nearNodeRef: string | null; role?: string | null }
   | { kind: "create_edge"; tempId?: string; fromRef: string; toRef: string; label: string | null }
@@ -23,7 +23,9 @@ export type MutationStep =
   | { kind: "update_edge_label"; edgeRef: string; label: string; reason?: string }
   | { kind: "reroute_edge"; edgeRef: string; fromRef: string | null; toRef: string | null }
   | { kind: "create_lane"; tempId: string; name: string }
-  | { kind: "update_lane"; laneRef: string; name: string; reason?: string };
+  | { kind: "update_lane"; laneRef: string; name: string; reason?: string }
+  | { kind: "delete_lane"; laneRef: string }
+  | { kind: "update_edge_condition"; edgeRef: string; conditionText: string; reason?: string };
 
 /** Translate one op into its ordered mutation steps. Pure; no ref resolution. */
 export function opToSteps(op: SuggestionOp): MutationStep[] {
@@ -79,6 +81,12 @@ export function opToSteps(op: SuggestionOp): MutationStep[] {
       });
       return steps;
     }
+    case "change_node_type":
+      return [{ kind: "update_node", nodeRef: op.node_ref!, nodeType: op.node_type! }];
+    case "remove_lane":
+      return [{ kind: "delete_lane", laneRef: op.lane_ref! }];
+    case "set_edge_condition":
+      return [{ kind: "update_edge_condition", edgeRef: op.edge_ref!, conditionText: op.condition_text! }];
     default: {
       const _exhaustive: never = op.kind;
       void _exhaustive;
@@ -215,6 +223,10 @@ function stepRealRefs(step: MutationStep): { ref: string; set: "node" | "edge" |
       return [{ ref: step.laneRef, set: "lane" }];
     case "create_lane":
       return [];
+    case "delete_lane":
+      return [{ ref: step.laneRef, set: "lane" }];
+    case "update_edge_condition":
+      return [{ ref: step.edgeRef, set: "edge" }];
     default: {
       const _exhaustive: never = step;
       void _exhaustive;
@@ -303,6 +315,7 @@ function withReason(step: MutationStep, reason: string): MutationStep {
     case "update_node":
     case "update_edge_label":
     case "update_lane":
+    case "update_edge_condition":
       return { ...step, reason };
     default:
       return step;

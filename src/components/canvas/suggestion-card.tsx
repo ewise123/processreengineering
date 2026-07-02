@@ -23,6 +23,9 @@ const ACTION_LABEL: Record<OpKind, string> = {
   add_lane: "Add lane",
   rename_lane: "Rename lane",
   decompose: "Break down",
+  change_node_type: "Change type",
+  remove_lane: "Remove lane",
+  set_edge_condition: "Set condition",
 };
 
 export function SuggestionList({

@@ -59,6 +59,10 @@ export interface CanvasEdge {
   bendX?: number | null;
   /** Y-coordinate of the horizontal mid-segment for vertical-routed edges. */
   bendY?: number | null;
+  /** Optional gateway-branch condition text (properties.condition_text on the
+   * API edge). Populated at load so an applied set_edge_condition op can be
+   * undone back to the prior value. */
+  condition?: string | null;
 }
 
 export interface CanvasLane {

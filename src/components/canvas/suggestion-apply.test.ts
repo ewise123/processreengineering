@@ -111,6 +111,23 @@ describe("opToSteps", () => {
   });
 });
 
+describe("new op kinds → steps", () => {
+  it("change_node_type → update_node with nodeType", () => {
+    expect(opToSteps({ kind: "change_node_type", node_ref: "N1", node_type: "gateway_exclusive" }))
+      .toEqual([{ kind: "update_node", nodeRef: "N1", nodeType: "gateway_exclusive" }]);
+  });
+  it("remove_lane → delete_lane", () => {
+    expect(opToSteps({ kind: "remove_lane", lane_ref: "L1" })).toEqual([{ kind: "delete_lane", laneRef: "L1" }]);
+  });
+  it("set_edge_condition → update_edge_condition", () => {
+    expect(opToSteps({ kind: "set_edge_condition", edge_ref: "E1", condition_text: "amt > 10000" }))
+      .toEqual([{ kind: "update_edge_condition", edgeRef: "E1", conditionText: "amt > 10000" }]);
+  });
+  it("remove_lane is a delete op", () => {
+    expect(isDeleteOp("remove_lane")).toBe(true);
+  });
+});
+
 const sg = (id: string, opOverrides: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }, group?: string): ChatSuggestion => ({
   id,
   group: group ?? null,

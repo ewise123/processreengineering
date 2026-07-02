@@ -703,9 +703,14 @@ function BpmnCanvas({
             apiPatch.lane_id = laneId;
             localPatch.laneId = laneId;
           }
+          if (step.nodeType !== undefined) {
+            apiPatch.type = step.nodeType;
+            localPatch.type = step.nodeType;
+            localPatch.kind = nodeKindFromType(step.nodeType);
+          }
           apiPatch.reason = step.reason ?? APPLIED_REASON_FALLBACK;
           apiPatch.ai_applied = true;
-          const prev = { label: before.label, description: before.description, laneId: before.laneId };
+          const prev = { label: before.label, description: before.description, laneId: before.laneId, type: before.type, kind: before.kind };
           setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...localPatch } : n)));
           // Push the inverse BEFORE the API call so a forward failure can still
           // revert the optimistic local edit. Restoring to the pre-edit value is
@@ -721,6 +726,7 @@ function BpmnCanvas({
             if (step.name !== undefined) inversePatch.name = prev.label;
             if (step.description !== undefined) inversePatch.description = prev.description ?? "";
             if (step.laneRef !== undefined) inversePatch.lane_id = prev.laneId ?? undefined;
+            if (step.nodeType !== undefined) inversePatch.type = prev.type;
             await api.updateNode(projectId, id, inversePatch);
           });
           await api.updateNode(projectId, id, apiPatch);
@@ -878,6 +884,31 @@ function BpmnCanvas({
           });
           await api.updateLane(projectId, id, {
             name: step.name,
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
+          });
+          break;
+        }
+        case "delete_lane": {
+          const id = resolve(step.laneRef);
+          await api.deleteLane(projectId, id, true);
+          setLanes((curr) => recomputeY(curr.filter((l) => l.id !== id)));
+          setNodes((curr) => curr.map((n) => (n.laneId === id ? { ...n, laneId: null } : n)));
+          // delete-containing plan: no inverse.
+          break;
+        }
+        case "update_edge_condition": {
+          const id = resolve(step.edgeRef);
+          const before = edgesRef.current.find((e) => e.id === id);
+          if (!before) throw new Error("Edge no longer exists.");
+          const oldCondition = before.condition ?? null;
+          setEdges((curr) => curr.map((e) => (e.id === id ? { ...e, condition: step.conditionText } : e)));
+          inverses.push(async () => {
+            setEdges((curr) => curr.map((e) => (e.id === id ? { ...e, condition: oldCondition } : e)));
+            await api.updateEdge(projectId, id, { condition_text: oldCondition, reason: REVERT_REASON });
+          });
+          await api.updateEdge(projectId, id, {
+            condition_text: step.conditionText,
             reason: step.reason ?? APPLIED_REASON_FALLBACK,
             ai_applied: true,
           });

@@ -248,6 +248,7 @@ export interface EdgeUpdate {
   label?: string | null;
   bend_x?: number | null;
   bend_y?: number | null;
+  condition_text?: string | null;
   reason?: string;
   ai_applied?: boolean;
 }
@@ -378,7 +379,8 @@ export interface ObjectRef {
 export type OpKind =
   | "relabel_node" | "describe_node" | "add_node" | "remove_node"
   | "add_edge" | "remove_edge" | "relabel_edge" | "reroute_edge"
-  | "move_to_lane" | "add_lane" | "rename_lane" | "decompose";
+  | "move_to_lane" | "add_lane" | "rename_lane" | "decompose"
+  | "change_node_type" | "remove_lane" | "set_edge_condition";
 
 export interface SuggestionSubStep {
   proposed_name: string;
@@ -402,6 +404,7 @@ export interface SuggestionOp {
   near_node_ref?: string | null;
   edge_label?: string | null;
   sub_steps?: SuggestionSubStep[] | null;
+  condition_text?: string | null;
 }
 
 export interface ChatSuggestion {
