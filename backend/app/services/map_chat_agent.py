@@ -301,7 +301,7 @@ def _suggestion_index(s) -> int | None:
 def _normalize_question(inp: dict) -> dict:
     """Coerce a raw ask_user input into a safe {prompt, options[]} dict:
     a string prompt and up to 4 options, each with a non-empty label."""
-    prompt = str(inp.get("prompt") or "").strip() or "Could you clarify how you'd like me to proceed?"
+    prompt = str(inp.get("prompt") or "").strip()[:2000] or "Could you clarify how you'd like me to proceed?"
     options: list[dict] = []
     for o in (inp.get("options") or [])[:4]:
         if not isinstance(o, dict):

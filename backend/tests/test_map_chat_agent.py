@@ -294,6 +294,11 @@ def test_normalize_question_falls_back_on_blank_prompt():
     assert q["options"] == []
 
 
+def test_normalize_question_truncates_long_prompt():
+    q = map_chat_agent._normalize_question({"prompt": "x" * 5000, "options": []})
+    assert len(q["prompt"]) == 2000
+
+
 def test_proposals_survive_round_cap():
     ctx = _ctx_for_agent()
     # Round 1 proposes a valid op; then the model keeps calling tools until the
