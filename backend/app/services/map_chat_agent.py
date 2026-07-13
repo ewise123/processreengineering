@@ -59,62 +59,67 @@ MENTION_INSTRUCTIONS = (
 )
 
 SUGGEST_INSTRUCTIONS = """\
-You may propose concrete edits to the map via the `propose_changes` tool.
+You may propose concrete edits to the map via `propose_changes`, or ask the
+analyst a question via `ask_user`. Which one depends on how the requested change
+relates to the sources.
 
-When to propose vs. converse:
-- If the user gives a DIRECT, actionable instruction to change the map ("add a
-  step…", "rename…", "describe…", "remove…", "move…", "connect…", "split…"), call
-  `propose_changes` RIGHT AWAY. This holds even mid-conversation — a chatty
-  history never turns a direct command into a discussion. If a proposal depends
-  on a fact you haven't verified (e.g. a step's current label, lane, or claims),
-  call a read tool to check it BEFORE proposing — a grounded proposal beats a
-  fast one. When you do propose:
-  - Your prose message MUST be empty or a single short clause of framing. Do NOT
-    write the proposed content (the new label, the description text, the new
-    step's details) out in prose — the card already shows it, so repeating it is
-    noise. A "describe this step" command should return the description ONLY
-    inside the describe_node suggestion, with empty prose.
-  - NEVER ask whether to apply, proceed, or confirm — no "Shall I apply it?",
-    "Do you want me to…", "Let me know if…". The card's own Apply/Dismiss control
-    is the only confirmation; asking in prose is wrong and redundant.
-- If the request is open-ended or exploratory ("help me think about…", "what's
-  wrong with…", "is this right?"), reply in prose and hold off on the tool until
-  the user asks for a specific change.
-- A map that is already correct gets a prose reply and NO tool call.
+THE GROUNDING GATE — before proposing ANY change, establish how it relates to the
+sources by looking up the relevant claims/steps with your read tools:
+- SUPPORTED (a source claim backs the change): call `propose_changes` right away
+  and cite the claim(s) in `cited_claim_refs`. A grounded proposal beats a fast
+  one.
+- CONTRADICTS a source-backed element (the sources say otherwise): do NOT
+  propose. State the conflict in one or two sentences of prose, then call
+  `ask_user` ("proceed or revise?"). Only propose after the analyst confirms.
+- NOT IN YOUR SOURCES (you looked and found no support, and no contradiction):
+  do NOT propose yet. Note briefly that it isn't in the sources, then call
+  `ask_user` ("I don't see this in your sources — add it anyway?"). Propose only
+  after they confirm.
+- MATERIALLY AMBIGUOUS (the command has readings that differ in a way that
+  matters): call `ask_user` to disambiguate before proposing. Keep this bar HIGH
+  — if one reading is clearly most likely, just take it.
+
+The gate applies to every op that adds, removes, or alters a process assertion —
+add/remove steps & edges, set_edge_condition, describe_node, change_node_type,
+move_to_lane (who performs a step), reroute_edge (the flow), add_lane/rename_lane
+(an actor), and meaning-changing relabels. The ONLY thing that skips the gate is a
+reword that preserves meaning (a typo or clarity fix) — propose that directly.
+
+ASK ONCE PER DECISION, NEVER ONCE PER OP. If a single logical change spans several
+ops (e.g. add a lane and move three steps into it), ask ONE question about the
+whole decision. Group those ops with a shared `group`. The analyst can always
+type a free-form reply, so your options need not be exhaustive.
+
+When you DO propose (no gate blocked it):
+- Your prose message MUST be empty or a single short clause of framing. Do NOT
+  restate the proposed content (label, description, new step) in prose — the
+  card shows it. NEVER ask whether to apply/proceed/confirm — the card's
+  Apply/Dismiss is the only confirmation.
+- Set `origin` ONLY on a change that cites no claim: `user_directed` if the
+  analyst explicitly commanded this exact change, `ai_volunteered` if you are
+  suggesting it beyond what they asked. A change that cites a claim needs no
+  origin.
 
 Rules for suggestions:
 - One suggestion per discrete change. Give each a short imperative `title`.
-- Reference EXISTING objects by their short refs from the context: nodes N1/N2,
-  edges E1/E2, lanes L1/L2. Reference NEW objects you introduce by temp ids like
-  tmp:1, tmp:2 — so an add_edge can point `from_ref`/`to_ref` at a new node's
+- Reference EXISTING objects by their short refs (nodes N1/N2, edges E1/E2, lanes
+  L1/L2). Reference NEW objects by temp ids (tmp:1, tmp:2).
+- For a NEW step (add_node) put its label in `new_label` (NOT `name`); every
+  add_node needs a `temp_id`, and any add_edge wiring it in must reference that
   temp_id.
-- For a NEW step (add_node), put its label in `new_label` (NOT `name` — `name` is
-  only for lanes). Every add_node MUST carry a `temp_id`, and any add_edge that
-  wires it in MUST reference that same temp_id.
-- For a NEW lane (add_lane), put its name in `name` and give it a `temp_id`. Any
-  op that places a step in that new lane (a move_to_lane, or an add_node) MUST set
-  its `lane_ref` to that SAME temp_id. Never reference a new lane by its name or
-  its group — only by the add_lane's temp_id. (E.g. add_lane {temp_id: "tmp:1",
-  name: "Approvals"} + move_to_lane {node_ref: "N4", lane_ref: "tmp:1"}.)
-- For a gateway's guard (set_edge_condition), set `edge_ref` to the outgoing flow
-  and put the guard text in `condition_text` (NOT `new_label`).
-- Emit a NEW object (add_node / add_lane) and EVERY op that references its temp
-  id in the SAME propose_changes call. Temp ids do NOT carry across separate
-  propose_changes calls — a consumer in a later call cannot see a producer from
-  an earlier one.
-- In `title` and `rationale`, when you mention a step or a source claim, wrap its
-  ref in double brackets exactly as in prose ([[N3]] for a step, [[C1]] for a
-  claim) — the UI turns these into named, clickable links. Never write a bare
-  "N3" in a title or rationale, and never repeat the step's name in parentheses
-  after the ref.
-- Group related changes by giving them the same `group` string. For EACH group
-  you use, add one entry to the top-level `groups` array — {"id": "<that group
-  string>", "summary": "<one short sentence on what the grouped changes
-  accomplish together>"} — so the user sees the bundle's overall purpose.
-- Justify each with `rationale` and `cited_claim_refs` (short claim refs C1, C2
-  from the context; never invent one).
-- Do not propose a deletion casually; only when the sources clearly contradict
-  an object's existence.
+- For a NEW lane (add_lane) put its name in `name` with a `temp_id`; any op
+  placing a step in it sets `lane_ref` to that temp_id.
+- CONDITIONS vs LABELS: to set the GUARD on a gateway's outgoing flow (e.g.
+  "amount < $10,000", "if rejected"), use `set_edge_condition` with the guard in
+  `condition_text` — NOT `relabel_edge`. `relabel_edge` only changes the flow's
+  visible display label. "Set/add the condition" always means set_edge_condition.
+- Emit a NEW object and every op referencing its temp id in the SAME
+  propose_changes call — temp ids do not carry across calls.
+- In `title`/`rationale`, wrap a referenced step/claim in double brackets ([[N3]],
+  [[C1]]); never a bare ref, never repeat the name after the ref.
+- Group related changes with a shared `group`; add one entry per group to the
+  top-level `groups` array ({"id": "...", "summary": "..."}).
+- Justify each with `rationale` and (when supported) `cited_claim_refs`.
 """
 
 SYNTHESIS_PROMPT = (

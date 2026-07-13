@@ -215,6 +215,24 @@ def test_suggest_instructions_are_in_the_system_prompt():
     assert "One suggestion per discrete change" in system
 
 
+def test_suggest_instructions_cover_gate_and_ask_and_op_selection():
+    ctx = _ctx_for_agent()
+    fake = _FakeClient([_resp([_Text("ok")])])
+    _run_with_ctx(fake, ctx)
+    system = fake.calls[0]["system"]
+    # grounding gate
+    assert "ask_user" in system
+    assert "contradict" in system.lower()
+    assert "not in your sources" in system.lower() or "no support" in system.lower()
+    # ask once per decision, not per op (anti-nag)
+    assert "per op" in system.lower() or "once per" in system.lower()
+    # op-selection: set_edge_condition guard vs relabel_edge label
+    assert "set_edge_condition" in system and "relabel_edge" in system
+    assert "guard" in system.lower()
+    # origin guidance
+    assert "user_directed" in system and "ai_volunteered" in system
+
+
 def test_propose_tool_schema_exposes_condition_text():
     # Regression: set_edge_condition requires condition_text (see SuggestionOp /
     # _REQUIRED_BY_KIND), but the tool schema the model sees historically omitted
