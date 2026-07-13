@@ -207,6 +207,8 @@ export interface LaneCreate {
   name: string;
   order_index: number;
   height_px?: number | null;
+  reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface LaneUpdate {
@@ -236,12 +238,16 @@ export interface NodeCreate {
   lane_id: UUID;
   x: number;
   relative_y: number;
+  reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface EdgeCreate {
   source_node_id: UUID;
   target_node_id: UUID;
   label?: string | null;
+  reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface EdgeUpdate {

@@ -753,6 +753,8 @@ function BpmnCanvas({
             lane_id: place.laneId,
             x: place.x,
             relative_y: place.relativeY,
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
           });
           const size = sizeForNodeType(created.type);
           const newNode: CanvasNode = {
@@ -781,6 +783,8 @@ function BpmnCanvas({
             source_node_id: resolve(step.fromRef),
             target_node_id: resolve(step.toRef),
             label: step.label,
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
           });
           if (step.tempId) tmp[step.tempId] = created.id;
           setEdges((curr) => [
@@ -856,6 +860,8 @@ function BpmnCanvas({
             name: step.name,
             order_index: laneSlot,
             height_px: LANE_HEIGHT,
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
           });
           batchCtx.newLaneCount++;
           tmp[step.tempId] = created.id;

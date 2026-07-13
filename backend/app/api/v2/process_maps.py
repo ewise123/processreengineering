@@ -886,10 +886,11 @@ def create_node(
         model_id=version.model_id,
         version_id=version.id,
         kind=ChangeKind.CREATE.value,
-        reason="Added from the shape palette",
+        reason=(payload.reason.strip() if payload.reason and payload.reason.strip() else "Added from the shape palette"),
         after={"name": node.name, "type": node.type,
                "lane_id": str(node.lane_id) if node.lane_id else None},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
     )
     db.commit()
     db.refresh(node)
@@ -1051,10 +1052,11 @@ def create_edge(
         model_id=version.model_id,
         version_id=version.id,
         kind=ChangeKind.CONNECT.value,
-        reason="Connected two nodes",
+        reason=(payload.reason.strip() if payload.reason and payload.reason.strip() else "Connected two nodes"),
         after={"source_node_id": str(edge.source_node_id),
                "target_node_id": str(edge.target_node_id)},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
     )
     db.commit()
     db.refresh(edge)
@@ -1295,9 +1297,10 @@ def add_lane(
         model_id=version.model_id,
         version_id=version.id,
         kind=ChangeKind.CREATE.value,
-        reason="Added a new swim lane",
+        reason=(payload.reason.strip() if payload.reason and payload.reason.strip() else "Added a new swim lane"),
         after={"name": lane.name},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
     )
     db.commit()
     db.refresh(lane)

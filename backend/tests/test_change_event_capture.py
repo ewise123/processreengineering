@@ -243,8 +243,30 @@ def test_create_node_logs_one_create_event(db):
     assert ev.kind == "create"
     assert ev.target_type == "node"
     assert ev.source == "manual"
+    assert ev.actor_kind == "user"
+    assert ev.reason == "Added from the shape palette"
     assert ev.after["name"] == "New Step"
     assert ev.after["type"] == "task"
+
+
+def test_create_node_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    new_node = pm_api.create_node(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=NodeCreate(type="task", name="New Step", lane_id=n1.lane_id, x=100.0, relative_y=0.0,
+                           reason="Suggested by chat", ai_applied=True),
+        db=db,
+    )
+    events = _events_for(db, new_node.id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind == "create"
+    assert ev.target_type == "node"
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.reason == "Suggested by chat"
 
 
 def test_create_edge_logs_one_connect_event(db):
@@ -270,8 +292,37 @@ def test_create_edge_logs_one_connect_event(db):
     assert ev.kind == "connect"
     assert ev.target_type == "edge"
     assert ev.source == "manual"
+    assert ev.actor_kind == "user"
+    assert ev.reason == "Connected two nodes"
     assert ev.after["source_node_id"] == str(n1.id)
     assert ev.after["target_node_id"] == str(n2.id)
+
+
+def test_create_edge_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    from app.models.process import ProcessNode
+    n2 = ProcessNode(version_id=version.id, lane_id=n1.lane_id, type="task",
+                     name="Second Step", position={}, properties={})
+    db.add(n2)
+    db.flush()
+    db.commit()
+
+    new_edge = pm_api.create_edge(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=EdgeCreate(source_node_id=n1.id, target_node_id=n2.id,
+                           reason="Suggested by chat", ai_applied=True),
+        db=db,
+    )
+    events = _events_for(db, new_edge.id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind == "connect"
+    assert ev.target_type == "edge"
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.reason == "Suggested by chat"
 
 
 def test_add_lane_logs_one_create_event(db):
@@ -289,6 +340,29 @@ def test_add_lane_logs_one_create_event(db):
     assert ev.kind == "create"
     assert ev.target_type == "lane"
     assert ev.source == "manual"
+    assert ev.actor_kind == "user"
+    assert ev.reason == "Added a new swim lane"
+    assert ev.after["name"] == "New Lane"
+
+
+def test_add_lane_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    new_lane = pm_api.add_lane(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=LaneCreate(name="New Lane", order_index=1,
+                           reason="Suggested by chat", ai_applied=True),
+        db=db,
+    )
+    events = _events_for(db, new_lane.id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind == "create"
+    assert ev.target_type == "lane"
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.reason == "Suggested by chat"
     assert ev.after["name"] == "New Lane"
 
 
