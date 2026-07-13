@@ -115,6 +115,8 @@ from app.services.process_generation import (
 )
 from app.schemas.version_chat_suggest import (
     ActivityStep,
+    AgentOption,
+    AgentQuestion,
     ChatSuggestRequest,
     ChatSuggestResponse,
     ChatTurn as SuggestChatTurn,
@@ -2060,8 +2062,16 @@ def _run_chat_agent(db, project, model_id, version, ctx, focus_refs, payload) ->
 
     resolved = _resolve_mention_refs(result.answer, ctx)
     suggestions = result.proposals  # validated ChatSuggestions (resolved refs) from the loop
-    # When cards are present the cards ARE the response; suppress stray top-level prose.
-    message = "" if suggestions else resolved
+    question = None
+    if result.question and result.question.get("prompt"):
+        question = AgentQuestion(
+            prompt=result.question["prompt"],
+            options=[AgentOption(label=o["label"], description=o.get("description"))
+                     for o in result.question.get("options", []) if o.get("label")],
+        )
+    # Cards alone ARE the response (suppress stray prose). But when the agent
+    # asked a question, its prose explains why — always show it.
+    message = resolved if (question or not suggestions) else ""
     # Mention sources come from the answer prose AND the cards' titles/rationales.
     claim_texts = [resolved] + [s.title for s in suggestions] + [s.rationale for s in suggestions]
     mention_sources = _mention_sources_from_texts(claim_texts, ctx)
@@ -2093,7 +2103,7 @@ def _run_chat_agent(db, project, model_id, version, ctx, focus_refs, payload) ->
         message=message, suggestions=suggestions, mention_sources=mention_sources,
         group_summaries=group_summaries,
         activity_trace=[ActivityStep(**t) for t in result.trace],
-        run_id=run.id, grounded=grounded,
+        run_id=run.id, grounded=grounded, question=question,
     )
 
 

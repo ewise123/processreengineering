@@ -160,6 +160,16 @@ class GroupSummary(BaseModel):
     summary: str = Field(min_length=1, max_length=500)
 
 
+class AgentOption(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=300)
+
+
+class AgentQuestion(BaseModel):
+    prompt: str = Field(min_length=1, max_length=2000)
+    options: list[AgentOption] = Field(default_factory=list)
+
+
 class ChatSuggestResponse(BaseModel):
     message: str
     suggestions: list[ChatSuggestion] = Field(default_factory=list)
@@ -168,3 +178,4 @@ class ChatSuggestResponse(BaseModel):
     activity_trace: list[ActivityStep] = Field(default_factory=list)
     run_id: UUID | None = None
     grounded: bool = True
+    question: AgentQuestion | None = None

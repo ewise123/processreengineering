@@ -58,6 +58,37 @@ def test_ask_mode_runs_agent_persists_run_and_resolves_citations(db):
     assert str(claim.id) in row.cited_claim_ids
 
 
+def test_ask_user_question_is_surfaced_and_persisted(db):
+    from tests.test_chat_suggest import _seed
+    from app.services.map_chat_agent import AgentResult
+    project, version, n1, claim = _seed(db)
+
+    def fake_agent(*, tool_ctx, skeleton_text, focus_items, history, user_message):
+        return AgentResult(
+            answer="This step isn't in your sources.",
+            trace=[], consulted_claim_ids=[], round_count=1,
+            input_tokens=10, output_tokens=5, stop_reason="ask_user",
+            question={"prompt": "Add it anyway?",
+                      "options": [{"label": "Add it", "description": None},
+                                  {"label": "Skip it", "description": None}]},
+        )
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_agent", fake_agent)
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="add a QA step", session_id="s1"),
+            db=db,
+        )
+    assert resp.question is not None
+    assert resp.question.prompt == "Add it anyway?"
+    assert [o.label for o in resp.question.options] == ["Add it", "Skip it"]
+    assert resp.message == "This step isn't in your sources."  # prose shown alongside the question
+
+    row = db.scalar(select(AgentRun).where(AgentRun.id == resp.run_id))
+    assert row.stop_reason == "ask_user"
+
+
 def test_ask_mode_agent_error_is_graceful_and_persisted(db):
     from tests.test_chat_suggest import _seed
     project, version, n1, claim = _seed(db)
