@@ -434,6 +434,7 @@ export function ChatTab({
               labelById={labelById}
               sourceNameByClaim={sourceNameByClaim}
               sourceTargetByClaim={sourceTargetByClaim}
+              sources={m.sources}
               laneNameById={laneNameById}
               newNameByRef={newNameByRef}
               onNavigate={onNavigate}
@@ -446,9 +447,6 @@ export function ChatTab({
               <Sparkles size={16} className="mt-1 flex-shrink-0 text-indigo-500" />
               <div className="min-w-0 flex-1 space-y-1.5">
                 <ChatMsg turn={m} labelById={labelById} onNavigate={onNavigate} onOpenSource={onOpenSource} />
-                {m.role === "assistant" && m.activityTrace && m.activityTrace.length > 0 && (
-                  <ActivityTrace steps={m.activityTrace} />
-                )}
                 {bundles && (
                   <SuggestionList
                     bundles={bundles}
@@ -463,6 +461,9 @@ export function ChatTab({
                     errorById={bundleErrorById}
                     lanes={graph.lanes}
                   />
+                )}
+                {m.role === "assistant" && m.activityTrace && m.activityTrace.length > 0 && (
+                  <ActivityTrace steps={m.activityTrace} />
                 )}
               </div>
             </div>
@@ -800,6 +801,7 @@ function ChatMsg({
         labelById={labelById}
         sourceNameByClaim={sourceNameByClaim}
         sourceTargetByClaim={sourceTargetByClaim}
+        sources={turn.sources}
         onNavigate={onNavigate}
         onOpenSource={onOpenSource}
       />

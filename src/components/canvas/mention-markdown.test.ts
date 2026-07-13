@@ -1,9 +1,23 @@
 import { describe, it, expect } from "vitest";
-import { mentionsToMarkdown } from "./mention-markdown";
+import { dedupeSourcesByDocument, mentionsToMarkdown } from "./mention-markdown";
+import type { MentionSource } from "@/lib/types";
 
 const N = "11111111-1111-1111-1111-111111111111";
 const C = "33333333-3333-3333-3333-333333333333";
+const C2 = "33333333-3333-3333-3333-333333333334";
+const C3 = "33333333-3333-3333-3333-333333333335";
+const D = "22222222-2222-2222-2222-222222222222";
+const D2 = "22222222-2222-2222-2222-222222222223";
 const L = "44444444-4444-4444-4444-444444444444";
+
+const source = (overrides: Partial<MentionSource> = {}): MentionSource => ({
+  claim_id: C,
+  input_id: D,
+  input_name: "interview.txt",
+  section_ref: null,
+  quote: null,
+  ...overrides,
+});
 
 describe("mentionsToMarkdown", () => {
   const labels = new Map([[N, "Review Invoice"]]);
@@ -56,5 +70,89 @@ describe("mentionsToMarkdown", () => {
     expect(mentionsToMarkdown(`[[node:${N}]]`, l, sources)).toBe(
       `[Step \\[final\\]](poet://node/${N})`
     );
+  });
+
+  describe("claim mention dedupe (repeated same-source citations)", () => {
+    const sourceNames = new Map([
+      [C, "interview.txt"],
+      [C2, "interview.txt"],
+      [C3, "onboarding.pdf"],
+    ]);
+
+    it("drops repeat claim mentions of an already-shown document", () => {
+      const cited = [source({ claim_id: C, input_id: D }), source({ claim_id: C2, input_id: D })];
+      expect(
+        mentionsToMarkdown(
+          `First [[claim:${C}]] and again [[claim:${C2}]].`,
+          labels,
+          sourceNames,
+          undefined,
+          undefined,
+          cited
+        )
+      ).toBe(`First [interview.txt](poet://claim/${C}) and again .`);
+    });
+
+    it("keeps one chip per distinct document, dropping only true repeats", () => {
+      const cited = [
+        source({ claim_id: C, input_id: D }),
+        source({ claim_id: C3, input_id: D2, input_name: "onboarding.pdf" }),
+        source({ claim_id: C2, input_id: D }),
+      ];
+      expect(
+        mentionsToMarkdown(
+          `[[claim:${C}]] then [[claim:${C3}]] then [[claim:${C2}]]`,
+          labels,
+          sourceNames,
+          undefined,
+          undefined,
+          cited
+        )
+      ).toBe(
+        `[interview.txt](poet://claim/${C}) then [onboarding.pdf](poet://claim/${C3}) then `
+      );
+    });
+
+    it("leaves claim mentions untouched when no sources list is passed (back-compat)", () => {
+      expect(mentionsToMarkdown(`[[claim:${C}]] [[claim:${C2}]]`, labels, sourceNames)).toBe(
+        `[interview.txt](poet://claim/${C}) [interview.txt](poet://claim/${C2})`
+      );
+    });
+  });
+});
+
+describe("dedupeSourcesByDocument", () => {
+  it("keeps only the first citation per distinct document (by input_id)", () => {
+    const sources = [
+      source({ claim_id: C, input_id: D }),
+      source({ claim_id: C2, input_id: D }),
+    ];
+    expect(dedupeSourcesByDocument(sources)).toEqual([source({ claim_id: C, input_id: D })]);
+  });
+
+  it("keeps one entry per distinct document, preserving first-seen order", () => {
+    const sources = [
+      source({ claim_id: C, input_id: D, input_name: "interview.txt" }),
+      source({ claim_id: C3, input_id: D2, input_name: "onboarding.pdf" }),
+      source({ claim_id: C2, input_id: D, input_name: "interview.txt" }),
+    ];
+    expect(dedupeSourcesByDocument(sources)).toEqual([
+      source({ claim_id: C, input_id: D, input_name: "interview.txt" }),
+      source({ claim_id: C3, input_id: D2, input_name: "onboarding.pdf" }),
+    ]);
+  });
+
+  it("falls back to input_name when input_id is missing", () => {
+    const sources = [
+      source({ claim_id: C, input_id: "", input_name: "interview.txt" }),
+      source({ claim_id: C2, input_id: "", input_name: "interview.txt" }),
+    ];
+    expect(dedupeSourcesByDocument(sources)).toEqual([
+      source({ claim_id: C, input_id: "", input_name: "interview.txt" }),
+    ]);
+  });
+
+  it("returns an empty array for an empty input", () => {
+    expect(dedupeSourcesByDocument([])).toEqual([]);
   });
 });
