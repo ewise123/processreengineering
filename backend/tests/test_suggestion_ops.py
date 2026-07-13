@@ -92,3 +92,24 @@ def test_remove_lane_allowed_with_multiple_lanes():
     raw = {"kind": "remove_lane", "lane_ref": "L1", "title": "t", "rationale": ""}
     sugg, err = suggestion_ops.build_suggestion(raw, ctx, index=0)
     assert err is None and sugg is not None
+
+
+def test_origin_is_carried_when_valid_and_dropped_otherwise():
+    from uuid import uuid4
+    from types import SimpleNamespace
+    from app.services.suggestion_ops import build_suggestion
+    n1 = uuid4()
+    ctx = SimpleNamespace(
+        node_ref_to_id={"N1": n1}, edge_ref_to_id={}, lane_ref_to_id={},
+        claim_ref_to_id={}, node_name_by_id={n1: "Receive"},
+        lane_name_by_id={}, edge_label_by_id={},
+    )
+    base = {"kind": "relabel_node", "node_ref": "N1", "new_label": "x", "title": "t", "rationale": ""}
+    s_user, _ = build_suggestion({**base, "origin": "user_directed"}, ctx, 0)
+    s_ai, _ = build_suggestion({**base, "origin": "ai_volunteered"}, ctx, 1)
+    s_bad, _ = build_suggestion({**base, "origin": "nonsense"}, ctx, 2)
+    s_none, _ = build_suggestion(base, ctx, 3)
+    assert s_user.origin == "user_directed"
+    assert s_ai.origin == "ai_volunteered"
+    assert s_bad.origin is None   # unknown value coerced to None
+    assert s_none.origin is None

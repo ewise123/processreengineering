@@ -119,6 +119,12 @@ class ChatSuggestion(BaseModel):
     # name/label as it was when proposed, so the card can show a stable
     # "old -> new" transition that doesn't collapse once the change is applied.
     before_label: str | None = Field(default=None, max_length=500)
+    # Why this change was proposed, when it cites no source claim: the analyst
+    # directly commanded it ("user_directed") vs the agent volunteered it beyond
+    # the sources ("ai_volunteered"). Drives the card's grounding chip copy.
+    # None when unspecified. Ignored for a change that cites a claim (that is
+    # "supported" deterministically).
+    origin: str | None = Field(default=None)
 
 
 class ChatTurn(BaseModel):

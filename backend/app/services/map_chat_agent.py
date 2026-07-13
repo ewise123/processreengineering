@@ -164,6 +164,16 @@ PROPOSE_TOOL = {
                             "type": ["string", "null"],
                             "description": "The guard/condition on a gateway's outgoing flow, e.g. \"amount > 10000\". Only for set_edge_condition.",
                         },
+                        "origin": {
+                            "type": ["string", "null"],
+                            "enum": ["user_directed", "ai_volunteered", None],
+                            "description": (
+                                "Only set when the change cites NO source claim. "
+                                "'user_directed' = the analyst explicitly commanded this exact change; "
+                                "'ai_volunteered' = you are suggesting it beyond what they asked and the "
+                                "sources say. A change that cites a claim needs no origin."
+                            ),
+                        },
                     },
                     "required": ["kind", "title", "rationale"],
                 },
