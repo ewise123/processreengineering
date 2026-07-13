@@ -20,8 +20,8 @@ import type {
 import { MentionMarkdown } from "./mention-view";
 import { traceHeaderLabel } from "./agent-trace";
 import {
+  buildSendContext,
   selectionChips,
-  selectionToContextRefs,
   type ContextChip,
   type SelectedObject,
 } from "./chat-context";
@@ -128,7 +128,6 @@ export function ChatTab({
     pendingRef.current = null;
     undoHandles.current.clear();
     setBundleErrorById({});
-    setSessionContext([]);
     setSessionId(readOrMintSessionId(versionId));
     setHistory(sessionStore.load(versionId) as ChatItem[]);
   }, [versionId, sessionStore]);
@@ -149,12 +148,16 @@ export function ChatTab({
 
   const graphIndex = useMemo(() => indexGraph(graph), [graph]);
 
-  // The chat keeps its OWN context list, decoupled from the live canvas
-  // selection (#3). A non-empty canvas selection REPLACES it; deselecting
-  // (clicking empty canvas, Escape, etc.) leaves it intact — so the attached
-  // context isn't silently lost before the message is sent. The context tab's
-  // ✕ controls edit THIS list only; they no longer deselect the canvas node or
-  // close the Properties panel.
+  // The pending attachment for the NEXT message only — consumable, not a
+  // working set. It's decoupled from the live canvas selection (#3): a
+  // non-empty canvas selection REPLACES it; deselecting (clicking empty
+  // canvas, Escape, etc.) leaves it intact, so the attached context isn't
+  // silently lost before the message is sent. The context tab's ✕ controls
+  // edit THIS list only; they no longer deselect the canvas node or close the
+  // Properties panel. `submit` consumes it into that one message's
+  // context_refs and clears it immediately after — it never accumulates
+  // across messages, and later messages send no context_refs unless the user
+  // makes a new selection.
   const [chatContext, setChatContext] = useState<SelectedObject[]>([]);
   // Key on the SET of selected ids, not the array reference: a graph refetch
   // (e.g. after applying a suggestion) hands us a new `selected` array with the
@@ -170,17 +173,6 @@ export function ChatTab({
   }, [selectedIdsKey]);
 
   const chips = selectionChips(chatContext, labelById);
-
-  // Persistent, per-conversation attached context (Copilot "working set" style):
-  // the current selection commits into this on send, and the whole set rides
-  // along with EVERY subsequent message — so follow-up questions keep context
-  // even when the canvas selection doesn't change. Reset on New chat.
-  const [sessionContext, setSessionContext] = useState<SelectedObject[]>([]);
-  const sessionChips = selectionChips(sessionContext, labelById);
-  const mergeContext = (base: SelectedObject[], add: SelectedObject[]) => {
-    const seen = new Set(base.map((s) => s.id));
-    return [...base, ...add.filter((s) => !seen.has(s.id))];
-  };
 
   // Per-conversation chat session id (grouping key for agent_runs), persisted in
   // sessionStorage per version. Resettable state so it rotates on Clear (new
@@ -250,19 +242,15 @@ export function ChatTab({
   const submit = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || ask.isPending) return;
-    // Commit the pending selection into the persistent session context, then
-    // send the WHOLE set — so a follow-up keeps context without re-selecting.
-    const merged = mergeContext(sessionContext, chatContext);
-    const contextRefs = selectionToContextRefs(merged);
-    // Snapshot the display chips too, so the sent turn keeps a clickable context
-    // row (and a plain-text note as a fallback for older persisted turns).
-    const mergedChips = selectionChips(merged, labelById);
-    const contextChips = mergedChips.length ? mergedChips : undefined;
-    const note = mergedChips.length ? mergedChips.map((c) => c.label).join(", ") : undefined;
+    // Context is consumable, not a persistent working set: this send's
+    // context_refs come from whatever is pending right now (and nothing else).
+    // A follow-up with no new selection sends no context_refs — the agent
+    // relies on this turn's refs already being in the conversation history.
+    const { refs: contextRefs, chips: contextChips, note } = buildSendContext(chatContext, labelById);
     setDraft("");
     // Capture pre-send history snapshot before optimistic update
     const preSendHistory = history;
-    // Snapshot what Pause needs to undo this send, and open an abort channel.
+    // Snapshot what Pause must undo this send, and open an abort channel.
     pendingRef.current = { priorHistory: preSendHistory, text: trimmed };
     const controller = new AbortController();
     abortRef.current = controller;
@@ -276,13 +264,13 @@ export function ChatTab({
       gen: genRef.current,
       signal: controller.signal,
     });
-    // Clear the chat context on send: the tab slides away and the attached objects
-    // are recorded on the message itself (contextNote, shown under the prompt). The
-    // canvas selection is deliberately left alone — so the Properties panel stays
-    // open and reflects an applied suggestion live, and selection stays decoupled
-    // from chat context (#3). The pending tab clears; the attached objects live on
-    // in the persistent session context and ride along with every later message.
-    setSessionContext(merged);
+    // Clear the pending attachment on send: the tab slides away and the attached
+    // objects are recorded on the message itself (contextNote/contextRefs, shown
+    // under the prompt). The canvas selection is deliberately left alone — so the
+    // Properties panel stays open and reflects an applied suggestion live, and
+    // selection stays decoupled from chat context (#3). Nothing is retained as a
+    // working set: the next message sends no context_refs unless the user makes
+    // a new selection.
     setChatContext([]);
   };
 
@@ -313,7 +301,6 @@ export function ChatTab({
     // stale Undo handle or error message from the cleared conversation.
     undoHandles.current.clear();
     setBundleErrorById({});
-    setSessionContext([]);
     // Clear = a new conversation: rotate the session id so its agent_runs aren't
     // grouped under the previous chat on this version.
     setSessionId(mintSessionId(versionId));
@@ -561,14 +548,6 @@ export function ChatTab({
               ))}
             </div>
           )}
-          {sessionChips.length > 0 && (
-            <SessionContextRow
-              chips={sessionChips}
-              onNavigate={onNavigate}
-              onRemove={(id) => setSessionContext((curr) => curr.filter((s) => s.id !== id))}
-              onClear={() => setSessionContext([])}
-            />
-          )}
           <div className="flex items-end gap-1.5">
             <button
               onClick={() => setShowExamples((v) => !v)}
@@ -610,70 +589,6 @@ export function ChatTab({
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-/** The persistent, per-conversation attached context ("working set"): the
- * objects that ride along with every message. Collapsed by default to a
- * "Context · N ▸" summary so it never eats vertical space as it accumulates;
- * expands to removable chips. `clear` empties the whole set. */
-function SessionContextRow({
-  chips,
-  onNavigate,
-  onRemove,
-  onClear,
-}: {
-  chips: ContextChip[];
-  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
-  onRemove: (id: UUID) => void;
-  onClear: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="mb-1.5">
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          className="flex items-center gap-0.5 text-[10px] font-medium text-slate-500 hover:text-slate-700"
-        >
-          <ChevronRight size={11} className={"transition-transform " + (open ? "rotate-90" : "")} />
-          Context · {chips.length}
-        </button>
-        <button
-          type="button"
-          onClick={onClear}
-          title="Clear all context"
-          className="ml-1 text-[9.5px] text-slate-400 hover:text-slate-600"
-        >
-          clear
-        </button>
-      </div>
-      {open && (
-        <div className="mt-1 flex flex-wrap gap-1">
-          {chips.map((c) => (
-            <span key={`${c.kind}:${c.id}`} className="group relative inline-flex">
-              <button
-                onClick={() => onNavigate({ kind: c.kind, id: c.id })}
-                title="Jump to this step"
-                className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white py-0.5 pl-2 pr-5 text-[10px] text-slate-700 hover:bg-slate-100"
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
-                {c.label}
-              </button>
-              <button
-                onClick={() => onRemove(c.id)}
-                title="Remove from context"
-                className="absolute right-0.5 top-1/2 hidden -translate-y-1/2 rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 group-hover:block"
-              >
-                <X size={10} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
