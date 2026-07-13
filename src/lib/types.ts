@@ -424,6 +424,10 @@ export interface ChatSuggestion {
   /** For rename-family ops: the target's name/label when proposed, so the card
    * shows a stable "old → new" that doesn't collapse once applied. */
   before_label?: string | null;
+  /** Why the change was proposed when it cites no source claim: "user_directed"
+   * (you commanded it) vs "ai_volunteered" (the agent suggested it beyond the
+   * sources). Drives the grounding chip copy. Undefined/null when unspecified. */
+  origin?: "user_directed" | "ai_volunteered" | null;
 }
 
 export interface ChatSuggestRequest {
@@ -442,6 +446,16 @@ export interface GroupSummary {
   summary: string;
 }
 
+export interface AgentOption {
+  label: string;
+  description?: string | null;
+}
+
+export interface AgentQuestion {
+  prompt: string;
+  options: AgentOption[];
+}
+
 export interface ChatSuggestResponse {
   message: string;
   suggestions: ChatSuggestion[];
@@ -450,6 +464,8 @@ export interface ChatSuggestResponse {
   activity_trace?: ActivityStep[];
   run_id?: string | null;
   grounded?: boolean;
+  /** Present when the agent stopped to ask a clarifying question (ask_user). */
+  question?: AgentQuestion | null;
 }
 
 export interface ProcessMapGenerateRequest {
