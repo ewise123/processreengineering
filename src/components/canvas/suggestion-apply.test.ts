@@ -237,6 +237,43 @@ describe("planBundle", () => {
     expect(plan.applyable).toBe(true);
     expect(plan.undoable).toBe(false);
   });
+  it("infers nearNodeRef from a same-plan incoming edge when add_node omits near_node_ref", () => {
+    // Model emits add_node with no near_node_ref, then connects it via a
+    // separate add_edge from N1 -> t1. The placement anchor should come from
+    // the edge's fromRef (N1), not fall back to the far-right-of-lane default.
+    const bundle = bundleSuggestions([
+      sg("a", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "New" }),
+      sg("b", { kind: "add_edge", from_ref: "N1", to_ref: "t1" }),
+    ])[0];
+    const plan = planBundle(bundle, idx());
+    const createStep = plan.steps.find((s) => s.kind === "create_node");
+    if (!createStep || createStep.kind !== "create_node") throw new Error("Expected a create_node step");
+    expect(createStep.nearNodeRef).toBe("N1");
+  });
+  it("keeps an explicit near_node_ref on add_node instead of overwriting it from an incoming edge", () => {
+    const bundle = bundleSuggestions([
+      sg("a", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "New", near_node_ref: "N2" }),
+      sg("b", { kind: "add_edge", from_ref: "N1", to_ref: "t1" }),
+    ])[0];
+    const plan = planBundle(bundle, idx());
+    const createStep = plan.steps.find((s) => s.kind === "create_node");
+    if (!createStep || createStep.kind !== "create_node") throw new Error("Expected a create_node step");
+    expect(createStep.nearNodeRef).toBe("N2");
+  });
+  it("leaves nearNodeRef null when the only incoming edge's fromRef is itself an unresolved tmp", () => {
+    // t0 (another new node) -> t1 (the node under test). t0 isn't a real graph
+    // node, so there's no resolved position to anchor against yet.
+    const bundle = bundleSuggestions([
+      sg("a", { kind: "add_node", temp_id: "t0", lane_ref: "L1", node_type: "task", new_label: "First" }),
+      sg("b", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "Second" }),
+      sg("c", { kind: "add_edge", from_ref: "t0", to_ref: "t1" }),
+    ])[0];
+    const plan = planBundle(bundle, idx());
+    const createSteps = plan.steps.filter((s) => s.kind === "create_node");
+    const second = createSteps.find((s) => s.kind === "create_node" && s.tempId === "t1");
+    if (!second || second.kind !== "create_node") throw new Error("Expected the t1 create_node step");
+    expect(second.nearNodeRef).toBeNull();
+  });
   it("resolves a decompose sub-step role to a lane id when the role matches an existing lane name", () => {
     const bundle = bundleSuggestions([
       sg("a", {

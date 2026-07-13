@@ -347,9 +347,28 @@ export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
       : step
   );
 
+  // Anchor an AI-added node (no explicit near_node_ref) off the incoming edge that
+  // connects it to the rest of the graph, when the model split "create the node"
+  // and "connect it" into separate ops instead of setting near_node_ref itself.
+  // Placing it next to the step it flows FROM beats the create_node fallback
+  // (far-right end of the lane). Only anchor off a REAL existing node — if the
+  // edge's fromRef is itself an unresolved tmp (created elsewhere in this same
+  // plan), we have no position for it yet, so leave the fallback alone. Prefers
+  // the first matching incoming edge if more than one targets this node.
+  const stepsWithAnchors = steps.map((step) => {
+    if (step.kind !== "create_node" || step.nearNodeRef) return step;
+    const incomingEdge = steps.find(
+      (s): s is Extract<MutationStep, { kind: "create_edge" }> => s.kind === "create_edge" && s.toRef === step.tempId
+    );
+    if (incomingEdge && index.nodeIds.has(incomingEdge.fromRef)) {
+      return { ...step, nearNodeRef: incomingEdge.fromRef };
+    }
+    return step;
+  });
+
   // Every tmp produced anywhere in this plan — validation is order-independent.
   const producedAll = new Set<string>();
-  for (const step of steps) {
+  for (const step of stepsWithAnchors) {
     if ("tempId" in step && step.tempId) producedAll.add(step.tempId);
   }
   let applyable = true;
@@ -357,7 +376,7 @@ export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
 
   // A consumed tmp whose producer is absent is caught here by the same check as
   // a missing real ref: it's neither in `producedAll` nor in the graph index.
-  for (const step of steps) {
+  for (const step of stepsWithAnchors) {
     for (const { ref, set } of stepRealRefs(step)) {
       if (producedAll.has(ref)) continue; // created within this plan
       if (!index[SET_BY_KIND[set]].has(ref)) {
@@ -372,5 +391,5 @@ export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
     if (!applyable) break;
   }
 
-  return { bundleId: bundle.id, steps, undoable: bundle.undoable, applyable, reason };
+  return { bundleId: bundle.id, steps: stepsWithAnchors, undoable: bundle.undoable, applyable, reason };
 }
