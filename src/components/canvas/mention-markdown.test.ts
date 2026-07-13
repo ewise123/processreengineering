@@ -72,14 +72,14 @@ describe("mentionsToMarkdown", () => {
     );
   });
 
-  describe("claim mention dedupe (repeated same-source citations)", () => {
+  describe("claim mention dedupe (repeated same-source citations, scoped per call)", () => {
     const sourceNames = new Map([
       [C, "interview.txt"],
       [C2, "interview.txt"],
       [C3, "onboarding.pdf"],
     ]);
 
-    it("drops repeat claim mentions of an already-shown document", () => {
+    it("drops repeat claim mentions of an already-shown document within the same text", () => {
       const cited = [source({ claim_id: C, input_id: D }), source({ claim_id: C2, input_id: D })];
       expect(
         mentionsToMarkdown(
@@ -117,6 +117,54 @@ describe("mentionsToMarkdown", () => {
       expect(mentionsToMarkdown(`[[claim:${C}]] [[claim:${C2}]]`, labels, sourceNames)).toBe(
         `[interview.txt](poet://claim/${C}) [interview.txt](poet://claim/${C2})`
       );
+    });
+
+    it("REGRESSION: a second call with the SAME sources array still renders its own first mention (dedupe does not leak across calls)", () => {
+      // Simulates two separate renders sharing one message's full sources list:
+      // e.g. one suggestion card citing claim A, another card citing claim B —
+      // both claims from the same document X. Each card is its own call.
+      const cited = [source({ claim_id: C, input_id: D }), source({ claim_id: C2, input_id: D })];
+
+      const firstCall = mentionsToMarkdown(
+        `Card one cites [[claim:${C}]].`,
+        labels,
+        sourceNames,
+        undefined,
+        undefined,
+        cited
+      );
+      expect(firstCall).toBe(`Card one cites [interview.txt](poet://claim/${C}).`);
+
+      // Second call, same `sources` array, different text citing claim B (same
+      // doc X). Under the old whole-message-derived dedupe this would have
+      // been dropped because doc X was already "seen" globally; the fix scopes
+      // the seen-set to this call only, so it must still render.
+      const secondCall = mentionsToMarkdown(
+        `Card two cites [[claim:${C2}]].`,
+        labels,
+        sourceNames,
+        undefined,
+        undefined,
+        cited
+      );
+      expect(secondCall).toBe(`Card two cites [interview.txt](poet://claim/${C2}).`);
+    });
+
+    it("renders both mentions when they cite distinct documents in one text", () => {
+      const cited = [
+        source({ claim_id: C, input_id: D, input_name: "interview.txt" }),
+        source({ claim_id: C3, input_id: D2, input_name: "onboarding.pdf" }),
+      ];
+      expect(
+        mentionsToMarkdown(
+          `[[claim:${C}]] and [[claim:${C3}]]`,
+          labels,
+          sourceNames,
+          undefined,
+          undefined,
+          cited
+        )
+      ).toBe(`[interview.txt](poet://claim/${C}) and [onboarding.pdf](poet://claim/${C3})`);
     });
   });
 });

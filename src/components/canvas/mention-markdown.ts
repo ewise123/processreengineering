@@ -33,11 +33,17 @@ export function dedupeSourcesByDocument(sources: MentionSource[]): MentionSource
  * created, so non-clickable). The rest of the string is left as-is for markdown.
  *
  * `sources` (optional) is this message's full cited-sources list, used only to
- * dedupe repeat `claim` mentions of the same document — the first mention of a
- * given document renders as a link; later mentions of an already-shown
- * document are dropped rather than repeating the same chip. Claim ids absent
- * from `sources` are left untouched (fall back to the "source" label below),
- * so passing an empty/omitted list preserves the previous behavior. */
+ * map each `claim` mention to its source **document** (`input_id`, falling
+ * back to `input_name`). Dedupe is scoped to this single call: as `text` is
+ * scanned left-to-right, the first `claim` mention of a given document renders
+ * as a link, and a later mention of that *same* document *within this same
+ * text* is dropped rather than repeating the same chip. The seen-documents set
+ * is local to this call — it is never derived from, or shared across, other
+ * calls that pass the same `sources` (e.g. the prose bubble vs. a suggestion
+ * card's title/rationale), so one render can never cause another render to
+ * lose its only citation. Claim ids absent from `sources` are left untouched
+ * (fall back to the "source" label below), so passing an empty/omitted list
+ * preserves the previous behavior. */
 export function mentionsToMarkdown(
   text: string,
   labelById: Map<UUID, string>,
@@ -49,10 +55,12 @@ export function mentionsToMarkdown(
   // Escape both brackets so a label containing "[" or "]" can't break out of
   // the markdown link text.
   const escapeLabel = (s: string) => s.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
-  // Claim ids known to belong to a document (any claim from that document),
-  // vs. the subset that should actually render (one per document, first seen).
-  const knownClaimIds = new Set(sources.map((s) => s.claim_id));
-  const keptClaimIds = new Set(dedupeSourcesByDocument(sources).map((s) => s.claim_id));
+  // Claim id → source document key, so a repeat mention of the same document
+  // (not merely the same claim id) can be recognized as a dupe within this text.
+  const docKeyByClaimId = new Map(sources.map((s) => [s.claim_id, s.input_id || s.input_name]));
+  // Fresh per call: which documents this one `text` has already rendered a
+  // citation link for. Never seeded from anything outside this call.
+  const seenDocKeys = new Set<string>();
   return text.replace(MENTION_RE, (matched: string, kind: string, id: string) => {
     const trailing = /\s$/.test(matched) ? " " : "";
     if (kind === "node") {
@@ -60,10 +68,14 @@ export function mentionsToMarkdown(
       return `[${label}](poet://node/${id})${trailing}`;
     }
     if (kind === "claim") {
-      // A repeat citation of a document already shown earlier in this
-      // message — drop the duplicate chip instead of showing the same
-      // source name again.
-      if (knownClaimIds.has(id) && !keptClaimIds.has(id)) return "";
+      const docKey = docKeyByClaimId.get(id);
+      if (docKey !== undefined) {
+        // A repeat citation of a document already shown earlier in *this*
+        // text — drop the duplicate chip instead of showing the same source
+        // name again.
+        if (seenDocKeys.has(docKey)) return "";
+        seenDocKeys.add(docKey);
+      }
       const label = escapeLabel(sourceNameByClaimId.get(id) ?? "source");
       return `[${label}](poet://claim/${id})${trailing}`;
     }
