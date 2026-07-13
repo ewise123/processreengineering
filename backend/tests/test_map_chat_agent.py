@@ -107,7 +107,9 @@ def test_round_cap_forces_graceful_synthesis():
     result = _run(fake)
     assert result.stop_reason == "round_cap"
     assert "could not verify" in result.answer
-    assert "tools" not in fake.calls[-1]
+    # The synthesis turn drops the read tools but keeps propose_changes so a
+    # budget-capped, change-heavy request can still emit cards.
+    assert [t["name"] for t in fake.calls[-1]["tools"]] == ["propose_changes"]
 
 
 def test_wall_clock_budget_forces_synthesis():
@@ -314,3 +316,34 @@ def test_proposals_survive_round_cap():
     result = _run_with_ctx(fake, ctx)
     assert result.stop_reason == "round_cap"
     assert len(result.proposals) == 1  # the round-1 proposal survived the cap
+
+
+def test_synthesis_can_still_propose():
+    ctx = _ctx_for_agent()
+    rounds = [_resp([_ToolUse(f"t{i}", "find_node", {"query": "x"})])
+              for i in range(map_chat_agent.MAX_ROUNDS)]
+    rounds += [_resp([
+        _ToolUse("p1", "propose_changes", {"suggestions": [
+            {"kind": "relabel_node", "node_ref": "N1", "new_label": "Log invoice",
+             "title": "Rename", "rationale": ""}]}),
+        _Text("Proposed what I could verify."),
+    ])]
+    fake = _FakeClient(rounds)
+    result = _run_with_ctx(fake, ctx)
+    assert result.stop_reason == "round_cap"
+    assert len(result.proposals) == 1
+
+
+def test_synthesis_turn_offers_only_propose_tool():
+    ctx = _ctx_for_agent()
+    rounds = [_resp([_ToolUse(f"t{i}", "find_node", {"query": "x"})])
+              for i in range(map_chat_agent.MAX_ROUNDS)]
+    rounds += [_resp([_Text("done")])]
+    fake = _FakeClient(rounds)
+    _run_with_ctx(fake, ctx)
+    tool_names = [t["name"] for t in fake.calls[-1]["tools"]]
+    assert tool_names == ["propose_changes"]
+
+
+def test_max_rounds_is_eight():
+    assert map_chat_agent.MAX_ROUNDS == 8

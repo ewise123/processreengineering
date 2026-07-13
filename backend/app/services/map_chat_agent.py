@@ -19,7 +19,7 @@ from app.services.suggestion_ops import validate_proposal_batch, _drop_orphaned_
 
 AGENT_MODEL = os.getenv("MAP_CHAT_AGENT_MODEL", os.getenv("MAP_CHAT_MODEL", "claude-sonnet-4-6"))
 MAX_TOKENS = 1500
-MAX_ROUNDS = 6
+MAX_ROUNDS = 8
 MAX_TOKENS_BUDGET = 80_000
 # Total wall-clock budget across ALL rounds. chat_suggest is a sync endpoint, so
 # an unbounded multi-round run would hold a thread-pool worker for minutes and can
@@ -116,6 +116,13 @@ Rules for suggestions:
 - Do not propose a deletion casually; only when the sources clearly contradict
   an object's existence.
 """
+
+SYNTHESIS_PROMPT = (
+    "You have reached your investigation budget. Using ONLY what you have already "
+    "verified from the sources, call propose_changes for the grounded changes you "
+    "were preparing (omit anything you could not verify — do not describe it). Then "
+    "answer briefly, stating plainly what you could not verify."
+)
 
 PROPOSE_TOOL = {
     "name": "propose_changes",
@@ -459,15 +466,27 @@ def run_chat_agent(
         messages = messages + [{"role": "user", "content": tool_results}]
 
         if in_tokens + out_tokens > MAX_TOKENS_BUDGET:
-            result.answer = _graceful_synthesis(client, system, messages)
+            ans, syn_in, syn_out = _graceful_synthesis(
+                client, system, messages, tool_ctx=tool_ctx, proposals=proposals, raw_groups=raw_groups)
+            result.answer = ans
+            in_tokens += syn_in
+            out_tokens += syn_out
             result.stop_reason = AgentRunStopReason.TOKEN_CAP.value
             break
         if time.monotonic() > deadline:
-            result.answer = _graceful_synthesis(client, system, messages)
+            ans, syn_in, syn_out = _graceful_synthesis(
+                client, system, messages, tool_ctx=tool_ctx, proposals=proposals, raw_groups=raw_groups)
+            result.answer = ans
+            in_tokens += syn_in
+            out_tokens += syn_out
             result.stop_reason = AgentRunStopReason.TIME_CAP.value
             break
     else:
-        result.answer = _graceful_synthesis(client, system, messages)
+        ans, syn_in, syn_out = _graceful_synthesis(
+            client, system, messages, tool_ctx=tool_ctx, proposals=proposals, raw_groups=raw_groups)
+        result.answer = ans
+        in_tokens += syn_in
+        out_tokens += syn_out
         result.stop_reason = AgentRunStopReason.ROUND_CAP.value
 
     result.trace = trace
@@ -479,13 +498,18 @@ def run_chat_agent(
     return result
 
 
-def _graceful_synthesis(client, system: str, messages: list[dict]) -> str:
-    """Final turn with NO tools: answer with what's gathered, flag the unverified."""
-    messages = messages + [{
-        "role": "user",
-        "content": "You have reached your investigation budget. Answer now using only what you have gathered. Explicitly state anything you could not verify from the sources.",
-    }]
+def _graceful_synthesis(client, system: str, messages: list[dict], *, tool_ctx, proposals: list, raw_groups: list) -> tuple[str, int, int]:
+    """Final turn with ONLY propose_changes (no read tools): emit any grounded
+    changes gathered so far, then answer with what's verified. Returns
+    (answer_text, input_tokens, output_tokens)."""
+    messages = messages + [{"role": "user", "content": SYNTHESIS_PROMPT}]
     resp = client.messages.create(
-        model=AGENT_MODEL, max_tokens=MAX_TOKENS, system=system, messages=messages, timeout=90.0,
+        model=AGENT_MODEL, max_tokens=MAX_TOKENS, system=system,
+        tools=[PROPOSE_TOOL], messages=messages, timeout=90.0,
     )
-    return _text_of(resp.content) or "(no response)"
+    for b in resp.content:
+        if getattr(b, "type", None) == "tool_use" and b.name == "propose_changes":
+            _handle_propose(dict(b.input or {}), tool_ctx.mapctx, proposals, raw_groups)
+    in_tok = getattr(resp.usage, "input_tokens", 0) or 0
+    out_tok = getattr(resp.usage, "output_tokens", 0) or 0
+    return (_text_of(resp.content) or "(no response)", in_tok, out_tok)
