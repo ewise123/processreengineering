@@ -1867,24 +1867,25 @@ function BpmnCanvas({
       reason?: string
     ) => {
       const byId = new Map(positions.map((p) => [p.id, p]));
-      // Snapshot current lanes so we can decide, per node, whether this apply
-      // actually changes the lane (semantic → attach reason) or is a pure move.
-      const prevLaneById = new Map(
-        nodesRef.current.map((n) => [n.id, n.laneId])
-      );
       setNodes((curr) =>
         curr.map((n) => {
           const p = byId.get(n.id);
           return p ? { ...n, x: p.x, relativeY: p.relativeY, laneId: p.laneId } : n;
         })
       );
+      // Attach the caller-supplied reason to the persisted patch whenever one was
+      // given. Callers pass a reason ONLY for a semantic relane (drag-across-lanes,
+      // moveSelectionToLane, and their undo/redo); a pure reposition passes none.
+      // We must NOT re-derive "did the lane change" from nodesRef here: the drag
+      // path optimistically updates a node's lane during onMove, so by the time
+      // this runs the node's "previous" lane already equals its new lane, which
+      // would drop the required reason and 422 the backend.
       for (const p of positions) {
-        const laneChanged = reason !== undefined && prevLaneById.get(p.id) !== p.laneId;
         markNode(p.id, {
           x: p.x,
           relative_y: p.relativeY,
           lane_id: p.laneId ?? undefined,
-          ...(laneChanged ? { reason } : {}),
+          ...(reason !== undefined ? { reason } : {}),
         });
       }
     },
