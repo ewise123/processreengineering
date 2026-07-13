@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { OpKind, ProcessLane } from "@/lib/types";
 import { isDeleteOp, type Bundle } from "./suggestion-apply";
 import {
-  isProposalGrounded,
+  groundingChip,
   laneReassignmentTarget,
   opPayload,
   opTarget,
@@ -222,14 +222,17 @@ function SuggestionCard({
                 <span className="min-w-0 text-[11px] font-medium leading-snug text-slate-800">
                   {target ? renderText(target) : renderText(s.title)}
                 </span>
-                {!isProposalGrounded(s) && (
-                  <span
-                    className="shrink-0 rounded px-1 py-px text-[8.5px] font-bold uppercase tracking-wide bg-amber-100 text-amber-700"
-                    title="This change draws on general process knowledge, not your uploaded sources."
-                  >
-                    Not grounded in your sources
-                  </span>
-                )}
+                {(() => {
+                  const chip = groundingChip(s);
+                  return chip ? (
+                    <span
+                      className="shrink-0 rounded px-1 py-px text-[8.5px] font-bold uppercase tracking-wide bg-amber-100 text-amber-700"
+                      title="This change is not backed by your uploaded sources."
+                    >
+                      {chip.label}
+                    </span>
+                  ) : null;
+                })()}
               </div>
               {transition ? (
                 <div className="mt-1 flex flex-wrap items-center gap-1 rounded bg-slate-100/80 px-1.5 py-1 text-[11px] leading-snug">

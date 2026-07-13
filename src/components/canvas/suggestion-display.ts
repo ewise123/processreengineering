@@ -137,6 +137,20 @@ export function isProposalGrounded(s: Pick<ChatSuggestion, "cited_claim_ids">): 
   return (s.cited_claim_ids?.length ?? 0) > 0;
 }
 
+export type GroundingChip = { label: string } | null;
+
+/** The grounding chip to show on a proposed change, or null for none.
+ * A change that cites a claim is "supported" (deterministic) → no chip. An
+ * uncited change is flagged regardless of who initiated it; the copy differs by
+ * origin: the agent volunteered it vs the user directly asked for it. */
+export function groundingChip(
+  s: Pick<ChatSuggestion, "cited_claim_ids" | "origin">,
+): GroundingChip {
+  if ((s.cited_claim_ids?.length ?? 0) > 0) return null;
+  if (s.origin === "ai_volunteered") return { label: "AI suggestion · not in your sources" };
+  return { label: "Not in your sources" };
+}
+
 /** For a remove_lane op, the lane its steps get reassigned to: the first
  * REMAINING lane by order_index (mirrors the backend's fallback). Returns the
  * target lane id, or null if the op isn't remove_lane or there's no other lane. */
