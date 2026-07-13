@@ -247,6 +247,47 @@ def test_accepted_verdict_carries_op_index():
     assert propose_result["accepted"][0]["index"] == 0
 
 
+def test_ask_user_stops_loop_and_returns_question():
+    ctx = _ctx_for_agent()
+    fake = _FakeClient([
+        _resp([
+            _Text("That step isn't in your sources."),
+            _ToolUse("a1", "ask_user", {"prompt": "Add it anyway?",
+                     "options": [{"label": "Add it"}, {"label": "Skip it"}]}),
+        ]),
+    ])
+    result = _run_with_ctx(fake, ctx, user_message="add a QA step")
+    assert result.stop_reason == "ask_user"
+    assert result.question["prompt"] == "Add it anyway?"
+    assert [o["label"] for o in result.question["options"]] == ["Add it", "Skip it"]
+    assert "isn't in your sources" in result.answer
+
+
+def test_ask_user_carries_accumulated_proposals():
+    ctx = _ctx_for_agent()
+    fake = _FakeClient([
+        _resp([
+            _ToolUse("p1", "propose_changes", {"suggestions": [
+                {"kind": "relabel_node", "node_ref": "N1", "new_label": "Log invoice",
+                 "title": "Rename", "rationale": ""}]}),
+            _ToolUse("a1", "ask_user", {"prompt": "Also add QA?",
+                     "options": [{"label": "Yes"}, {"label": "No"}]}),
+        ]),
+    ])
+    result = _run_with_ctx(fake, ctx)
+    assert result.stop_reason == "ask_user"
+    assert result.question is not None
+    assert len(result.proposals) == 1
+
+
+def test_ask_user_tool_is_offered():
+    ctx = _ctx_for_agent()
+    fake = _FakeClient([_resp([_Text("ok")])])
+    _run_with_ctx(fake, ctx)
+    tool_names = {t["name"] for t in fake.calls[0]["tools"]}
+    assert "ask_user" in tool_names
+
+
 def test_proposals_survive_round_cap():
     ctx = _ctx_for_agent()
     # Round 1 proposes a valid op; then the model keeps calling tools until the

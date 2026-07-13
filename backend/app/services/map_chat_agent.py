@@ -198,6 +198,35 @@ PROPOSE_TOOL = {
     },
 }
 
+ASK_USER_TOOL = {
+    "name": "ask_user",
+    "description": (
+        "Pause and ask the analyst ONE clarifying question with 2-4 options, then "
+        "STOP. Use this INSTEAD of propose_changes when a change would contradict a "
+        "source-backed element, is not supported by the sources, or the command is "
+        "materially ambiguous. Do not also ask in prose. The analyst can always type "
+        "a free-form reply, so options need not be exhaustive."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string", "description": "The question to ask."},
+            "options": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "description": {"type": ["string", "null"]},
+                    },
+                    "required": ["label"],
+                },
+            },
+        },
+        "required": ["prompt", "options"],
+    },
+}
+
 _client: anthropic.Anthropic | None = None
 
 
@@ -222,6 +251,7 @@ class AgentResult:
     stop_reason: str = AgentRunStopReason.NORMAL.value
     proposals: list = field(default_factory=list)       # accepted ChatSuggestions
     group_summaries: list = field(default_factory=list)  # raw {id, summary} dicts
+    question: dict | None = None  # {prompt, options:[{label, description?}]} when the loop asked
 
 
 def assess_grounded(answer: str, cited_claim_refs: list) -> bool:
@@ -266,6 +296,23 @@ def _suggestion_index(s) -> int | None:
         return int(s.id.split("-")[1])
     except (IndexError, ValueError):
         return None
+
+
+def _normalize_question(inp: dict) -> dict:
+    """Coerce a raw ask_user input into a safe {prompt, options[]} dict:
+    a string prompt and up to 4 options, each with a non-empty label."""
+    prompt = str(inp.get("prompt") or "").strip()
+    options: list[dict] = []
+    for o in (inp.get("options") or [])[:4]:
+        if not isinstance(o, dict):
+            continue
+        label = str(o.get("label") or "").strip()
+        if not label:
+            continue
+        desc = o.get("description")
+        options.append({"label": label[:120],
+                        "description": (str(desc).strip()[:300] or None) if desc else None})
+    return {"prompt": prompt, "options": options}
 
 
 def _handle_propose(inp: dict, mapctx, proposals: list, raw_groups: list) -> tuple[dict, str]:
@@ -344,7 +391,7 @@ def run_chat_agent(
         )
     messages.append({"role": "user", "content": user_message})
 
-    tools = READ_TOOLS + [PROPOSE_TOOL]
+    tools = READ_TOOLS + [PROPOSE_TOOL, ASK_USER_TOOL]
 
     trace: list[dict] = []
     consulted: set = set()
@@ -374,7 +421,16 @@ def run_chat_agent(
         # is not silently updated by later rounds.
         messages = messages + [{"role": "assistant", "content": _assistant_content(resp.content)}]
         tool_results = []
+        ask_input = None
         for tu in tool_uses:
+            if tu.name == "ask_user":
+                ask_input = _normalize_question(dict(tu.input or {}))
+                trace.append({
+                    "tool": "ask_user",
+                    "summary": f"Asked: {ask_input['prompt'][:80]}",
+                    "detail": json.dumps(ask_input)[:4000],
+                })
+                continue
             if tu.name == "propose_changes":
                 pinput = dict(tu.input or {})
                 res, summary = _handle_propose(pinput, tool_ctx.mapctx, proposals, raw_groups)
@@ -393,6 +449,13 @@ def run_chat_agent(
                 "detail": json.dumps({"args": dict(tu.input or {}), "result": res})[:4000],
             })
             tool_results.append({"type": "tool_result", "tool_use_id": tu.id, "content": json.dumps(res)})
+
+        if ask_input is not None:
+            result.question = ask_input
+            result.answer = _text_of(resp.content)
+            result.stop_reason = AgentRunStopReason.ASK_USER.value
+            break
+
         messages = messages + [{"role": "user", "content": tool_results}]
 
         if in_tokens + out_tokens > MAX_TOKENS_BUDGET:
