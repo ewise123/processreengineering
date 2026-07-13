@@ -29,3 +29,8 @@ def test_agent_run_row_roundtrips(db):
     assert run.stop_reason == "normal"
     assert run.tool_calls[0]["tool"] == "search_claims"
     assert run.cited_claim_ids == ["11111111-1111-1111-1111-111111111111"]
+
+
+def test_ask_user_stop_reason_exists():
+    from app.enums import AgentRunStopReason
+    assert AgentRunStopReason.ASK_USER.value == "ask_user"
