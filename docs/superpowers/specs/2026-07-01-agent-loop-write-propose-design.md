@@ -53,7 +53,7 @@ Streaming/SSE (proposals still batch at loop end) · the rich "flow card" previe
 
 ### Flow
 
-```
+```text
 model → [read tools ...] → propose_changes(ops)
                               → handler resolves refs vs live map
                               → returns {accepted:[...], rejected:[{index,kind,error}]}

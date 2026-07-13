@@ -96,6 +96,8 @@ Rules for suggestions:
   its `lane_ref` to that SAME temp_id. Never reference a new lane by its name or
   its group — only by the add_lane's temp_id. (E.g. add_lane {temp_id: "tmp:1",
   name: "Approvals"} + move_to_lane {node_ref: "N4", lane_ref: "tmp:1"}.)
+- For a gateway's guard (set_edge_condition), set `edge_ref` to the outgoing flow
+  and put the guard text in `condition_text` (NOT `new_label`).
 - Emit a NEW object (add_node / add_lane) and EVERY op that references its temp
   id in the SAME propose_changes call. Temp ids do NOT carry across separate
   propose_changes calls — a consumer in a later call cannot see a producer from
@@ -158,6 +160,10 @@ PROPOSE_TOOL = {
                         "near_node_ref": {"type": ["string", "null"]},
                         "edge_label": {"type": ["string", "null"]},
                         "sub_steps": {"type": ["array", "null"], "items": {"type": "object"}},
+                        "condition_text": {
+                            "type": ["string", "null"],
+                            "description": "The guard/condition on a gateway's outgoing flow, e.g. \"amount > 10000\". Only for set_edge_condition.",
+                        },
                     },
                     "required": ["kind", "title", "rationale"],
                 },

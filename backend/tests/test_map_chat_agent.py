@@ -213,6 +213,26 @@ def test_suggest_instructions_are_in_the_system_prompt():
     assert "One suggestion per discrete change" in system
 
 
+def test_propose_tool_schema_exposes_condition_text():
+    # Regression: set_edge_condition requires condition_text (see SuggestionOp /
+    # _REQUIRED_BY_KIND), but the tool schema the model sees historically omitted
+    # it — the agent could never emit a valid set_edge_condition op.
+    props = map_chat_agent.PROPOSE_TOOL["input_schema"]["properties"]["suggestions"]["items"]["properties"]
+    assert "condition_text" in props
+    assert props["condition_text"]["type"] == ["string", "null"]
+
+
+def test_propose_tool_schema_exposes_every_suggestion_op_field():
+    # Every field SuggestionOp accepts (besides `kind`, which is handled
+    # separately as an enum) must appear in the tool schema the model sees, or
+    # the agent has no way to populate it.
+    from app.schemas.version_chat_suggest import SuggestionOp
+    schema_props = set(map_chat_agent.PROPOSE_TOOL["input_schema"]["properties"]["suggestions"]["items"]["properties"])
+    op_fields = set(SuggestionOp.model_fields) - {"kind"}
+    missing = op_fields - schema_props
+    assert not missing, f"SuggestionOp fields missing from PROPOSE_TOOL schema: {missing}"
+
+
 def test_accepted_verdict_carries_op_index():
     ctx = _ctx_for_agent()
     fake = _FakeClient([

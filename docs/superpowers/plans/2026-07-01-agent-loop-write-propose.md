@@ -114,7 +114,7 @@ Then, after the existing `if label_changed:` block (after line 1103), add:
             target_id=edge.id,
             model_id=model_id_for_version(db, edge.version_id),
             version_id=edge.version_id,
-            kind=ChangeKind.RELABEL.value,
+            kind=ChangeKind.SET_CONDITION.value,
             reason=payload.reason.strip(),
             before={"condition_text": old_condition},
             after={"condition_text": edge.condition_text},

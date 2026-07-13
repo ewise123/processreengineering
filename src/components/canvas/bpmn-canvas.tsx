@@ -900,12 +900,24 @@ function BpmnCanvas({
         }
         case "delete_lane": {
           const id = resolve(step.laneRef);
+          // Flush pending PATCHes so we don't fire a 404 against a deleted lane
+          // (mirrors the manual deleteLane callback).
+          await flush();
           await api.deleteLane(projectId, id, true);
           // Backend reassigns this lane's nodes to the first REMAINING lane (by order),
           // not to no lane — mirror it so local state matches the server and the
           // reassigned nodes keep rendering inside a real lane.
           const fallback = lanesRef.current.find((l) => l.id !== id);
           setLanes((curr) => recomputeY(curr.filter((l) => l.id !== id)));
+          // Drop the deleted lane from the collapse set so the (now persisted)
+          // set doesn't accumulate orphaned IDs over a long session (mirrors the
+          // manual deleteLane callback).
+          setCollapsedLaneIds((curr) => {
+            if (!curr.has(id)) return curr;
+            const next = new Set(curr);
+            next.delete(id);
+            return next;
+          });
           if (fallback) {
             setNodes((curr) => curr.map((n) => (n.laneId === id ? { ...n, laneId: fallback.id } : n)));
           }
@@ -931,6 +943,14 @@ function BpmnCanvas({
         }
       }
     },
+    // `flush` (from useGraphPersistence, declared below) is referenced in the
+    // delete_lane case above but intentionally omitted here: it's read inside
+    // the callback body only when runStep is invoked (after the full render
+    // completes), so including it in this literal would throw a
+    // ReferenceError (TDZ) on every render, since useGraphPersistence hasn't
+    // run yet at this point in the component body. `flush`'s identity is
+    // stable across renders (memoized on `projectId` alone, which is already
+    // a dep here), so omitting it does not cause staleness.
     [projectId, modelId, versionId, deleteNodeImpl, placeNewNode]
   );
 
