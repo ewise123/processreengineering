@@ -2067,8 +2067,13 @@ def _run_chat_agent(db, project, model_id, version, ctx, focus_refs, payload) ->
         prompt = _resolve_mention_refs(rq.get("prompt") or "", ctx)
         if not prompt:
             continue
-        opts = [AgentOption(label=_resolve_mention_refs(o["label"], ctx), description=o.get("description"))
-                for o in rq.get("options", []) if o.get("label")]
+        opts = [
+            AgentOption(
+                label=_resolve_mention_refs(o["label"], ctx),
+                description=_resolve_mention_refs(o["description"], ctx) if o.get("description") else None,
+            )
+            for o in rq.get("options", []) if o.get("label")
+        ]
         questions.append(AgentQuestion(prompt=prompt, options=opts))
     # Cards alone ARE the response; but when the agent asked, its prose explains why — show it.
     message = resolved if (questions or not suggestions) else ""

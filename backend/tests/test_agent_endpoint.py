@@ -100,7 +100,7 @@ def test_ask_user_questions_are_surfaced_and_mentions_resolved(db):
             answer="Need input.", trace=[], consulted_claim_ids=[], round_count=1,
             input_tokens=1, output_tokens=1, stop_reason="ask_user",
             questions=[{"prompt": f"Put it after [[{ref}]]?",
-                       "options": [{"label": "Yes", "description": None}]}],
+                       "options": [{"label": "Yes", "description": f"Add it after [[{ref}]]"}]}],
         )
 
     with _pytest.MonkeyPatch.context() as mp:
@@ -113,6 +113,9 @@ def test_ask_user_questions_are_surfaced_and_mentions_resolved(db):
     assert len(resp.questions) == 1
     assert "[[node:" in resp.questions[0].prompt and str(n1.id) in resp.questions[0].prompt
     assert resp.questions[0].options[0].label == "Yes"
+    # The option DESCRIPTION resolves refs too (so the UI can linkify them).
+    assert "[[node:" in resp.questions[0].options[0].description
+    assert str(n1.id) in resp.questions[0].options[0].description
 
 
 def test_ask_mode_agent_error_is_graceful_and_persisted(db):
