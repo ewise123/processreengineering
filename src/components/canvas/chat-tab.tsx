@@ -8,6 +8,7 @@ import { useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type {
   ActivityStep,
+  AgentQuestion,
   ChatSuggestion,
   ChatTurn,
   GroupSummary,
@@ -31,6 +32,8 @@ import { restoreAfterCancel, type PendingSend } from "./chat-cancel";
 import { bundleSuggestions, indexGraph, planBundle, type Bundle, type BundlePlan, type BatchResult } from "./suggestion-apply";
 import { bundleNewNames } from "./suggestion-display";
 import { SuggestionList, type CardStatus } from "./suggestion-card";
+import { assistantItemFromResponse } from "./chat-tab-helpers";
+import { QuestionBlock } from "./question-block";
 
 export type ChatItem = ChatTurn & {
   contextNote?: string;
@@ -45,6 +48,8 @@ export type ChatItem = ChatTurn & {
   activityTrace?: ActivityStep[];
   grounded?: boolean;
   runId?: string | null;
+  /** Present when this assistant turn asked a clarifying question (ask_user). */
+  question?: AgentQuestion;
 };
 
 const SUGGESTED_PROMPTS: string[] = [
@@ -209,17 +214,7 @@ export function ChatTab({
         { role: "user", content: vars.userMessage, contextNote: vars.note, contextRefs: vars.contextChips },
         // Carry this message's source mapping ON the message so it survives
         // reload and isn't lost when component state resets.
-        {
-          role: "assistant",
-          content: data.message,
-          sources: data.mention_sources,
-          suggestions: data.suggestions.length ? data.suggestions : undefined,
-          suggestionStatus: {},
-          groupSummaries: data.group_summaries.length ? data.group_summaries : undefined,
-          activityTrace: data.activity_trace ?? [],
-          grounded: data.grounded,
-          runId: data.run_id ?? null,
-        },
+        assistantItemFromResponse(data),
       ];
       sessionStore.save(versionId, next);
       setHistory(next);
@@ -447,6 +442,17 @@ export function ChatTab({
                     summaryById={summaryById}
                     errorById={bundleErrorById}
                     lanes={graph.lanes}
+                  />
+                )}
+                {m.role === "assistant" && m.question && (
+                  <QuestionBlock
+                    question={m.question}
+                    disabled={ask.isPending}
+                    onChoose={(value) => {
+                      if (value) submit(value);
+                      // empty value = the free-form affordance: leave the composer
+                      // for a typed reply (the input is always available).
+                    }}
                   />
                 )}
                 {m.role === "assistant" && m.activityTrace && m.activityTrace.length > 0 && (
