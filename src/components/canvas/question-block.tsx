@@ -34,9 +34,9 @@ export function QuestionBlock({
     <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 px-2.5 py-2">
       <p className="text-[11px] font-medium leading-snug text-slate-800">{question.prompt}</p>
       <div className="mt-1.5 flex flex-col gap-1">
-        {questionChoices(question).map((c) => (
+        {questionChoices(question).map((c, i) => (
           <button
-            key={c.label}
+            key={`${i}-${c.label}`}
             type="button"
             disabled={disabled}
             onClick={() => onChoose(c.value)}

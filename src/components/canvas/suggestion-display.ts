@@ -146,7 +146,9 @@ export type GroundingChip = { label: string } | null;
 export function groundingChip(
   s: Pick<ChatSuggestion, "cited_claim_ids" | "origin">,
 ): GroundingChip {
-  if ((s.cited_claim_ids?.length ?? 0) > 0) return null;
+  // "supported" is the same deterministic cited-claim check as isProposalGrounded —
+  // delegate so the two can't drift.
+  if (isProposalGrounded(s)) return null;
   if (s.origin === "ai_volunteered") return { label: "AI suggestion · not in your sources" };
   return { label: "Not in your sources" };
 }
