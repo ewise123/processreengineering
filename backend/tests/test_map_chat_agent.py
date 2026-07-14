@@ -382,6 +382,16 @@ def test_synthesis_can_still_propose():
     assert len(result.proposals) == 1
 
 
+def test_synthesis_propose_adds_trace_entry():
+    ctx = _ctx_for_agent()
+    rounds = [_resp([_ToolUse(f"t{i}", "find_node", {"query": "x"})]) for i in range(map_chat_agent.MAX_ROUNDS)]
+    rounds += [_resp([_ToolUse("p1", "propose_changes", {"suggestions": [
+        {"kind": "relabel_node", "node_ref": "N1", "new_label": "Log", "title": "Rename", "rationale": ""}]})])]
+    fake = _FakeClient(rounds)
+    result = _run_with_ctx(fake, ctx)
+    assert any(t["tool"] == "propose_changes" for t in result.trace)
+
+
 def test_synthesis_turn_offers_only_propose_tool():
     ctx = _ctx_for_agent()
     rounds = [_resp([_ToolUse(f"t{i}", "find_node", {"query": "x"})])

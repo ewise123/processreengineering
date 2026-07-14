@@ -473,7 +473,7 @@ def run_chat_agent(
 
         if in_tokens + out_tokens > MAX_TOKENS_BUDGET:
             ans, syn_in, syn_out = _graceful_synthesis(
-                client, system, messages, tool_ctx=tool_ctx, proposals=proposals, raw_groups=raw_groups)
+                client, system, messages, tool_ctx=tool_ctx, proposals=proposals, raw_groups=raw_groups, trace=trace)
             result.answer = ans
             in_tokens += syn_in
             out_tokens += syn_out
@@ -481,7 +481,7 @@ def run_chat_agent(
             break
         if time.monotonic() > deadline:
             ans, syn_in, syn_out = _graceful_synthesis(
-                client, system, messages, tool_ctx=tool_ctx, proposals=proposals, raw_groups=raw_groups)
+                client, system, messages, tool_ctx=tool_ctx, proposals=proposals, raw_groups=raw_groups, trace=trace)
             result.answer = ans
             in_tokens += syn_in
             out_tokens += syn_out
@@ -489,7 +489,7 @@ def run_chat_agent(
             break
     else:
         ans, syn_in, syn_out = _graceful_synthesis(
-            client, system, messages, tool_ctx=tool_ctx, proposals=proposals, raw_groups=raw_groups)
+            client, system, messages, tool_ctx=tool_ctx, proposals=proposals, raw_groups=raw_groups, trace=trace)
         result.answer = ans
         in_tokens += syn_in
         out_tokens += syn_out
@@ -504,7 +504,7 @@ def run_chat_agent(
     return result
 
 
-def _graceful_synthesis(client, system: str, messages: list[dict], *, tool_ctx, proposals: list, raw_groups: list) -> tuple[str, int, int]:
+def _graceful_synthesis(client, system: str, messages: list[dict], *, tool_ctx, proposals: list, raw_groups: list, trace: list) -> tuple[str, int, int]:
     """Final turn with ONLY propose_changes (no read tools): emit any grounded
     changes gathered so far, then answer with what's verified. Returns
     (answer_text, input_tokens, output_tokens)."""
@@ -515,7 +515,13 @@ def _graceful_synthesis(client, system: str, messages: list[dict], *, tool_ctx, 
     )
     for b in resp.content:
         if getattr(b, "type", None) == "tool_use" and b.name == "propose_changes":
-            _handle_propose(dict(b.input or {}), tool_ctx.mapctx, proposals, raw_groups)
+            pinput = dict(b.input or {})
+            res, summary = _handle_propose(pinput, tool_ctx.mapctx, proposals, raw_groups)
+            trace.append({
+                "tool": "propose_changes",
+                "summary": summary,
+                "detail": json.dumps({"args": pinput, "result": res})[:4000],
+            })
     in_tok = getattr(resp.usage, "input_tokens", 0) or 0
     out_tok = getattr(resp.usage, "output_tokens", 0) or 0
     return (_text_of(resp.content) or "(no response)", in_tok, out_tok)
