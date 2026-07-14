@@ -70,26 +70,34 @@ export function QuestionSet({
               <div className="mt-1.5 flex flex-col gap-1">
                 {q.options.map((o, oi) => {
                   const isSel = chosen === o.label.trim();
+                  // The description can carry mention links, so it renders as a
+                  // SIBLING of the select button (not nested inside it) — a link
+                  // is interactive and must not sit inside a <button>, nor should
+                  // clicking it bubble up and select the option.
                   return (
-                    <button
+                    <div
                       key={oi}
-                      type="button"
-                      aria-pressed={isSel}
-                      onClick={() => pick(i, o.label)}
                       className={
-                        "rounded border px-2 py-1 text-left text-[11px] font-medium " +
+                        "rounded border " +
                         (isSel
-                          ? "border-indigo-500 bg-indigo-100 text-indigo-900 ring-1 ring-indigo-400"
-                          : "border-indigo-200 bg-white text-indigo-800 hover:bg-indigo-100")
+                          ? "border-indigo-500 bg-indigo-100 ring-1 ring-indigo-400"
+                          : "border-indigo-200 bg-white hover:bg-indigo-50")
                       }
                     >
-                      {renderText(o.label)}
+                      <button
+                        type="button"
+                        aria-pressed={isSel}
+                        onClick={() => pick(i, o.label)}
+                        className="block w-full rounded px-2 py-1 text-left text-[11px] font-medium text-indigo-800"
+                      >
+                        {renderText(o.label)}
+                      </button>
                       {o.description ? (
-                        <span className="block text-[10px] font-normal text-slate-500">
+                        <div className="px-2 pb-1 text-[10px] font-normal text-slate-500">
                           {renderText(o.description)}
-                        </span>
+                        </div>
                       ) : null}
-                    </button>
+                    </div>
                   );
                 })}
                 <div className="flex items-center gap-1">

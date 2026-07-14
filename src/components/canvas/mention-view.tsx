@@ -72,7 +72,10 @@ export function MentionMarkdown({
             return (
               <button
                 type="button"
-                onClick={() => onNavigate({ kind, id })}
+                // Stop the click from bubbling to a clickable ancestor (e.g. a
+                // question option that also selects on click) — navigating a
+                // mention link must not double as selecting its container.
+                onClick={(e) => { e.stopPropagation(); onNavigate({ kind, id }); }}
                 className="mx-0.5 inline rounded border border-indigo-200 bg-indigo-50 px-1 font-medium text-indigo-700 hover:bg-indigo-100"
                 title={kind === "node" ? "Jump to this step" : "Jump to this connection"}
               >
@@ -95,7 +98,7 @@ export function MentionMarkdown({
             return (
               <button
                 type="button"
-                onClick={() => tgt && onOpenSource(tgt)}
+                onClick={(e) => { e.stopPropagation(); tgt && onOpenSource(tgt); }}
                 className="mx-0.5 inline rounded border border-slate-300 bg-white px-1 text-slate-600 hover:bg-slate-100"
                 title={tgt ? `Open ${tgt.inputName}` : "Source"}
               >
