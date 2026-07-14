@@ -207,3 +207,18 @@ in a source; otherwise it asks first. Covers worklist #1, #2, #8, #10, #11, #13.
 
 **Deferred (unchanged):** #12b exact-quote claims (coordinate w/ prov-v2), #15 richer Change Log, #16
 server-derived ai_applied.
+
+---
+
+## Batch 3 outcome (2026-07-14) — browser-pass fixes + ask_user multi-question redesign
+
+Pushed to PR #46 (`3814f5f..86a6634`, 6 commits, MERGE HELD). Plan: `docs/superpowers/plans/2026-07-14-ask-user-multiquestion-and-fixes.md`. Built via subagent-driven-development (backend 359 / frontend 205 / tsc / build green; QuestionSet got an independent code-quality review that caught a version-switch state-leak, fixed).
+
+From the browser pass:
+- **ask_user is now MULTI-QUESTION.** The loop collects every `ask_user` call in a turn → `result.questions: list`; endpoint returns `ChatSuggestResponse.questions: list[AgentQuestion]` and resolves `[[N7]]`→`[[node:uuid]]` in each prompt + option label. Frontend `QuestionSet` (renamed from QuestionBlock): each question shows options + a **text input for a custom answer**; answering **locks** that question (options/input unmount); when ALL are answered a **"Send answers"** button composes them (restating Q+A) into one message and sends; submit marks the message `questionsAnswered` (persisted) so it stays locked. Messages now keyed by `versionId+index` so per-message local state can't leak across version switches.
+- **Question refs render as links** — fixed backend (resolve mentions in question text, prior bug: not run through `_resolve_mention_refs`) + frontend (render via the chat's `renderText`). Live-confirmed: an ambiguous-rename question's options carried `[[node:uuid]]` links.
+- **Prompt nudges**: model may batch multiple ask_user calls; must bracket refs in questions; when inserting a step, rewire BOTH sides (remove original edge + add edge in AND out) — addresses the browser-observed dangling-insertion (prompt variance; not deterministically reproducible via API).
+- **CodeRabbit**: `_graceful_synthesis` now emits a trace entry (fixed). delete_lane flush/prune already fixed in Batch 1; doc nits already resolved; `ai_applied` client-trust deferred as #16. Triage posted on the PR.
+
+### FOLLOW-UP (tracked, NOT started) — deletes should require a reason
+User asked (2026-07-14): deleting a step/edge/lane currently needs no reason, but lane-*moves* do — inconsistent, and a delete is the most provenance-critical edit. **Decision: require a reason on delete (node/edge/lane), as its OWN small change/PR — NOT mixed into #46.** Ties to [[future_delete_consequences]] (the richer impact-preview/gap-marking delete UX the user wants later). Backend already requires a reason for relane (`process_maps.py`); mirror for delete + wire a reason prompt into the manual delete flow (panel + Delete key).
