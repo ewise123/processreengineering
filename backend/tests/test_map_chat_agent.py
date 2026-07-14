@@ -233,6 +233,16 @@ def test_suggest_instructions_cover_gate_and_ask_and_op_selection():
     assert "cite the support" in system.lower()
 
 
+def test_prompt_covers_batch_questions_bracket_refs_and_insertion():
+    ctx = _ctx_for_agent()
+    fake = _FakeClient([_resp([_Text("ok")])])
+    _run_with_ctx(fake, ctx)
+    system = fake.calls[0]["system"]
+    assert "multiple ask_user" in system.lower() or "more than one clarifying" in system.lower()
+    assert "bracket" in system.lower()  # refs in questions must be bracketed
+    assert "insert" in system.lower() and "both" in system.lower()  # rewire both sides
+
+
 def test_propose_tool_schema_exposes_condition_text():
     # Regression: set_edge_condition requires condition_text (see SuggestionOp /
     # _REQUIRED_BY_KIND), but the tool schema the model sees historically omitted

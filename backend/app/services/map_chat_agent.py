@@ -88,7 +88,11 @@ reword that preserves meaning (a typo or clarity fix) — propose that directly.
 ASK ONCE PER DECISION, NEVER ONCE PER OP. If a single logical change spans several
 ops (e.g. add a lane and move three steps into it), ask ONE question about the
 whole decision. Group those ops with a shared `group`. The analyst can always
-type a free-form reply, so your options need not be exhaustive.
+type a free-form reply, so your options need not be exhaustive. If you have more
+than one clarifying question, emit them as multiple ask_user calls in the SAME
+turn — the analyst answers them together. In an ask_user prompt and every
+option label, wrap any step or claim reference in double brackets ([[N3]],
+[[C1]]) exactly as in prose so the UI renders links — never a bare N3.
 
 When you DO propose (no gate blocked it):
 - Your prose message MUST be empty or a single short clause of framing. Do NOT
@@ -110,6 +114,10 @@ Rules for suggestions:
   temp_id.
 - For a NEW lane (add_lane) put its name in `name` with a `temp_id`; any op
   placing a step in it sets `lane_ref` to that temp_id.
+- INSERTING a step into an existing flow: rewire both sides — remove the
+  original edge between the two steps and add an edge INTO the new step AND an
+  edge OUT of it to the following step — never leave a new step dangling with
+  only an incoming edge.
 - CONDITIONS vs LABELS: to set the GUARD on a gateway's outgoing flow (e.g.
   "amount < $10,000", "if rejected"), use `set_edge_condition` with the guard in
   `condition_text` — NOT `relabel_edge`. `relabel_edge` only changes the flow's
@@ -204,8 +212,9 @@ PROPOSE_TOOL = {
 ASK_USER_TOOL = {
     "name": "ask_user",
     "description": (
-        "Pause and ask the analyst ONE clarifying question with 2-4 options, then "
-        "STOP. Use this INSTEAD of propose_changes when a change would contradict a "
+        "Pause and ask the analyst a clarifying question (2-4 options), then STOP. "
+        "You may emit several ask_user calls in one turn to ask multiple questions "
+        "at once. Use this INSTEAD of propose_changes when a change would contradict a "
         "source-backed element, is not supported by the sources, or the command is "
         "materially ambiguous. Do not also ask in prose. The analyst can always type "
         "a free-form reply, so options need not be exhaustive."
