@@ -65,6 +65,7 @@ export function QuestionSet({
                   type="text"
                   value={drafts[i] ?? ""}
                   disabled={locked(i)}
+                  aria-label="Type a custom answer"
                   placeholder="Or type your own answer…"
                   onChange={(e) => setDrafts((curr) => ({ ...curr, [i]: e.target.value }))}
                   onKeyDown={(e) => { if (e.key === "Enter") setAnswer(i, drafts[i] ?? ""); }}

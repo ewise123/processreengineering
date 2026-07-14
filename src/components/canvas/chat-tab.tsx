@@ -394,7 +394,7 @@ export function ChatTab({
           // User turns render right-aligned with no avatar.
           if (m.role !== "assistant") {
             return (
-              <ChatMsg key={i} turn={m} labelById={labelById} onNavigate={onNavigate} onOpenSource={onOpenSource} />
+              <ChatMsg key={`${versionId}-${i}`} turn={m} labelById={labelById} onNavigate={onNavigate} onOpenSource={onOpenSource} />
             );
           }
           // Assistant turns: one ✨ avatar fronting the prose bubble (if any) and
@@ -427,7 +427,7 @@ export function ChatTab({
           );
           const summaryById = new Map((m.groupSummaries ?? []).map((g) => [g.id, g.summary]));
           return (
-            <div key={i} className="flex items-start gap-2">
+            <div key={`${versionId}-${i}`} className="flex items-start gap-2">
               <Sparkles size={16} className="mt-1 flex-shrink-0 text-indigo-500" />
               <div className="min-w-0 flex-1 space-y-1.5">
                 <ChatMsg turn={m} labelById={labelById} onNavigate={onNavigate} onOpenSource={onOpenSource} />
