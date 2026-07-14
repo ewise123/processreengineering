@@ -254,7 +254,7 @@ class AgentResult:
     stop_reason: str = AgentRunStopReason.NORMAL.value
     proposals: list = field(default_factory=list)       # accepted ChatSuggestions
     group_summaries: list = field(default_factory=list)  # raw {id, summary} dicts
-    question: dict | None = None  # {prompt, options:[{label, description?}]} when the loop asked
+    questions: list = field(default_factory=list)  # [{prompt, options:[{label, description?}]}] when the loop asked
 
 
 def assess_grounded(answer: str, cited_claim_refs: list) -> bool:
@@ -424,10 +424,11 @@ def run_chat_agent(
         # is not silently updated by later rounds.
         messages = messages + [{"role": "assistant", "content": _assistant_content(resp.content)}]
         tool_results = []
-        ask_input = None
+        ask_inputs: list = []
         for tu in tool_uses:
             if tu.name == "ask_user":
                 ask_input = _normalize_question(dict(tu.input or {}))
+                ask_inputs.append(ask_input)
                 trace.append({
                     "tool": "ask_user",
                     "summary": f"Asked: {ask_input['prompt'][:80]}",
@@ -453,8 +454,8 @@ def run_chat_agent(
             })
             tool_results.append({"type": "tool_result", "tool_use_id": tu.id, "content": json.dumps(res)})
 
-        if ask_input is not None:
-            result.question = ask_input
+        if ask_inputs:
+            result.questions = ask_inputs
             result.answer = _text_of(resp.content)
             result.stop_reason = AgentRunStopReason.ASK_USER.value
             break

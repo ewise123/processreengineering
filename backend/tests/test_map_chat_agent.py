@@ -278,8 +278,8 @@ def test_ask_user_stops_loop_and_returns_question():
     ])
     result = _run_with_ctx(fake, ctx, user_message="add a QA step")
     assert result.stop_reason == "ask_user"
-    assert result.question["prompt"] == "Add it anyway?"
-    assert [o["label"] for o in result.question["options"]] == ["Add it", "Skip it"]
+    assert result.questions[0]["prompt"] == "Add it anyway?"
+    assert [o["label"] for o in result.questions[0]["options"]] == ["Add it", "Skip it"]
     assert "isn't in your sources" in result.answer
 
 
@@ -296,8 +296,28 @@ def test_ask_user_carries_accumulated_proposals():
     ])
     result = _run_with_ctx(fake, ctx)
     assert result.stop_reason == "ask_user"
-    assert result.question is not None
+    assert len(result.questions) == 1
     assert len(result.proposals) == 1
+
+
+def test_multiple_ask_user_calls_collected_as_questions():
+    ctx = _ctx_for_agent()
+    fake = _FakeClient([
+        _resp([
+            _ToolUse("a1", "ask_user", {"prompt": "Which lane?", "options": [{"label": "Finance"}]}),
+            _ToolUse("a2", "ask_user", {"prompt": "Before or after N1?", "options": [{"label": "After"}]}),
+        ]),
+    ])
+    result = _run_with_ctx(fake, ctx)
+    assert result.stop_reason == "ask_user"
+    assert [q["prompt"] for q in result.questions] == ["Which lane?", "Before or after N1?"]
+
+
+def test_single_ask_user_still_one_question():
+    ctx = _ctx_for_agent()
+    fake = _FakeClient([_resp([_ToolUse("a1", "ask_user", {"prompt": "Add anyway?", "options": [{"label": "Yes"}]})])])
+    result = _run_with_ctx(fake, ctx)
+    assert len(result.questions) == 1
 
 
 def test_ask_user_tool_is_offered():

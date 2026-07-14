@@ -172,4 +172,4 @@ class ChatSuggestResponse(BaseModel):
     activity_trace: list[ActivityStep] = Field(default_factory=list)
     run_id: UUID | None = None
     grounded: bool = True
-    question: AgentQuestion | None = None
+    questions: list[AgentQuestion] = Field(default_factory=list)
