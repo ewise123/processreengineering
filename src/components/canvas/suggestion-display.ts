@@ -140,16 +140,15 @@ export function isProposalGrounded(s: Pick<ChatSuggestion, "cited_claim_ids">): 
 export type GroundingChip = { label: string } | null;
 
 /** The grounding chip to show on a proposed change, or null for none.
- * A change that cites a claim is "supported" (deterministic) → no chip. An
- * uncited change is flagged regardless of who initiated it; the copy differs by
- * origin: the agent volunteered it vs the user directly asked for it. */
+ * Fully deterministic: a change that cites a source claim is "supported" → no
+ * chip; an uncited change is flagged "not in your sources", regardless of who
+ * asked for it (the model can't self-declare a change grounded). */
 export function groundingChip(
-  s: Pick<ChatSuggestion, "cited_claim_ids" | "origin">,
+  s: Pick<ChatSuggestion, "cited_claim_ids">,
 ): GroundingChip {
-  // "supported" is the same deterministic cited-claim check as isProposalGrounded —
-  // delegate so the two can't drift.
+  // Same deterministic cited-claim check as isProposalGrounded — delegate so the
+  // two can't drift.
   if (isProposalGrounded(s)) return null;
-  if (s.origin === "ai_volunteered") return { label: "AI suggestion · not in your sources" };
   return { label: "Not in your sources" };
 }
 

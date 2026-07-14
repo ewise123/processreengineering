@@ -184,15 +184,9 @@ describe("groundingChip", () => {
        rationale: "", cited_claim_ids: [], ...over }) as ChatSuggestion;
 
   it("returns null when the change cites a claim (supported)", () => {
-    expect(groundingChip(s({ cited_claim_ids: ["c1" as never], origin: "ai_volunteered" }))).toBeNull();
+    expect(groundingChip(s({ cited_claim_ids: ["c1" as never] }))).toBeNull();
   });
-  it("labels a user-directed uncited change 'Not in your sources'", () => {
-    expect(groundingChip(s({ origin: "user_directed" }))?.label).toBe("Not in your sources");
-  });
-  it("labels an AI-volunteered uncited change as an AI suggestion", () => {
-    expect(groundingChip(s({ origin: "ai_volunteered" }))?.label).toBe("AI suggestion · not in your sources");
-  });
-  it("defaults an uncited change with no origin to 'Not in your sources'", () => {
+  it("flags an uncited change 'Not in your sources' regardless of who asked", () => {
     expect(groundingChip(s({}))?.label).toBe("Not in your sources");
   });
 });

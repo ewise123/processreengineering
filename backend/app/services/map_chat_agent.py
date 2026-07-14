@@ -95,10 +95,11 @@ When you DO propose (no gate blocked it):
   restate the proposed content (label, description, new step) in prose — the
   card shows it. NEVER ask whether to apply/proceed/confirm — the card's
   Apply/Dismiss is the only confirmation.
-- Set `origin` ONLY on a change that cites no claim: `user_directed` if the
-  analyst explicitly commanded this exact change, `ai_volunteered` if you are
-  suggesting it beyond what they asked. A change that cites a claim needs no
-  origin.
+- CITE THE SUPPORT: whenever a claim backs the change, you MUST list it in
+  `cited_claim_refs` (search the claims first if you're unsure one exists). An
+  uncited change is flagged "not in your sources" on the card, so cite whenever
+  support exists — this matters as much for set_edge_condition and moves as for
+  new steps.
 
 Rules for suggestions:
 - One suggestion per discrete change. Give each a short imperative `title`.
@@ -175,16 +176,6 @@ PROPOSE_TOOL = {
                         "condition_text": {
                             "type": ["string", "null"],
                             "description": "The guard/condition on a gateway's outgoing flow, e.g. \"amount > 10000\". Only for set_edge_condition.",
-                        },
-                        "origin": {
-                            "type": ["string", "null"],
-                            "enum": ["user_directed", "ai_volunteered", None],
-                            "description": (
-                                "Only set when the change cites NO source claim. "
-                                "'user_directed' = the analyst explicitly commanded this exact change; "
-                                "'ai_volunteered' = you are suggesting it beyond what they asked and the "
-                                "sources say. A change that cites a claim needs no origin."
-                            ),
                         },
                     },
                     "required": ["kind", "title", "rationale"],

@@ -229,8 +229,8 @@ def test_suggest_instructions_cover_gate_and_ask_and_op_selection():
     # op-selection: set_edge_condition guard vs relabel_edge label
     assert "set_edge_condition" in system and "relabel_edge" in system
     assert "guard" in system.lower()
-    # origin guidance
-    assert "user_directed" in system and "ai_volunteered" in system
+    # cite-when-supported nudge (replaces the old origin guidance)
+    assert "cite the support" in system.lower()
 
 
 def test_propose_tool_schema_exposes_condition_text():

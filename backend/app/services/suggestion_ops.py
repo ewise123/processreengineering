@@ -115,9 +115,6 @@ def _build_suggestion_op(raw: dict, ctx, index: int):
 
     # Resolve [[N3]]/[[C1]] mentions in title + rationale into [[kind:uuid]] the
     # same way prose is resolved, so the UI renders named, clickable links there.
-    raw_origin = raw.get("origin")
-    origin = raw_origin if raw_origin in ("user_directed", "ai_volunteered") else None
-
     return ChatSuggestion(
         id=f"sg-{index}-{uuid4().hex[:8]}",
         group=group,
@@ -127,7 +124,6 @@ def _build_suggestion_op(raw: dict, ctx, index: int):
         rationale=_resolve_mention_refs(str(raw.get("rationale") or ""), ctx)[:2000],
         cited_claim_ids=_resolve_refs(raw.get("cited_claim_refs"), ctx.claim_ref_to_id),
         before_label=_rename_before_label(op.kind, real_id_by_field, ctx),
-        origin=origin,
     )
 
 
