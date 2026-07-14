@@ -162,3 +162,48 @@ CodeRabbit (PR #46) flagged that `ai_applied` is a client-supplied boolean on th
 
 ### FUTURE — richer Change Log entries (#15, tracked 2026-07-13, not now)
 Change Log entries render only the kind + reason (e.g. "Relane" + "Test") — they don't show the **before → after** context (origin lane → destination lane, old name → new name, old type → new type, etc.). The data ALREADY exists: `change_events.before`/`after` (JSONB) capture the old/new values per changed field (e.g. relane stores `before={lane_id: old}`, `after={lane_id: new}`). So this is a **frontend rendering enhancement** in `change-entry.tsx`: resolve the before/after values (lane_id → lane name, type enum → label, etc.) and show the transition. Generalizes across kinds — relane (lane names), relabel (name old→new), retype (type old→new), describe, set_condition, connect/reconnect (endpoints), delete. Also consider resolving UUIDs in `before`/`after` to human labels. Likely coordinate with the prov-v2 event-stream work since it touches the same records.
+
+---
+
+## Batch 2 outcome (2026-07-14) — converse/ask/propose redesign, built + reviewed
+
+Spec: `docs/superpowers/specs/2026-07-13-agent-loop-converse-ask-propose-design.md`.
+Plan: `docs/superpowers/plans/2026-07-13-agent-loop-converse-ask-propose.md` (11 TDD tasks).
+Built via subagent-driven-development (fresh implementer + review per task); backend 355 / frontend
+207 / tsc / next build all green; final whole-branch review = ship. NOT pushed/merged (holding per
+the merge freeze; PR #46 update pending user OK).
+
+**Governing principle shipped:** the agent proposes a content change directly ONLY when it's grounded
+in a source; otherwise it asks first. Covers worklist #1, #2, #8, #10, #11, #13.
+
+- **#11 ask_user tool** — a TERMINAL tool: when the model calls it, `run_chat_agent` stops and returns
+  a `question` ({prompt, options}); grounded proposals accumulated earlier in the same turn ride along.
+  Stateless resume — the user's answer is sent as the next ordinary message; the model continues from
+  history. `_normalize_question` hardens malformed input (blank→generic fallback prompt; caps prompt
+  2000 / label 120 / desc 300 / 4 options). New `AgentRunStopReason.ASK_USER`. Frontend `QuestionBlock`
+  renders the question + a trailing "Something else — I'll explain" free-form affordance; the chat input
+  stays live throughout.
+- **#1 grounding gate** (SUGGEST_INSTRUCTIONS rewrite): supported→propose+cite; contradicts→ask;
+  no-support→ask; materially-ambiguous→ask (high bar). Gate applies to every assertion-changing op
+  (only a meaning-preserving reword skips it). Anti-nag: ask ONCE per logical decision/group, not per op.
+- **#2/#10 grounding chip** — `supported` is deterministic (cites a claim → no chip). An uncited change
+  is flagged either way; copy varies by model-set `origin`: "Not in your sources" (user_directed) vs
+  "AI suggestion · not in your sources" (ai_volunteered). #10 false-positive dissolves because the gate
+  forces investigation-before-proposing, so supported changes now actually carry citations.
+- **#13 synthesis-can-propose** — the budget-capped graceful-synthesis turn now keeps `propose_changes`
+  (drops read tools) and its tokens are counted; MAX_ROUNDS 6→8. It offers no ask_user, so an unverified
+  change is omitted (not silently proposed) under budget — gate preserved.
+- **#8 op-selection** — instructions now distinguish `set_edge_condition` (guard → condition_text) from
+  `relabel_edge` (display label). Schema exposure + edge-condition render were done in Batch 1.
+
+**Watch items for the live pass (accepted, not code defects):**
+- Stateless resume could in principle re-ask; the answer + prior prose sit in history to anchor against
+  it. If a re-ask loop appears, add an explicit "if you already asked and they answered, honor it" line
+  to AGENT_INSTRUCTIONS.
+- Prose + QuestionBlock render as siblings; if the model puts the same question text in both, the user
+  sees it twice — prompt-tuning nit to confirm live.
+- A `question` persisted on an OLDER assistant turn stays rendered/clickable after the conversation moved
+  on (clicking just sends a normal message — harmless; suppress only if it reads as confusing).
+
+**Deferred (unchanged):** #12b exact-quote claims (coordinate w/ prov-v2), #15 richer Change Log, #16
+server-derived ai_applied.
