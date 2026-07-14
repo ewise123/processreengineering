@@ -22,6 +22,7 @@ import { MentionMarkdown } from "./mention-view";
 import { traceHeaderLabel } from "./agent-trace";
 import {
   buildSendContext,
+  pruneMissingContext,
   selectionChips,
   type ContextChip,
   type SelectedObject,
@@ -178,6 +179,17 @@ export function ChatTab({
     // changes, hence the narrowed dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIdsKey]);
+
+  // Prune attached context whose object was deleted from the map, so a stale
+  // chip doesn't linger (and a deleted node isn't sent as context). Keyed on the
+  // live node/edge id sets.
+  const existingObjectIdsKey =
+    graph.nodes.map((n) => n.id).join("|") + "#" + graph.edges.map((e) => e.id).join("|");
+  useEffect(() => {
+    const ids = new Set<string>([...graph.nodes.map((n) => n.id), ...graph.edges.map((e) => e.id)]);
+    setChatContext((curr) => pruneMissingContext(curr, ids));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingObjectIdsKey]);
 
   const chips = selectionChips(chatContext, labelById);
 

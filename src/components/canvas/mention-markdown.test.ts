@@ -113,6 +113,21 @@ describe("mentionsToMarkdown", () => {
       );
     });
 
+    it("collapses the comma run left when a same-source citation list is deduped", () => {
+      const cited = [source({ claim_id: C, input_id: D }), source({ claim_id: C2, input_id: D })];
+      const out = mentionsToMarkdown(
+        `[[claim:${C}]], [[claim:${C2}]], [[claim:${C}]], and all state that X.`,
+        labels,
+        sourceNames,
+        undefined,
+        undefined,
+        cited
+      );
+      // No ", ," artifact from the dropped duplicates, and one clean chip remains.
+      expect(out).not.toMatch(/,\s*,/);
+      expect(out).toBe(`[interview.txt](poet://claim/${C}), and all state that X.`);
+    });
+
     it("leaves claim mentions untouched when no sources list is passed (back-compat)", () => {
       expect(mentionsToMarkdown(`[[claim:${C}]] [[claim:${C2}]]`, labels, sourceNames)).toBe(
         `[interview.txt](poet://claim/${C}) [interview.txt](poet://claim/${C2})`

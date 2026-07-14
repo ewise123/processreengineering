@@ -61,7 +61,7 @@ export function mentionsToMarkdown(
   // Fresh per call: which documents this one `text` has already rendered a
   // citation link for. Never seeded from anything outside this call.
   const seenDocKeys = new Set<string>();
-  return text.replace(MENTION_RE, (matched: string, kind: string, id: string) => {
+  const rendered = text.replace(MENTION_RE, (matched: string, kind: string, id: string) => {
     const trailing = /\s$/.test(matched) ? " " : "";
     if (kind === "node") {
       const label = escapeLabel(labelById.get(id) ?? "step");
@@ -94,4 +94,9 @@ export function mentionsToMarkdown(
     }
     return "";
   });
+  // The dedupe above drops duplicate same-document citation chips but leaves the
+  // separators that were between them, e.g. "ap-sop.txt, , , and all state …".
+  // Collapse any run of consecutive commas back to one (consecutive commas are
+  // never legitimate prose), so a collapsed citation list reads cleanly.
+  return rendered.replace(/,(\s*,)+\s*/g, ", ");
 }

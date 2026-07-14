@@ -21,6 +21,18 @@ export function selectionToContextRefs(selected: SelectedObject[]): ObjectRef[] 
     .map((s) => ({ kind: "node" as const, id: s.id }));
 }
 
+/** Drop attached objects whose id is no longer on the map — e.g. the user
+ * selected a node as chat context, then deleted it. Without this, a stale chip
+ * lingers in the Context tab and the deleted node would still be sent as
+ * grounding context. Returns the same array reference when nothing changed. */
+export function pruneMissingContext(
+  selected: SelectedObject[],
+  existingIds: Set<UUID>
+): SelectedObject[] {
+  const kept = selected.filter((s) => existingIds.has(s.id));
+  return kept.length === selected.length ? selected : kept;
+}
+
 /** Display chips shown in the context tab for every attached object. */
 export function selectionChips(
   selected: SelectedObject[],

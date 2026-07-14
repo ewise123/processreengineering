@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { selectionToContextRefs, selectionChips, buildSendContext } from "./chat-context";
+import { selectionToContextRefs, selectionChips, buildSendContext, pruneMissingContext } from "./chat-context";
 
 const NODE = { id: "n1", kind: "node" as const, name: "Review Invoice" };
 const EDGE = { id: "e1", kind: "edge" as const };
@@ -69,5 +69,15 @@ describe("buildSendContext", () => {
     const second = buildSendContext([], labelById);
     expect(first.refs).toEqual([{ kind: "node", id: "n1" }]);
     expect(second.refs).toEqual([]);
+  });
+});
+
+describe("pruneMissingContext", () => {
+  it("drops attached objects whose id is no longer on the map", () => {
+    expect(pruneMissingContext([NODE, EDGE], new Set(["e1"]))).toEqual([EDGE]);
+  });
+  it("returns the same reference when nothing was pruned", () => {
+    const sel = [NODE, EDGE];
+    expect(pruneMissingContext(sel, new Set(["n1", "e1"]))).toBe(sel);
   });
 });
