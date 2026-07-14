@@ -460,8 +460,8 @@ export interface ChatSuggestResponse {
   activity_trace?: ActivityStep[];
   run_id?: string | null;
   grounded?: boolean;
-  /** Present when the agent stopped to ask a clarifying question (ask_user). */
-  question?: AgentQuestion | null;
+  /** Present when the agent stopped to ask one or more clarifying questions. */
+  questions?: AgentQuestion[];
 }
 
 export interface ProcessMapGenerateRequest {

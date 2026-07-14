@@ -33,7 +33,7 @@ import { bundleSuggestions, indexGraph, planBundle, type Bundle, type BundlePlan
 import { bundleNewNames } from "./suggestion-display";
 import { SuggestionList, type CardStatus } from "./suggestion-card";
 import { assistantItemFromResponse } from "./chat-tab-helpers";
-import { QuestionBlock } from "./question-block";
+import { QuestionSet } from "./question-set";
 
 export type ChatItem = ChatTurn & {
   contextNote?: string;
@@ -48,8 +48,10 @@ export type ChatItem = ChatTurn & {
   activityTrace?: ActivityStep[];
   grounded?: boolean;
   runId?: string | null;
-  /** Present when this assistant turn asked a clarifying question (ask_user). */
-  question?: AgentQuestion;
+  /** Present when this assistant turn asked one or more clarifying questions. */
+  questions?: AgentQuestion[];
+  /** Set once the user has submitted answers to `questions` (locks the set). */
+  questionsAnswered?: boolean;
 };
 
 const SUGGESTED_PROMPTS: string[] = [
@@ -444,14 +446,19 @@ export function ChatTab({
                     lanes={graph.lanes}
                   />
                 )}
-                {m.role === "assistant" && m.question && (
-                  <QuestionBlock
-                    question={m.question}
+                {m.role === "assistant" && m.questions && m.questions.length > 0 && (
+                  <QuestionSet
+                    questions={m.questions}
+                    renderText={renderText}
                     disabled={ask.isPending}
-                    onChoose={(value) => {
-                      if (value) submit(value);
-                      // empty value = the free-form affordance: leave the composer
-                      // for a typed reply (the input is always available).
+                    answered={m.questionsAnswered}
+                    onSubmit={(composed) => {
+                      setHistory((curr) => {
+                        const next = curr.map((it, idx) => (idx === i ? { ...it, questionsAnswered: true } : it));
+                        sessionStore.save(versionId, next);
+                        return next;
+                      });
+                      submit(composed);
                     }}
                   />
                 )}
