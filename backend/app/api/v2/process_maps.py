@@ -2017,6 +2017,17 @@ def _mention_sources_from_texts(texts: list[str], ctx) -> list[MentionSource]:
     return out
 
 
+def _clamp_resolved(text: str, limit: int) -> str:
+    """Truncate resolved mention text to a schema limit without leaving a dangling,
+    unclosed `[[kind:uuid` fragment from a mid-mention cut (which would render as
+    raw markup in the UI)."""
+    t = (text or "")[:limit]
+    open_at = t.rfind("[[")
+    if open_at != -1 and "]]" not in t[open_at:]:
+        t = t[:open_at].rstrip()
+    return t
+
+
 def _run_chat_agent(db, project, model_id, version, ctx, focus_refs, payload) -> ChatSuggestResponse:
     tool_ctx = AgentToolCtx(db=db, project_id=project.id, version=version, mapctx=ctx)
     history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
@@ -2064,16 +2075,23 @@ def _run_chat_agent(db, project, model_id, version, ctx, focus_refs, payload) ->
     suggestions = result.proposals  # validated ChatSuggestions (resolved refs) from the loop
     questions = []
     for rq in (result.questions or []):
-        prompt = _resolve_mention_refs(rq.get("prompt") or "", ctx)
+        # Resolve THEN clamp: _resolve_mention_refs expands short refs ([[N3]]) into
+        # much longer [[node:uuid]] mentions, so a prompt/label/description near the
+        # normalize caps can overflow AgentQuestion/AgentOption's max_length and raise
+        # here (outside the try/except) — a 500 that drops the whole ask turn. Clamp
+        # the RESOLVED text to the schema limits (mirrors suggestion_ops).
+        prompt = _clamp_resolved(_resolve_mention_refs(rq.get("prompt") or "", ctx), 2000)
         if not prompt:
             continue
-        opts = [
-            AgentOption(
-                label=_resolve_mention_refs(o["label"], ctx),
-                description=_resolve_mention_refs(o["description"], ctx) if o.get("description") else None,
-            )
-            for o in rq.get("options", []) if o.get("label")
-        ]
+        opts = []
+        for o in rq.get("options", []):
+            if not o.get("label"):
+                continue
+            label = _clamp_resolved(_resolve_mention_refs(o["label"], ctx), 120)
+            if not label:
+                continue
+            desc = _clamp_resolved(_resolve_mention_refs(o["description"], ctx), 300) if o.get("description") else None
+            opts.append(AgentOption(label=label, description=desc or None))
         questions.append(AgentQuestion(prompt=prompt, options=opts))
     # Cards alone ARE the response; but when the agent asked, its prose explains why — show it.
     message = resolved if (questions or not suggestions) else ""
