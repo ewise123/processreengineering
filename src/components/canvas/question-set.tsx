@@ -50,6 +50,8 @@ export function QuestionSet({
     const next = { ...answers, [i]: v };
     setAnswers(next);
     if (single) send(next);
+    // Multi: advance to the next question on answer; the arrows still go back.
+    else if (i < questions.length - 1) setCurrent(i + 1);
   };
   const ready = !single && allAnswered(questions, answers) && !readOnly;
 
@@ -154,50 +156,28 @@ export function QuestionSet({
   return (
     <div className="space-y-2">
       <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 px-2.5 py-2">
-        <div className="mb-1.5 flex items-center gap-2">
+        <div className="mb-1.5 flex items-center gap-1.5">
           <button
             type="button"
             aria-label="Previous question"
             disabled={current === 0}
             onClick={() => setCurrent((c) => Math.max(0, c - 1))}
-            className="rounded border border-indigo-200 bg-white px-1.5 py-0.5 text-[11px] text-indigo-700 hover:bg-indigo-100 disabled:opacity-30"
+            className="px-1 text-[14px] leading-none text-indigo-600 hover:text-indigo-800 disabled:opacity-25"
           >
             ‹
           </button>
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-            Question {current + 1} of {questions.length}
+          <span className="text-[10px] font-medium tabular-nums text-slate-500">
+            {current + 1} of {questions.length}
           </span>
           <button
             type="button"
             aria-label="Next question"
             disabled={current === questions.length - 1}
             onClick={() => setCurrent((c) => Math.min(questions.length - 1, c + 1))}
-            className="rounded border border-indigo-200 bg-white px-1.5 py-0.5 text-[11px] text-indigo-700 hover:bg-indigo-100 disabled:opacity-30"
+            className="px-1 text-[14px] leading-none text-indigo-600 hover:text-indigo-800 disabled:opacity-25"
           >
             ›
           </button>
-          <span className="ml-auto flex flex-wrap items-center gap-1">
-            {questions.map((_, i) => {
-              const done = (answers[i] ?? "").trim().length > 0;
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  aria-label={`Go to question ${i + 1}${done ? " (answered)" : ""}`}
-                  aria-current={i === current ? "true" : undefined}
-                  onClick={() => setCurrent(i)}
-                  className={
-                    "h-2 w-2 rounded-full " +
-                    (i === current
-                      ? "bg-indigo-600 ring-1 ring-indigo-300"
-                      : done
-                        ? "bg-indigo-400"
-                        : "bg-slate-300")
-                  }
-                />
-              );
-            })}
-          </span>
         </div>
         {questionBody(current)}
       </div>
