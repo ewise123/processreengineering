@@ -176,7 +176,7 @@ export function QuestionSet({
           >
             ›
           </button>
-          <span className="ml-auto flex items-center gap-1">
+          <span className="ml-auto flex flex-wrap items-center gap-1">
             {questions.map((_, i) => {
               const done = (answers[i] ?? "").trim().length > 0;
               return (
@@ -184,6 +184,7 @@ export function QuestionSet({
                   key={i}
                   type="button"
                   aria-label={`Go to question ${i + 1}${done ? " (answered)" : ""}`}
+                  aria-current={i === current ? "true" : undefined}
                   onClick={() => setCurrent(i)}
                   className={
                     "h-2 w-2 rounded-full " +
