@@ -19,6 +19,7 @@ import type {
   ViewerTarget,
 } from "@/lib/types";
 import { MentionMarkdown } from "./mention-view";
+import { mentionsToPlainText } from "./mention-markdown";
 import { traceHeaderLabel } from "./agent-trace";
 import {
   buildSendContext,
@@ -437,6 +438,10 @@ export function ChatTab({
               onOpenSource={onOpenSource}
             />
           );
+          // Same maps as renderText, but flattening mentions to plain names — used
+          // when composing the answer message so it reads as prose (not [[uuid]]).
+          const plainText = (text: string) =>
+            mentionsToPlainText(text, labelById, sourceNameByClaim, laneNameById, newNameByRef);
           const summaryById = new Map((m.groupSummaries ?? []).map((g) => [g.id, g.summary]));
           return (
             <div key={`${versionId}-${i}`} className="flex items-start gap-2">
@@ -462,6 +467,7 @@ export function ChatTab({
                   <QuestionSet
                     questions={m.questions}
                     renderText={renderText}
+                    plainText={plainText}
                     disabled={ask.isPending}
                     answered={m.questionsAnswered}
                     onSubmit={(composed) => {

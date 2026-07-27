@@ -2,6 +2,29 @@ import type { MentionSource, UUID } from "@/lib/types";
 
 const MENTION_RE = /\[\[(node|edge|claim|lane|new):([^\]]+)\]\]\s?/g;
 
+/** Replace [[kind:id]] mentions with their plain display NAME (no link markup),
+ * for text that must read as plain prose — e.g. the message composed from a
+ * user's answers to the agent's clarifying questions, which is both shown in the
+ * chat and sent back to the model. Leaving the raw [[node:uuid]] / [[claim:uuid]]
+ * markup in that message renders as garbled text and means nothing to the model. */
+export function mentionsToPlainText(
+  text: string,
+  labelById: Map<UUID, string>,
+  sourceNameByClaimId: Map<UUID, string>,
+  laneNameById: Map<UUID, string> = new Map(),
+  newNameByRef: Map<string, string> = new Map()
+): string {
+  return text.replace(MENTION_RE, (matched: string, kind: string, id: string) => {
+    const trailing = /\s$/.test(matched) ? " " : "";
+    if (kind === "node") return (labelById.get(id) ?? "the step") + trailing;
+    if (kind === "claim") return (sourceNameByClaimId.get(id) ?? "the source") + trailing;
+    if (kind === "lane") return (laneNameById.get(id) ?? "the lane") + trailing;
+    if (kind === "new") return (newNameByRef.get(id) ?? "the new step") + trailing;
+    if (kind === "edge") return "the connection" + trailing;
+    return "";
+  });
+}
+
 /** Dedupe a message's cited sources so repeated citations of the same source
  * **document** collapse to a single representative entry, keeping the first
  * occurrence (in array order). Keyed by `input_id`, falling back to

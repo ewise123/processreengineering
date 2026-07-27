@@ -27,7 +27,15 @@ export function allAnswered(questions: AgentQuestion[], answers: QuestionAnswers
 
 /** Compose the answered questions into ONE message that restates each question
  * and its answer (the model's ask tool-calls aren't in rebuilt history, so the
- * restatement gives it the context to continue). */
-export function composeAnswers(questions: AgentQuestion[], answers: QuestionAnswers): string {
-  return questions.map((q, i) => `Q: ${q.prompt}\nA: ${(answers[i] ?? "").trim()}`).join("\n\n");
+ * restatement gives it the context to continue). `plain` converts any resolved
+ * [[kind:uuid]] mentions in the question/answer text to plain names, so the sent
+ * message (and the user turn shown in chat) reads as prose, not raw markup. */
+export function composeAnswers(
+  questions: AgentQuestion[],
+  answers: QuestionAnswers,
+  plain: (text: string) => string = (t) => t
+): string {
+  return questions
+    .map((q, i) => `Q: ${plain(q.prompt)}\nA: ${plain((answers[i] ?? "").trim())}`)
+    .join("\n\n");
 }

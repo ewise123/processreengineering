@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dedupeSourcesByDocument, mentionsToMarkdown } from "./mention-markdown";
+import { dedupeSourcesByDocument, mentionsToMarkdown, mentionsToPlainText } from "./mention-markdown";
 import type { MentionSource } from "@/lib/types";
 
 const N = "11111111-1111-1111-1111-111111111111";
@@ -217,5 +217,22 @@ describe("dedupeSourcesByDocument", () => {
 
   it("returns an empty array for an empty input", () => {
     expect(dedupeSourcesByDocument([])).toEqual([]);
+  });
+});
+
+describe("mentionsToPlainText", () => {
+  const labels = new Map([[N, "Review Invoice"]]);
+  const claimNames = new Map([[C, "ap-sop.txt"]]);
+  const lanes = new Map([[L, "Procurement Manager"]]);
+
+  it("replaces mentions with plain names (no link markup)", () => {
+    expect(
+      mentionsToPlainText(`Put it after [[node:${N}]] per [[claim:${C}]] in [[lane:${L}]].`, labels, claimNames, lanes)
+    ).toBe("Put it after Review Invoice per ap-sop.txt in Procurement Manager.");
+  });
+  it("falls back to readable words for unknown ids and edges", () => {
+    expect(mentionsToPlainText(`via [[edge:e1]] near [[node:nope]]`, labels, claimNames)).toBe(
+      "via the connection near the step"
+    );
   });
 });

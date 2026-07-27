@@ -26,4 +26,10 @@ describe("composeAnswers", () => {
     expect(msg).toContain("Before or after?");
     expect(msg).toContain("After N1");
   });
+  it("applies the plain-text transform to question and answer text", () => {
+    const withMention: AgentQuestion[] = [{ prompt: "Put it after [[node:abc]]?", options: [] }];
+    const msg = composeAnswers(withMention, { 0: "After [[node:abc]]" }, (t) => t.replace(/\[\[node:abc\]\]/g, "Review Invoice"));
+    expect(msg).toBe("Q: Put it after Review Invoice?\nA: After Review Invoice");
+    expect(msg).not.toContain("[[node:");
+  });
 });
