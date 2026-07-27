@@ -249,7 +249,13 @@ export function ChatTab({
     if (el) el.scrollTop = el.scrollHeight;
   }, [history.length, ask.isPending]);
 
-  const submit = (text: string) => {
+  // `baseHistory` overrides the pre-send snapshot when the caller has already
+  // computed the history this send should build on — e.g. answering a clarifying
+  // question marks that question `questionsAnswered` and must carry that flag
+  // through onSuccess (which rebuilds from this snapshot); otherwise the flag,
+  // set via a separate setHistory, is clobbered when the reply lands and the
+  // question re-renders unanswered.
+  const submit = (text: string, baseHistory?: ChatItem[]) => {
     const trimmed = text.trim();
     if (!trimmed || ask.isPending) return;
     // Context is consumable, not a persistent working set: this send's
@@ -259,12 +265,12 @@ export function ChatTab({
     const { refs: contextRefs, chips: contextChips, note } = buildSendContext(chatContext, labelById);
     setDraft("");
     // Capture pre-send history snapshot before optimistic update
-    const preSendHistory = history;
+    const preSendHistory = baseHistory ?? history;
     // Snapshot what Pause must undo this send, and open an abort channel.
     pendingRef.current = { priorHistory: preSendHistory, text: trimmed };
     const controller = new AbortController();
     abortRef.current = controller;
-    setHistory((curr) => [...curr, { role: "user", content: trimmed, contextNote: note, contextRefs: contextChips }]);
+    setHistory(() => [...preSendHistory, { role: "user", content: trimmed, contextNote: note, contextRefs: contextChips }]);
     ask.mutate({
       history: preSendHistory,
       userMessage: trimmed,
@@ -471,12 +477,11 @@ export function ChatTab({
                     disabled={ask.isPending}
                     answered={m.questionsAnswered}
                     onSubmit={(composed) => {
-                      setHistory((curr) => {
-                        const next = curr.map((it, idx) => (idx === i ? { ...it, questionsAnswered: true } : it));
-                        sessionStore.save(versionId, next);
-                        return next;
-                      });
-                      submit(composed);
+                      // Mark this question answered on the SEND's base history so the
+                      // flag survives onSuccess (which rebuilds from that snapshot) and
+                      // is persisted — the question stays closed across reloads/remounts.
+                      const flagged = history.map((it, idx) => (idx === i ? { ...it, questionsAnswered: true } : it));
+                      submit(composed, flagged);
                     }}
                   />
                 )}
