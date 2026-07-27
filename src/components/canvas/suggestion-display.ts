@@ -42,6 +42,12 @@ export function opTarget(op: SuggestionOp): string | null {
       return laneMention(op.lane_ref);
     case "add_node":
       return op.near_node_ref ? `after ${nodeMention(op.near_node_ref) ?? "the new step"}` : null;
+    case "change_node_type":
+      return nodeMention(op.node_ref);
+    case "remove_lane":
+      return laneMention(op.lane_ref);
+    case "set_edge_condition":
+      return edgeMention(op.edge_ref);
     default:
       return null;
   }
@@ -89,6 +95,10 @@ export function opPayload(op: SuggestionOp): { value: string; hasMention: boolea
     }
     case "add_edge":
       return op.edge_label ? { value: op.edge_label, hasMention: false } : null;
+    case "change_node_type":
+      return op.node_type ? { value: op.node_type, hasMention: false } : null;
+    case "set_edge_condition":
+      return op.condition_text ? { value: op.condition_text, hasMention: false } : null;
     default:
       return null;
   }
@@ -118,4 +128,38 @@ export function bundleNewNames(suggestions: ChatSuggestion[]): Map<string, strin
  * have been applied (e.g. "0 of 3 applied", "1 of 3 applied"). */
 export function suggestedChangesSuffix(total: number, applied: number): string {
   return `${applied} of ${total} applied`;
+}
+
+/** A proposed change is "grounded" when it cites at least one source claim.
+ * Ungrounded proposals (general process knowledge, not from the user's sources)
+ * get a distinct chip on the card — labeled, never hidden. */
+export function isProposalGrounded(s: Pick<ChatSuggestion, "cited_claim_ids">): boolean {
+  return (s.cited_claim_ids?.length ?? 0) > 0;
+}
+
+export type GroundingChip = { label: string } | null;
+
+/** The grounding chip to show on a proposed change, or null for none.
+ * Fully deterministic: a change that cites a source claim is "supported" → no
+ * chip; an uncited change is flagged "not in your sources", regardless of who
+ * asked for it (the model can't self-declare a change grounded). */
+export function groundingChip(
+  s: Pick<ChatSuggestion, "cited_claim_ids">,
+): GroundingChip {
+  // Same deterministic cited-claim check as isProposalGrounded — delegate so the
+  // two can't drift.
+  if (isProposalGrounded(s)) return null;
+  return { label: "Not in your sources" };
+}
+
+/** For a remove_lane op, the lane its steps get reassigned to: the first
+ * REMAINING lane by order_index (mirrors the backend's fallback). Returns the
+ * target lane id, or null if the op isn't remove_lane or there's no other lane. */
+export function laneReassignmentTarget(
+  op: SuggestionOp,
+  lanes: { id: string; order_index: number }[]
+): string | null {
+  if (op.kind !== "remove_lane" || !op.lane_ref) return null;
+  const others = lanes.filter((l) => l.id !== op.lane_ref).sort((a, b) => a.order_index - b.order_index);
+  return others.length ? others[0].id : null;
 }

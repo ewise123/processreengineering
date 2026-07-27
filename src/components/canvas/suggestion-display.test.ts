@@ -3,15 +3,17 @@ import { describe, expect, it } from "vitest";
 import type { ChatSuggestion, SuggestionOp } from "@/lib/types";
 import {
   bundleNewNames,
+  groundingChip,
+  isProposalGrounded,
   isTmpRef,
+  laneReassignmentTarget,
   opPayload,
   opTarget,
   renameTransition,
   suggestedChangesSuffix,
 } from "./suggestion-display";
 
-const op = (o: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }): SuggestionOp =>
-  ({ kind: o.kind, ...o }) as SuggestionOp;
+const op = (o: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }): SuggestionOp => o as SuggestionOp;
 
 const suggestion = (o: Partial<ChatSuggestion> & { op: SuggestionOp }): ChatSuggestion =>
   ({ id: "s", title: "", rationale: "", affected_refs: [], cited_claim_ids: [], ...o }) as ChatSuggestion;
@@ -151,11 +153,62 @@ describe("bundleNewNames", () => {
   });
 });
 
+describe("new op kinds → display", () => {
+  it("change_node_type targets node + previews type", () => {
+    expect(opTarget({ kind: "change_node_type", node_ref: "N1", node_type: "gateway_exclusive" })).toBe("[[node:N1]]");
+    expect(opPayload({ kind: "change_node_type", node_ref: "N1", node_type: "gateway_exclusive" }))
+      .toEqual({ value: "gateway_exclusive", hasMention: false });
+  });
+  it("remove_lane targets the lane", () => {
+    expect(opTarget({ kind: "remove_lane", lane_ref: "L1" })).toBe("[[lane:L1]]");
+  });
+  it("set_edge_condition targets edge + previews condition", () => {
+    expect(opTarget({ kind: "set_edge_condition", edge_ref: "E1", condition_text: "amt > 10000" })).toBe("[[edge:E1]]");
+    expect(opPayload({ kind: "set_edge_condition", edge_ref: "E1", condition_text: "amt > 10000" }))
+      .toEqual({ value: "amt > 10000", hasMention: false });
+  });
+});
+
+describe("proposal grounding", () => {
+  it("grounded when the suggestion cites at least one claim", () => {
+    expect(isProposalGrounded({ cited_claim_ids: ["11111111-1111-1111-1111-111111111111"] })).toBe(true);
+  });
+  it("not grounded when no claims are cited", () => {
+    expect(isProposalGrounded({ cited_claim_ids: [] })).toBe(false);
+  });
+});
+
+describe("groundingChip", () => {
+  const s = (over: Partial<ChatSuggestion>): ChatSuggestion =>
+    ({ id: "x", title: "t", op: op({ kind: "add_node" }), affected_refs: [],
+       rationale: "", cited_claim_ids: [], ...over }) as ChatSuggestion;
+
+  it("returns null when the change cites a claim (supported)", () => {
+    expect(groundingChip(s({ cited_claim_ids: ["c1" as never] }))).toBeNull();
+  });
+  it("flags an uncited change 'Not in your sources' regardless of who asked", () => {
+    expect(groundingChip(s({}))?.label).toBe("Not in your sources");
+  });
+});
+
 describe("suggestedChangesSuffix", () => {
   it("always shows the applied fraction", () => {
     expect(suggestedChangesSuffix(3, 0)).toBe("0 of 3 applied");
     expect(suggestedChangesSuffix(3, 1)).toBe("1 of 3 applied");
     expect(suggestedChangesSuffix(3, 3)).toBe("3 of 3 applied");
     expect(suggestedChangesSuffix(1, 0)).toBe("0 of 1 applied");
+  });
+});
+
+describe("laneReassignmentTarget", () => {
+  const lanes = [{ id: "L2", order_index: 1 }, { id: "L1", order_index: 0 }, { id: "L3", order_index: 2 }];
+  it("returns the first remaining lane by order_index", () => {
+    expect(laneReassignmentTarget({ kind: "remove_lane", lane_ref: "L3" }, lanes)).toBe("L1");
+  });
+  it("returns null when the removed lane is the only lane", () => {
+    expect(laneReassignmentTarget({ kind: "remove_lane", lane_ref: "L1" }, [{ id: "L1", order_index: 0 }])).toBeNull();
+  });
+  it("returns null for non-remove_lane ops", () => {
+    expect(laneReassignmentTarget({ kind: "relabel_node", node_ref: "N1", new_label: "x" }, lanes)).toBeNull();
   });
 });

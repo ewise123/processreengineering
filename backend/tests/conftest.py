@@ -23,7 +23,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 ADMIN_URL = "postgresql+psycopg://poet:poet@localhost:5433/postgres"
-TEST_DB_NAME = "poet_test"
+# Overridable so parallel worktrees / CI shards can use isolated test DBs on a
+# shared Postgres (default preserves the historical name).
+TEST_DB_NAME = os.getenv("POET_TEST_DB", "poet_test")
 TEST_URL = f"postgresql+psycopg://poet:poet@localhost:5433/{TEST_DB_NAME}"
 
 

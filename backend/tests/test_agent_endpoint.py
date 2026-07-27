@@ -58,6 +58,66 @@ def test_ask_mode_runs_agent_persists_run_and_resolves_citations(db):
     assert str(claim.id) in row.cited_claim_ids
 
 
+def test_ask_user_question_is_surfaced_and_persisted(db):
+    from tests.test_chat_suggest import _seed
+    from app.services.map_chat_agent import AgentResult
+    project, version, n1, claim = _seed(db)
+
+    def fake_agent(*, tool_ctx, skeleton_text, focus_items, history, user_message):
+        return AgentResult(
+            answer="This step isn't in your sources.",
+            trace=[], consulted_claim_ids=[], round_count=1,
+            input_tokens=10, output_tokens=5, stop_reason="ask_user",
+            questions=[{"prompt": "Add it anyway?",
+                       "options": [{"label": "Add it", "description": None},
+                                   {"label": "Skip it", "description": None}]}],
+        )
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_agent", fake_agent)
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="add a QA step", session_id="s1"),
+            db=db,
+        )
+    assert len(resp.questions) == 1
+    assert resp.questions[0].prompt == "Add it anyway?"
+    assert [o.label for o in resp.questions[0].options] == ["Add it", "Skip it"]
+    assert resp.message == "This step isn't in your sources."  # prose shown alongside the question
+
+    row = db.scalar(select(AgentRun).where(AgentRun.id == resp.run_id))
+    assert row.stop_reason == "ask_user"
+
+
+def test_ask_user_questions_are_surfaced_and_mentions_resolved(db):
+    from tests.test_chat_suggest import _seed
+    from app.services.map_chat_agent import AgentResult
+    project, version, n1, claim = _seed(db)
+
+    def fake_agent(*, tool_ctx, skeleton_text, focus_items, history, user_message):
+        ref = tool_ctx.mapctx.node_ref_by_id[n1.id]
+        return AgentResult(
+            answer="Need input.", trace=[], consulted_claim_ids=[], round_count=1,
+            input_tokens=1, output_tokens=1, stop_reason="ask_user",
+            questions=[{"prompt": f"Put it after [[{ref}]]?",
+                       "options": [{"label": "Yes", "description": f"Add it after [[{ref}]]"}]}],
+        )
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_agent", fake_agent)
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="add a step", session_id="s1"),
+            db=db,
+        )
+    assert len(resp.questions) == 1
+    assert "[[node:" in resp.questions[0].prompt and str(n1.id) in resp.questions[0].prompt
+    assert resp.questions[0].options[0].label == "Yes"
+    # The option DESCRIPTION resolves refs too (so the UI can linkify them).
+    assert "[[node:" in resp.questions[0].options[0].description
+    assert str(n1.id) in resp.questions[0].options[0].description
+
+
 def test_ask_mode_agent_error_is_graceful_and_persisted(db):
     from tests.test_chat_suggest import _seed
     project, version, n1, claim = _seed(db)
@@ -76,3 +136,38 @@ def test_ask_mode_agent_error_is_graceful_and_persisted(db):
     assert "error" in resp.message.lower()
     row = db.scalar(select(AgentRun).where(AgentRun.id == resp.run_id))
     assert row.stop_reason == "error"
+
+
+def test_ask_user_long_refs_do_not_overflow_question_schema(db):
+    # Resolving [[N#]] -> [[node:<uuid>]] expands text; a prompt/label/description
+    # near the caps must be clamped AFTER resolution, or AgentQuestion/AgentOption
+    # max_length raises an uncaught 500 and drops the turn. (Regression for the
+    # pre-merge review's blocker.)
+    from tests.test_chat_suggest import _seed
+    project, version, n1, claim = _seed(db)
+
+    def fake_agent(*, tool_ctx, skeleton_text, focus_items, history, user_message):
+        ref = tool_ctx.mapctx.node_ref_by_id[n1.id]
+        return AgentResult(
+            answer="Need input.", trace=[], consulted_claim_ids=[], round_count=1,
+            input_tokens=1, output_tokens=1, stop_reason="ask_user",
+            questions=[{
+                "prompt": ("p" * 1990) + f" [[{ref}]]?",
+                "options": [{"label": ("L" * 115) + f" [[{ref}]]",
+                             "description": ("d" * 290) + f" [[{ref}]]"}],
+            }],
+        )
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pm_api, "run_chat_agent", fake_agent)
+        # Must NOT raise a ValidationError / 500.
+        resp = pm_api.chat_suggest(
+            project=project, model_id=version.model_id, version_id=version.id,
+            payload=ChatSuggestRequest(user_message="add a step", session_id="s1"), db=db,
+        )
+    q = resp.questions[0]
+    o = q.options[0]
+    assert len(q.prompt) <= 2000 and len(o.label) <= 120 and len(o.description) <= 300
+    # No dangling unclosed [[node: fragment left by a mid-mention truncation.
+    for s in (q.prompt, o.label, o.description):
+        assert "[[node:" not in s or "]]" in s.split("[[node:")[-1]

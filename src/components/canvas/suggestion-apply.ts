@@ -3,7 +3,7 @@ import { parseMentions } from "./mentions";
 
 /** Op kinds that delete or re-point objects. A bundle containing any of these
  * is non-undoable and requires a confirm before applying. */
-const DELETE_OPS = new Set<OpKind>(["remove_node", "remove_edge", "reroute_edge"]);
+const DELETE_OPS = new Set<OpKind>(["remove_node", "remove_edge", "reroute_edge", "remove_lane"]);
 
 export function isDeleteOp(kind: OpKind): boolean {
   return DELETE_OPS.has(kind);
@@ -15,15 +15,17 @@ export function isDeleteOp(kind: OpKind): boolean {
  * the semantic-edit steps carry it (the backend requires a reason for those);
  * `planBundle` fills it from the owning suggestion's rationale. */
 export type MutationStep =
-  | { kind: "update_node"; nodeRef: string; name?: string; description?: string; laneRef?: string; reason?: string }
+  | { kind: "update_node"; nodeRef: string; name?: string; description?: string; laneRef?: string; nodeType?: string; reason?: string }
   | { kind: "delete_node"; nodeRef: string }
-  | { kind: "create_node"; tempId: string; laneRef: string | null; nodeType: string; label: string; nearNodeRef: string | null; role?: string | null }
-  | { kind: "create_edge"; tempId?: string; fromRef: string; toRef: string; label: string | null }
+  | { kind: "create_node"; tempId: string; laneRef: string | null; nodeType: string; label: string; nearNodeRef: string | null; role?: string | null; reason?: string }
+  | { kind: "create_edge"; tempId?: string; fromRef: string; toRef: string; label: string | null; reason?: string }
   | { kind: "delete_edge"; edgeRef: string }
   | { kind: "update_edge_label"; edgeRef: string; label: string; reason?: string }
   | { kind: "reroute_edge"; edgeRef: string; fromRef: string | null; toRef: string | null }
-  | { kind: "create_lane"; tempId: string; name: string }
-  | { kind: "update_lane"; laneRef: string; name: string; reason?: string };
+  | { kind: "create_lane"; tempId: string; name: string; reason?: string }
+  | { kind: "update_lane"; laneRef: string; name: string; reason?: string }
+  | { kind: "delete_lane"; laneRef: string }
+  | { kind: "update_edge_condition"; edgeRef: string; conditionText: string; reason?: string };
 
 /** Translate one op into its ordered mutation steps. Pure; no ref resolution. */
 export function opToSteps(op: SuggestionOp): MutationStep[] {
@@ -79,6 +81,12 @@ export function opToSteps(op: SuggestionOp): MutationStep[] {
       });
       return steps;
     }
+    case "change_node_type":
+      return [{ kind: "update_node", nodeRef: op.node_ref!, nodeType: op.node_type! }];
+    case "remove_lane":
+      return [{ kind: "delete_lane", laneRef: op.lane_ref! }];
+    case "set_edge_condition":
+      return [{ kind: "update_edge_condition", edgeRef: op.edge_ref!, conditionText: op.condition_text! }];
     default: {
       const _exhaustive: never = op.kind;
       void _exhaustive;
@@ -215,6 +223,10 @@ function stepRealRefs(step: MutationStep): { ref: string; set: "node" | "edge" |
       return [{ ref: step.laneRef, set: "lane" }];
     case "create_lane":
       return [];
+    case "delete_lane":
+      return [{ ref: step.laneRef, set: "lane" }];
+    case "update_edge_condition":
+      return [{ ref: step.edgeRef, set: "edge" }];
     default: {
       const _exhaustive: never = step;
       void _exhaustive;
@@ -297,12 +309,19 @@ export function reasonForSuggestion(s: ChatSuggestion): string {
 }
 
 /** Attach the owning suggestion's reason to the semantic-edit steps that need
- * one; other step kinds (create/delete/connect) auto-log on the backend. */
+ * one; other step kinds (create/delete/connect) auto-log on the backend.
+ * Create steps also carry the reason: they're AI-applied and the backend's
+ * create endpoints need a reason + ai_applied flag to attribute the resulting
+ * Change Log entry to the AI instead of defaulting to a manual user edit. */
 function withReason(step: MutationStep, reason: string): MutationStep {
   switch (step.kind) {
     case "update_node":
     case "update_edge_label":
     case "update_lane":
+    case "update_edge_condition":
+    case "create_node":
+    case "create_edge":
+    case "create_lane":
       return { ...step, reason };
     default:
       return step;
@@ -328,9 +347,28 @@ export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
       : step
   );
 
+  // Anchor an AI-added node (no explicit near_node_ref) off the incoming edge that
+  // connects it to the rest of the graph, when the model split "create the node"
+  // and "connect it" into separate ops instead of setting near_node_ref itself.
+  // Placing it next to the step it flows FROM beats the create_node fallback
+  // (far-right end of the lane). Only anchor off a REAL existing node — if the
+  // edge's fromRef is itself an unresolved tmp (created elsewhere in this same
+  // plan), we have no position for it yet, so leave the fallback alone. Prefers
+  // the first matching incoming edge if more than one targets this node.
+  const stepsWithAnchors = steps.map((step) => {
+    if (step.kind !== "create_node" || step.nearNodeRef) return step;
+    const incomingEdge = steps.find(
+      (s): s is Extract<MutationStep, { kind: "create_edge" }> => s.kind === "create_edge" && s.toRef === step.tempId
+    );
+    if (incomingEdge && index.nodeIds.has(incomingEdge.fromRef)) {
+      return { ...step, nearNodeRef: incomingEdge.fromRef };
+    }
+    return step;
+  });
+
   // Every tmp produced anywhere in this plan — validation is order-independent.
   const producedAll = new Set<string>();
-  for (const step of steps) {
+  for (const step of stepsWithAnchors) {
     if ("tempId" in step && step.tempId) producedAll.add(step.tempId);
   }
   let applyable = true;
@@ -338,7 +376,7 @@ export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
 
   // A consumed tmp whose producer is absent is caught here by the same check as
   // a missing real ref: it's neither in `producedAll` nor in the graph index.
-  for (const step of steps) {
+  for (const step of stepsWithAnchors) {
     for (const { ref, set } of stepRealRefs(step)) {
       if (producedAll.has(ref)) continue; // created within this plan
       if (!index[SET_BY_KIND[set]].has(ref)) {
@@ -353,5 +391,5 @@ export function planBundle(bundle: Bundle, index: GraphIndex): BundlePlan {
     if (!applyable) break;
   }
 
-  return { bundleId: bundle.id, steps, undoable: bundle.undoable, applyable, reason };
+  return { bundleId: bundle.id, steps: stepsWithAnchors, undoable: bundle.undoable, applyable, reason };
 }

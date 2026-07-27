@@ -502,6 +502,43 @@ export function EdgeArrow({
           </text>
         </g>
       )}
+      {edge.condition &&
+        (() => {
+          // Gateway-branch guard, e.g. "amount < $10,000" — rendered bracketed
+          // and in an amber italic so it reads as a condition, not a plain edge
+          // label. Stacked below the label when both are present (offset by one
+          // line); otherwise it takes the label's usual position. The box is
+          // sized to the text (unlike the fixed-width label box above) since
+          // condition text runs much longer than typical edge labels.
+          const conditionText = `[${edge.condition}]`;
+          const boxWidth = Math.max(28, conditionText.length * 5.5 + 10);
+          const textY = edge.label ? midY + 18 : midY + 2;
+          const boxY = textY - 10;
+          return (
+            <g>
+              <rect
+                x={midX - boxWidth / 2}
+                y={boxY}
+                width={boxWidth}
+                height={14}
+                rx={3}
+                fill="#fffbeb"
+                stroke="#fde68a"
+              />
+              <text
+                x={midX}
+                y={textY}
+                textAnchor="middle"
+                fontSize="10"
+                fontStyle="italic"
+                fill="#b45309"
+                fontWeight="500"
+              >
+                {conditionText}
+              </text>
+            </g>
+          );
+        })()}
     </g>
   );
 }

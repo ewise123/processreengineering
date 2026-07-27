@@ -111,6 +111,23 @@ describe("opToSteps", () => {
   });
 });
 
+describe("new op kinds → steps", () => {
+  it("change_node_type → update_node with nodeType", () => {
+    expect(opToSteps({ kind: "change_node_type", node_ref: "N1", node_type: "gateway_exclusive" }))
+      .toEqual([{ kind: "update_node", nodeRef: "N1", nodeType: "gateway_exclusive" }]);
+  });
+  it("remove_lane → delete_lane", () => {
+    expect(opToSteps({ kind: "remove_lane", lane_ref: "L1" })).toEqual([{ kind: "delete_lane", laneRef: "L1" }]);
+  });
+  it("set_edge_condition → update_edge_condition", () => {
+    expect(opToSteps({ kind: "set_edge_condition", edge_ref: "E1", condition_text: "amt > 10000" }))
+      .toEqual([{ kind: "update_edge_condition", edgeRef: "E1", conditionText: "amt > 10000" }]);
+  });
+  it("remove_lane is a delete op", () => {
+    expect(isDeleteOp("remove_lane")).toBe(true);
+  });
+});
+
 const sg = (id: string, opOverrides: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }, group?: string): ChatSuggestion => ({
   id,
   group: group ?? null,
@@ -219,6 +236,43 @@ describe("planBundle", () => {
     const plan = planBundle(bundle, idx());
     expect(plan.applyable).toBe(true);
     expect(plan.undoable).toBe(false);
+  });
+  it("infers nearNodeRef from a same-plan incoming edge when add_node omits near_node_ref", () => {
+    // Model emits add_node with no near_node_ref, then connects it via a
+    // separate add_edge from N1 -> t1. The placement anchor should come from
+    // the edge's fromRef (N1), not fall back to the far-right-of-lane default.
+    const bundle = bundleSuggestions([
+      sg("a", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "New" }),
+      sg("b", { kind: "add_edge", from_ref: "N1", to_ref: "t1" }),
+    ])[0];
+    const plan = planBundle(bundle, idx());
+    const createStep = plan.steps.find((s) => s.kind === "create_node");
+    if (!createStep || createStep.kind !== "create_node") throw new Error("Expected a create_node step");
+    expect(createStep.nearNodeRef).toBe("N1");
+  });
+  it("keeps an explicit near_node_ref on add_node instead of overwriting it from an incoming edge", () => {
+    const bundle = bundleSuggestions([
+      sg("a", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "New", near_node_ref: "N2" }),
+      sg("b", { kind: "add_edge", from_ref: "N1", to_ref: "t1" }),
+    ])[0];
+    const plan = planBundle(bundle, idx());
+    const createStep = plan.steps.find((s) => s.kind === "create_node");
+    if (!createStep || createStep.kind !== "create_node") throw new Error("Expected a create_node step");
+    expect(createStep.nearNodeRef).toBe("N2");
+  });
+  it("leaves nearNodeRef null when the only incoming edge's fromRef is itself an unresolved tmp", () => {
+    // t0 (another new node) -> t1 (the node under test). t0 isn't a real graph
+    // node, so there's no resolved position to anchor against yet.
+    const bundle = bundleSuggestions([
+      sg("a", { kind: "add_node", temp_id: "t0", lane_ref: "L1", node_type: "task", new_label: "First" }),
+      sg("b", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "Second" }),
+      sg("c", { kind: "add_edge", from_ref: "t0", to_ref: "t1" }),
+    ])[0];
+    const plan = planBundle(bundle, idx());
+    const createSteps = plan.steps.filter((s) => s.kind === "create_node");
+    const second = createSteps.find((s) => s.kind === "create_node" && s.tempId === "t1");
+    if (!second || second.kind !== "create_node") throw new Error("Expected the t1 create_node step");
+    expect(second.nearNodeRef).toBeNull();
   });
   it("resolves a decompose sub-step role to a lane id when the role matches an existing lane name", () => {
     const bundle = bundleSuggestions([
@@ -348,5 +402,59 @@ describe("planBundle reason threading", () => {
     }
     expect(nodeStep.reason).toBe("Reason A.");
     expect(edgeStep.reason).toBe("Reason B.");
+  });
+
+  it("attaches the suggestion's reason to a create_node step (add_node)", () => {
+    const bundle = bundleSuggestions([
+      sgWith("a", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "New" }, {
+        rationale: "Suggested by chat.",
+      }),
+    ])[0];
+    const step = planBundle(bundle, idx()).steps[0];
+    if (step.kind !== "create_node") throw new Error("expected create_node step");
+    expect(step.reason).toBe("Suggested by chat.");
+  });
+
+  it("attaches the suggestion's reason to a create_edge step (add_edge)", () => {
+    const bundle = bundleSuggestions([
+      sgWith("a", { kind: "add_edge", from_ref: "N1", to_ref: "N2" }, {
+        rationale: "Connects the two steps.",
+      }),
+    ])[0];
+    const step = planBundle(bundle, idx()).steps[0];
+    if (step.kind !== "create_edge") throw new Error("expected create_edge step");
+    expect(step.reason).toBe("Connects the two steps.");
+  });
+
+  it("attaches the suggestion's reason to a create_lane step (add_lane)", () => {
+    const bundle = bundleSuggestions([
+      sgWith("a", { kind: "add_lane", temp_id: "tL1", name: "Finance" }, {
+        rationale: "New owning team.",
+      }),
+    ])[0];
+    const step = planBundle(bundle, idx()).steps[0];
+    if (step.kind !== "create_lane") throw new Error("expected create_lane step");
+    expect(step.reason).toBe("New owning team.");
+  });
+
+  it("propagates the reason to every create_node/create_edge step generated by decompose", () => {
+    const bundle = bundleSuggestions([
+      sgWith("a", {
+        kind: "decompose",
+        node_ref: "N1",
+        sub_steps: [
+          { proposed_name: "A", proposed_type: "task", role: null, edge_label: "start" },
+          { proposed_name: "B", proposed_type: "task", role: null, edge_label: null },
+        ],
+      }, { rationale: "Breaking this step down." }),
+    ])[0];
+    const steps = planBundle(bundle, idx()).steps;
+    expect(steps).toHaveLength(4);
+    for (const s of steps) {
+      if (s.kind !== "create_node" && s.kind !== "create_edge") {
+        throw new Error("expected only create_node/create_edge steps from decompose");
+      }
+      expect(s.reason).toBe("Breaking this step down.");
+    }
   });
 });

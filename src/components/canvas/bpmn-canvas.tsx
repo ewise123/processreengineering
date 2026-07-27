@@ -703,9 +703,17 @@ function BpmnCanvas({
             apiPatch.lane_id = laneId;
             localPatch.laneId = laneId;
           }
+          if (step.nodeType !== undefined) {
+            const size = sizeForNodeType(step.nodeType);
+            apiPatch.type = step.nodeType;
+            localPatch.type = step.nodeType;
+            localPatch.kind = nodeKindFromType(step.nodeType);
+            localPatch.w = size.w;
+            localPatch.h = size.h;
+          }
           apiPatch.reason = step.reason ?? APPLIED_REASON_FALLBACK;
           apiPatch.ai_applied = true;
-          const prev = { label: before.label, description: before.description, laneId: before.laneId };
+          const prev = { label: before.label, description: before.description, laneId: before.laneId, type: before.type, kind: before.kind, w: before.w, h: before.h };
           setNodes((curr) => curr.map((n) => (n.id === id ? { ...n, ...localPatch } : n)));
           // Push the inverse BEFORE the API call so a forward failure can still
           // revert the optimistic local edit. Restoring to the pre-edit value is
@@ -721,6 +729,7 @@ function BpmnCanvas({
             if (step.name !== undefined) inversePatch.name = prev.label;
             if (step.description !== undefined) inversePatch.description = prev.description ?? "";
             if (step.laneRef !== undefined) inversePatch.lane_id = prev.laneId ?? undefined;
+            if (step.nodeType !== undefined) inversePatch.type = prev.type;
             await api.updateNode(projectId, id, inversePatch);
           });
           await api.updateNode(projectId, id, apiPatch);
@@ -744,6 +753,8 @@ function BpmnCanvas({
             lane_id: place.laneId,
             x: place.x,
             relative_y: place.relativeY,
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
           });
           const size = sizeForNodeType(created.type);
           const newNode: CanvasNode = {
@@ -772,6 +783,8 @@ function BpmnCanvas({
             source_node_id: resolve(step.fromRef),
             target_node_id: resolve(step.toRef),
             label: step.label,
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
           });
           if (step.tempId) tmp[step.tempId] = created.id;
           setEdges((curr) => [
@@ -847,6 +860,8 @@ function BpmnCanvas({
             name: step.name,
             order_index: laneSlot,
             height_px: LANE_HEIGHT,
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
           });
           batchCtx.newLaneCount++;
           tmp[step.tempId] = created.id;
@@ -883,8 +898,59 @@ function BpmnCanvas({
           });
           break;
         }
+        case "delete_lane": {
+          const id = resolve(step.laneRef);
+          // Flush pending PATCHes so we don't fire a 404 against a deleted lane
+          // (mirrors the manual deleteLane callback).
+          await flush();
+          await api.deleteLane(projectId, id, true);
+          // Backend reassigns this lane's nodes to the first REMAINING lane (by order),
+          // not to no lane — mirror it so local state matches the server and the
+          // reassigned nodes keep rendering inside a real lane.
+          const fallback = lanesRef.current.find((l) => l.id !== id);
+          setLanes((curr) => recomputeY(curr.filter((l) => l.id !== id)));
+          // Drop the deleted lane from the collapse set so the (now persisted)
+          // set doesn't accumulate orphaned IDs over a long session (mirrors the
+          // manual deleteLane callback).
+          setCollapsedLaneIds((curr) => {
+            if (!curr.has(id)) return curr;
+            const next = new Set(curr);
+            next.delete(id);
+            return next;
+          });
+          if (fallback) {
+            setNodes((curr) => curr.map((n) => (n.laneId === id ? { ...n, laneId: fallback.id } : n)));
+          }
+          // delete-containing plan: no inverse.
+          break;
+        }
+        case "update_edge_condition": {
+          const id = resolve(step.edgeRef);
+          const before = edgesRef.current.find((e) => e.id === id);
+          if (!before) throw new Error("Edge no longer exists.");
+          const oldCondition = before.condition ?? null;
+          setEdges((curr) => curr.map((e) => (e.id === id ? { ...e, condition: step.conditionText } : e)));
+          inverses.push(async () => {
+            setEdges((curr) => curr.map((e) => (e.id === id ? { ...e, condition: oldCondition } : e)));
+            await api.updateEdge(projectId, id, { condition_text: oldCondition, reason: REVERT_REASON });
+          });
+          await api.updateEdge(projectId, id, {
+            condition_text: step.conditionText,
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
+          });
+          break;
+        }
       }
     },
+    // `flush` (from useGraphPersistence, declared below) is referenced in the
+    // delete_lane case above but intentionally omitted here: it's read inside
+    // the callback body only when runStep is invoked (after the full render
+    // completes), so including it in this literal would throw a
+    // ReferenceError (TDZ) on every render, since useGraphPersistence hasn't
+    // run yet at this point in the component body. `flush`'s identity is
+    // stable across renders (memoized on `projectId` alone, which is already
+    // a dep here), so omitting it does not cause staleness.
     [projectId, modelId, versionId, deleteNodeImpl, placeNewNode]
   );
 
@@ -1821,24 +1887,25 @@ function BpmnCanvas({
       reason?: string
     ) => {
       const byId = new Map(positions.map((p) => [p.id, p]));
-      // Snapshot current lanes so we can decide, per node, whether this apply
-      // actually changes the lane (semantic → attach reason) or is a pure move.
-      const prevLaneById = new Map(
-        nodesRef.current.map((n) => [n.id, n.laneId])
-      );
       setNodes((curr) =>
         curr.map((n) => {
           const p = byId.get(n.id);
           return p ? { ...n, x: p.x, relativeY: p.relativeY, laneId: p.laneId } : n;
         })
       );
+      // Attach the caller-supplied reason to the persisted patch whenever one was
+      // given. Callers pass a reason ONLY for a semantic relane (drag-across-lanes,
+      // moveSelectionToLane, and their undo/redo); a pure reposition passes none.
+      // We must NOT re-derive "did the lane change" from nodesRef here: the drag
+      // path optimistically updates a node's lane during onMove, so by the time
+      // this runs the node's "previous" lane already equals its new lane, which
+      // would drop the required reason and 422 the backend.
       for (const p of positions) {
-        const laneChanged = reason !== undefined && prevLaneById.get(p.id) !== p.laneId;
         markNode(p.id, {
           x: p.x,
           relative_y: p.relativeY,
           lane_id: p.laneId ?? undefined,
-          ...(laneChanged ? { reason } : {}),
+          ...(reason !== undefined ? { reason } : {}),
         });
       }
     },

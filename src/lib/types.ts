@@ -207,6 +207,8 @@ export interface LaneCreate {
   name: string;
   order_index: number;
   height_px?: number | null;
+  reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface LaneUpdate {
@@ -236,18 +238,23 @@ export interface NodeCreate {
   lane_id: UUID;
   x: number;
   relative_y: number;
+  reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface EdgeCreate {
   source_node_id: UUID;
   target_node_id: UUID;
   label?: string | null;
+  reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface EdgeUpdate {
   label?: string | null;
   bend_x?: number | null;
   bend_y?: number | null;
+  condition_text?: string | null;
   reason?: string;
   ai_applied?: boolean;
 }
@@ -378,7 +385,8 @@ export interface ObjectRef {
 export type OpKind =
   | "relabel_node" | "describe_node" | "add_node" | "remove_node"
   | "add_edge" | "remove_edge" | "relabel_edge" | "reroute_edge"
-  | "move_to_lane" | "add_lane" | "rename_lane" | "decompose";
+  | "move_to_lane" | "add_lane" | "rename_lane" | "decompose"
+  | "change_node_type" | "remove_lane" | "set_edge_condition";
 
 export interface SuggestionSubStep {
   proposed_name: string;
@@ -402,6 +410,7 @@ export interface SuggestionOp {
   near_node_ref?: string | null;
   edge_label?: string | null;
   sub_steps?: SuggestionSubStep[] | null;
+  condition_text?: string | null;
 }
 
 export interface ChatSuggestion {
@@ -420,7 +429,10 @@ export interface ChatSuggestion {
 export interface ChatSuggestRequest {
   history: ChatTurn[];
   user_message: string;
-  mode: ChatMode;
+  /** The backend's agent loop always investigates-and-proposes and ignores
+   * this field; kept optional for backward compatibility with older callers
+   * but no longer sent by the chat UI. */
+  mode?: ChatMode;
   context_refs: ObjectRef[];
   session_id?: string | null;
 }
@@ -428,6 +440,16 @@ export interface ChatSuggestRequest {
 export interface GroupSummary {
   id: string;
   summary: string;
+}
+
+export interface AgentOption {
+  label: string;
+  description?: string | null;
+}
+
+export interface AgentQuestion {
+  prompt: string;
+  options: AgentOption[];
 }
 
 export interface ChatSuggestResponse {
@@ -438,6 +460,8 @@ export interface ChatSuggestResponse {
   activity_trace?: ActivityStep[];
   run_id?: string | null;
   grounded?: boolean;
+  /** Present when the agent stopped to ask one or more clarifying questions. */
+  questions?: AgentQuestion[];
 }
 
 export interface ProcessMapGenerateRequest {

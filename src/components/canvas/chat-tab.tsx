@@ -8,6 +8,7 @@ import { useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type {
   ActivityStep,
+  AgentQuestion,
   ChatSuggestion,
   ChatTurn,
   GroupSummary,
@@ -18,10 +19,12 @@ import type {
   ViewerTarget,
 } from "@/lib/types";
 import { MentionMarkdown } from "./mention-view";
+import { mentionsToPlainText } from "./mention-markdown";
 import { traceHeaderLabel } from "./agent-trace";
 import {
+  buildSendContext,
+  pruneMissingContext,
   selectionChips,
-  selectionToContextRefs,
   type ContextChip,
   type SelectedObject,
 } from "./chat-context";
@@ -31,6 +34,8 @@ import { restoreAfterCancel, type PendingSend } from "./chat-cancel";
 import { bundleSuggestions, indexGraph, planBundle, type Bundle, type BundlePlan, type BatchResult } from "./suggestion-apply";
 import { bundleNewNames } from "./suggestion-display";
 import { SuggestionList, type CardStatus } from "./suggestion-card";
+import { assistantItemFromResponse } from "./chat-tab-helpers";
+import { QuestionSet } from "./question-set";
 
 export type ChatItem = ChatTurn & {
   contextNote?: string;
@@ -45,20 +50,20 @@ export type ChatItem = ChatTurn & {
   activityTrace?: ActivityStep[];
   grounded?: boolean;
   runId?: string | null;
+  /** Present when this assistant turn asked one or more clarifying questions. */
+  questions?: AgentQuestion[];
+  /** Set once the user has submitted answers to `questions` (locks the set). */
+  questionsAnswered?: boolean;
 };
 
-const SUGGESTED_PROMPTS: Record<"ask" | "suggest", string[]> = {
-  ask: [
-    "Find any gaps in this flow",
-    "Which steps lack source citations?",
-    "Compare this against typical processes",
-  ],
-  suggest: [
-    "Add the missing approval step",
-    "Fix the order of these two steps",
-    "Split this step into its sub-steps",
-  ],
-};
+const SUGGESTED_PROMPTS: string[] = [
+  "Find any gaps in this flow",
+  "Which steps lack source citations?",
+  "Add the missing approval step",
+  "Fix the order of these two steps",
+  "Split this step into its sub-steps",
+  "Compare this against typical processes",
+];
 
 const sidKey = (versionId: UUID) => `poet-chat-sid:${versionId}`;
 
@@ -104,7 +109,6 @@ export function ChatTab({
 }) {
   const sessionStore = useMemo(() => browserChatSessionStore(), []);
   const [showExamples, setShowExamples] = useState(false);
-  const [mode, setMode] = useState<"ask" | "suggest">("ask");
   const [history, setHistory] = useState<ChatItem[]>(() => sessionStore.load(versionId) as ChatItem[]);
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -133,7 +137,6 @@ export function ChatTab({
     pendingRef.current = null;
     undoHandles.current.clear();
     setBundleErrorById({});
-    setSessionContext([]);
     setSessionId(readOrMintSessionId(versionId));
     setHistory(sessionStore.load(versionId) as ChatItem[]);
   }, [versionId, sessionStore]);
@@ -154,12 +157,16 @@ export function ChatTab({
 
   const graphIndex = useMemo(() => indexGraph(graph), [graph]);
 
-  // The chat keeps its OWN context list, decoupled from the live canvas
-  // selection (#3). A non-empty canvas selection REPLACES it; deselecting
-  // (clicking empty canvas, Escape, etc.) leaves it intact — so the attached
-  // context isn't silently lost before the message is sent. The context tab's
-  // ✕ controls edit THIS list only; they no longer deselect the canvas node or
-  // close the Properties panel.
+  // The pending attachment for the NEXT message only — consumable, not a
+  // working set. It's decoupled from the live canvas selection (#3): a
+  // non-empty canvas selection REPLACES it; deselecting (clicking empty
+  // canvas, Escape, etc.) leaves it intact, so the attached context isn't
+  // silently lost before the message is sent. The context tab's ✕ controls
+  // edit THIS list only; they no longer deselect the canvas node or close the
+  // Properties panel. `submit` consumes it into that one message's
+  // context_refs and clears it immediately after — it never accumulates
+  // across messages, and later messages send no context_refs unless the user
+  // makes a new selection.
   const [chatContext, setChatContext] = useState<SelectedObject[]>([]);
   // Key on the SET of selected ids, not the array reference: a graph refetch
   // (e.g. after applying a suggestion) hands us a new `selected` array with the
@@ -174,18 +181,18 @@ export function ChatTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIdsKey]);
 
-  const chips = selectionChips(chatContext, labelById);
+  // Prune attached context whose object was deleted from the map, so a stale
+  // chip doesn't linger (and a deleted node isn't sent as context). Keyed on the
+  // live node/edge id sets.
+  const existingObjectIdsKey =
+    graph.nodes.map((n) => n.id).join("|") + "#" + graph.edges.map((e) => e.id).join("|");
+  useEffect(() => {
+    const ids = new Set<string>([...graph.nodes.map((n) => n.id), ...graph.edges.map((e) => e.id)]);
+    setChatContext((curr) => pruneMissingContext(curr, ids));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingObjectIdsKey]);
 
-  // Persistent, per-conversation attached context (Copilot "working set" style):
-  // the current selection commits into this on send, and the whole set rides
-  // along with EVERY subsequent message — so follow-up questions keep context
-  // even when the canvas selection doesn't change. Reset on New chat.
-  const [sessionContext, setSessionContext] = useState<SelectedObject[]>([]);
-  const sessionChips = selectionChips(sessionContext, labelById);
-  const mergeContext = (base: SelectedObject[], add: SelectedObject[]) => {
-    const seen = new Set(base.map((s) => s.id));
-    return [...base, ...add.filter((s) => !seen.has(s.id))];
-  };
+  const chips = selectionChips(chatContext, labelById);
 
   // Per-conversation chat session id (grouping key for agent_runs), persisted in
   // sessionStorage per version. Resettable state so it rotates on Clear (new
@@ -194,7 +201,7 @@ export function ChatTab({
   const [sessionId, setSessionId] = useState<string | null>(() => readOrMintSessionId(versionId));
 
   const ask = useMutation({
-    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextChips?: ContextChip[]; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal; mode: "ask" | "suggest" }) =>
+    mutationFn: (input: { history: ChatItem[]; userMessage: string; note?: string; contextChips?: ContextChip[]; contextRefs: ObjectRef[]; gen: number; signal: AbortSignal }) =>
       api.chatSuggest(
         projectId,
         modelId,
@@ -207,7 +214,8 @@ export function ChatTab({
           // server rejects content shorter than 1 char (422).
           history: toRequestHistory(input.history),
           user_message: input.userMessage,
-          mode: input.mode,
+          // `mode` deliberately omitted: the backend's agent loop always
+          // investigates-and-proposes and ignores it (see ChatSuggestRequest).
           context_refs: input.contextRefs,
           session_id: sessionId,
         },
@@ -221,17 +229,7 @@ export function ChatTab({
         { role: "user", content: vars.userMessage, contextNote: vars.note, contextRefs: vars.contextChips },
         // Carry this message's source mapping ON the message so it survives
         // reload and isn't lost when component state resets.
-        {
-          role: "assistant",
-          content: data.message,
-          sources: data.mention_sources,
-          suggestions: data.suggestions.length ? data.suggestions : undefined,
-          suggestionStatus: {},
-          groupSummaries: data.group_summaries.length ? data.group_summaries : undefined,
-          activityTrace: data.activity_trace ?? [],
-          grounded: data.grounded,
-          runId: data.run_id ?? null,
-        },
+        assistantItemFromResponse(data),
       ];
       sessionStore.save(versionId, next);
       setHistory(next);
@@ -251,28 +249,28 @@ export function ChatTab({
     if (el) el.scrollTop = el.scrollHeight;
   }, [history.length, ask.isPending]);
 
-  const submit = (text: string) => {
+  // `baseHistory` overrides the pre-send snapshot when the caller has already
+  // computed the history this send should build on — e.g. answering a clarifying
+  // question marks that question `questionsAnswered` and must carry that flag
+  // through onSuccess (which rebuilds from this snapshot); otherwise the flag,
+  // set via a separate setHistory, is clobbered when the reply lands and the
+  // question re-renders unanswered.
+  const submit = (text: string, baseHistory?: ChatItem[]) => {
     const trimmed = text.trim();
     if (!trimmed || ask.isPending) return;
-    // Commit the pending selection into the persistent session context, then
-    // send the WHOLE set — so a follow-up keeps context without re-selecting.
-    const merged = mergeContext(sessionContext, chatContext);
-    const contextRefs = selectionToContextRefs(merged);
-    // Snapshot the display chips too, so the sent turn keeps a clickable context
-    // row (and a plain-text note as a fallback for older persisted turns).
-    const mergedChips = selectionChips(merged, labelById);
-    const contextChips = mergedChips.length ? mergedChips : undefined;
-    const note = mergedChips.length ? mergedChips.map((c) => c.label).join(", ") : undefined;
-    // Capture mode at submit time so a later toggle doesn't change an in-flight request.
-    const currentMode = mode;
+    // Context is consumable, not a persistent working set: this send's
+    // context_refs come from whatever is pending right now (and nothing else).
+    // A follow-up with no new selection sends no context_refs — the agent
+    // relies on this turn's refs already being in the conversation history.
+    const { refs: contextRefs, chips: contextChips, note } = buildSendContext(chatContext, labelById);
     setDraft("");
     // Capture pre-send history snapshot before optimistic update
-    const preSendHistory = history;
-    // Snapshot what Pause needs to undo this send, and open an abort channel.
+    const preSendHistory = baseHistory ?? history;
+    // Snapshot what Pause must undo this send, and open an abort channel.
     pendingRef.current = { priorHistory: preSendHistory, text: trimmed };
     const controller = new AbortController();
     abortRef.current = controller;
-    setHistory((curr) => [...curr, { role: "user", content: trimmed, contextNote: note, contextRefs: contextChips }]);
+    setHistory(() => [...preSendHistory, { role: "user", content: trimmed, contextNote: note, contextRefs: contextChips }]);
     ask.mutate({
       history: preSendHistory,
       userMessage: trimmed,
@@ -281,15 +279,14 @@ export function ChatTab({
       contextRefs,
       gen: genRef.current,
       signal: controller.signal,
-      mode: currentMode,
     });
-    // Clear the chat context on send: the tab slides away and the attached objects
-    // are recorded on the message itself (contextNote, shown under the prompt). The
-    // canvas selection is deliberately left alone — so the Properties panel stays
-    // open and reflects an applied suggestion live, and selection stays decoupled
-    // from chat context (#3). The pending tab clears; the attached objects live on
-    // in the persistent session context and ride along with every later message.
-    setSessionContext(merged);
+    // Clear the pending attachment on send: the tab slides away and the attached
+    // objects are recorded on the message itself (contextNote/contextRefs, shown
+    // under the prompt). The canvas selection is deliberately left alone — so the
+    // Properties panel stays open and reflects an applied suggestion live, and
+    // selection stays decoupled from chat context (#3). Nothing is retained as a
+    // working set: the next message sends no context_refs unless the user makes
+    // a new selection.
     setChatContext([]);
   };
 
@@ -320,7 +317,6 @@ export function ChatTab({
     // stale Undo handle or error message from the cleared conversation.
     undoHandles.current.clear();
     setBundleErrorById({});
-    setSessionContext([]);
     // Clear = a new conversation: rotate the session id so its agent_runs aren't
     // grouped under the previous chat on this version.
     setSessionId(mintSessionId(versionId));
@@ -417,7 +413,7 @@ export function ChatTab({
           // User turns render right-aligned with no avatar.
           if (m.role !== "assistant") {
             return (
-              <ChatMsg key={i} turn={m} labelById={labelById} onNavigate={onNavigate} onOpenSource={onOpenSource} />
+              <ChatMsg key={`${versionId}-${i}`} turn={m} labelById={labelById} onNavigate={onNavigate} onOpenSource={onOpenSource} />
             );
           }
           // Assistant turns: one ✨ avatar fronting the prose bubble (if any) and
@@ -441,21 +437,23 @@ export function ChatTab({
               labelById={labelById}
               sourceNameByClaim={sourceNameByClaim}
               sourceTargetByClaim={sourceTargetByClaim}
+              sources={m.sources}
               laneNameById={laneNameById}
               newNameByRef={newNameByRef}
               onNavigate={onNavigate}
               onOpenSource={onOpenSource}
             />
           );
+          // Same maps as renderText, but flattening mentions to plain names — used
+          // when composing the answer message so it reads as prose (not [[uuid]]).
+          const plainText = (text: string) =>
+            mentionsToPlainText(text, labelById, sourceNameByClaim, laneNameById, newNameByRef);
           const summaryById = new Map((m.groupSummaries ?? []).map((g) => [g.id, g.summary]));
           return (
-            <div key={i} className="flex items-start gap-2">
+            <div key={`${versionId}-${i}`} className="flex items-start gap-2">
               <Sparkles size={16} className="mt-1 flex-shrink-0 text-indigo-500" />
               <div className="min-w-0 flex-1 space-y-1.5">
                 <ChatMsg turn={m} labelById={labelById} onNavigate={onNavigate} onOpenSource={onOpenSource} />
-                {m.role === "assistant" && m.activityTrace && m.activityTrace.length > 0 && (
-                  <ActivityTrace steps={m.activityTrace} />
-                )}
                 {bundles && (
                   <SuggestionList
                     bundles={bundles}
@@ -468,7 +466,27 @@ export function ChatTab({
                     renderText={renderText}
                     summaryById={summaryById}
                     errorById={bundleErrorById}
+                    lanes={graph.lanes}
                   />
+                )}
+                {m.role === "assistant" && m.questions && m.questions.length > 0 && (
+                  <QuestionSet
+                    questions={m.questions}
+                    renderText={renderText}
+                    plainText={plainText}
+                    disabled={ask.isPending}
+                    answered={m.questionsAnswered}
+                    onSubmit={(composed) => {
+                      // Mark this question answered on the SEND's base history so the
+                      // flag survives onSuccess (which rebuilds from that snapshot) and
+                      // is persisted — the question stays closed across reloads/remounts.
+                      const flagged = history.map((it, idx) => (idx === i ? { ...it, questionsAnswered: true } : it));
+                      submit(composed, flagged);
+                    }}
+                  />
+                )}
+                {m.role === "assistant" && m.activityTrace && m.activityTrace.length > 0 && (
+                  <ActivityTrace steps={m.activityTrace} />
                 )}
               </div>
             </div>
@@ -552,7 +570,7 @@ export function ChatTab({
         >
           {showExamples && (
             <div className="mb-1.5 flex flex-wrap gap-1.5">
-              {SUGGESTED_PROMPTS[mode].map((s) => (
+              {SUGGESTED_PROMPTS.map((s) => (
                 <button
                   key={s}
                   onClick={() => {
@@ -566,28 +584,6 @@ export function ChatTab({
               ))}
             </div>
           )}
-          {sessionChips.length > 0 && (
-            <SessionContextRow
-              chips={sessionChips}
-              onNavigate={onNavigate}
-              onRemove={(id) => setSessionContext((curr) => curr.filter((s) => s.id !== id))}
-              onClear={() => setSessionContext([])}
-            />
-          )}
-          <div className="mb-1.5 inline-flex rounded-md border border-slate-200 p-0.5 text-[10px]">
-            {(["ask", "suggest"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                className={
-                  "rounded px-2 py-0.5 font-semibold capitalize transition " +
-                  (mode === m ? "bg-slate-900 text-white" : "text-slate-500 hover:text-slate-800")
-                }
-              >
-                {m}
-              </button>
-            ))}
-          </div>
           <div className="flex items-end gap-1.5">
             <button
               onClick={() => setShowExamples((v) => !v)}
@@ -629,70 +625,6 @@ export function ChatTab({
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-/** The persistent, per-conversation attached context ("working set"): the
- * objects that ride along with every message. Collapsed by default to a
- * "Context · N ▸" summary so it never eats vertical space as it accumulates;
- * expands to removable chips. `clear` empties the whole set. */
-function SessionContextRow({
-  chips,
-  onNavigate,
-  onRemove,
-  onClear,
-}: {
-  chips: ContextChip[];
-  onNavigate: (ref: { kind: "node" | "edge"; id: UUID }) => void;
-  onRemove: (id: UUID) => void;
-  onClear: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="mb-1.5">
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          className="flex items-center gap-0.5 text-[10px] font-medium text-slate-500 hover:text-slate-700"
-        >
-          <ChevronRight size={11} className={"transition-transform " + (open ? "rotate-90" : "")} />
-          Context · {chips.length}
-        </button>
-        <button
-          type="button"
-          onClick={onClear}
-          title="Clear all context"
-          className="ml-1 text-[9.5px] text-slate-400 hover:text-slate-600"
-        >
-          clear
-        </button>
-      </div>
-      {open && (
-        <div className="mt-1 flex flex-wrap gap-1">
-          {chips.map((c) => (
-            <span key={`${c.kind}:${c.id}`} className="group relative inline-flex">
-              <button
-                onClick={() => onNavigate({ kind: c.kind, id: c.id })}
-                title="Jump to this step"
-                className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white py-0.5 pl-2 pr-5 text-[10px] text-slate-700 hover:bg-slate-100"
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
-                {c.label}
-              </button>
-              <button
-                onClick={() => onRemove(c.id)}
-                title="Remove from context"
-                className="absolute right-0.5 top-1/2 hidden -translate-y-1/2 rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 group-hover:block"
-              >
-                <X size={10} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -820,6 +752,7 @@ function ChatMsg({
         labelById={labelById}
         sourceNameByClaim={sourceNameByClaim}
         sourceTargetByClaim={sourceTargetByClaim}
+        sources={turn.sources}
         onNavigate={onNavigate}
         onOpenSource={onOpenSource}
       />

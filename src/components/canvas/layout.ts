@@ -141,6 +141,7 @@ export function buildCanvasState(graph: ProcessGraph): {
     label: e.label,
     bendX: e.bend_x ?? null,
     bendY: e.bend_y ?? null,
+    condition: e.condition_text ?? null,
   }));
 
   return { nodes, edges, lanes };

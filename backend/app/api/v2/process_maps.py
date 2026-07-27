@@ -115,20 +115,20 @@ from app.services.process_generation import (
 )
 from app.schemas.version_chat_suggest import (
     ActivityStep,
-    ChatMode,
+    AgentOption,
+    AgentQuestion,
     ChatSuggestRequest,
     ChatSuggestResponse,
-    ChatSuggestion,
     ChatTurn as SuggestChatTurn,
     GroupSummary,
     MentionSource,
-    ObjectRef,
-    OpKind,
     RefKind,
-    SuggestionOp,
 )
-from app.services.map_chat_suggest import run_chat_suggest
 from app.services.map_consistency import scan_map
+from app.services.suggestion_ops import (
+    _resolve_mention_refs,
+    _resolve_refs,
+)
 from app.models.agent_run import AgentRun
 from app.services.agent_tools import AgentToolCtx
 
@@ -888,10 +888,11 @@ def create_node(
         model_id=version.model_id,
         version_id=version.id,
         kind=ChangeKind.CREATE.value,
-        reason="Added from the shape palette",
+        reason=(payload.reason.strip() if payload.reason and payload.reason.strip() else "Added from the shape palette"),
         after={"name": node.name, "type": node.type,
                "lane_id": str(node.lane_id) if node.lane_id else None},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
     )
     db.commit()
     db.refresh(node)
@@ -1053,10 +1054,11 @@ def create_edge(
         model_id=version.model_id,
         version_id=version.id,
         kind=ChangeKind.CONNECT.value,
-        reason="Connected two nodes",
+        reason=(payload.reason.strip() if payload.reason and payload.reason.strip() else "Connected two nodes"),
         after={"source_node_id": str(edge.source_node_id),
                "target_node_id": str(edge.target_node_id)},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
     )
     db.commit()
     db.refresh(edge)
@@ -1078,6 +1080,9 @@ def update_edge(
     old_label = edge.label
     if "label" in payload.model_fields_set:
         edge.label = payload.label or None
+    old_condition = edge.condition_text
+    if "condition_text" in payload.model_fields_set:
+        edge.condition_text = payload.condition_text or None
     if "bend_x" in payload.model_fields_set:
         edge.bend_x = payload.bend_x
     if "bend_y" in payload.model_fields_set:
@@ -1098,6 +1103,28 @@ def update_edge(
             reason=payload.reason.strip(),
             before={"label": old_label},
             after={"label": edge.label},
+            source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+            actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
+        )
+
+    condition_changed = (
+        "condition_text" in payload.model_fields_set
+        and (payload.condition_text or None) != old_condition
+    )
+    if condition_changed:
+        if not (payload.reason and payload.reason.strip()):
+            db.rollback()
+            raise HTTPException(status_code=422, detail="A reason is required to change an edge condition.")
+        record_change(
+            db,
+            target_type=ChangeTargetType.EDGE.value,
+            target_id=edge.id,
+            model_id=model_id_for_version(db, edge.version_id),
+            version_id=edge.version_id,
+            kind=ChangeKind.SET_CONDITION.value,
+            reason=payload.reason.strip(),
+            before={"condition_text": old_condition},
+            after={"condition_text": edge.condition_text},
             source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
             actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
         )
@@ -1272,9 +1299,10 @@ def add_lane(
         model_id=version.model_id,
         version_id=version.id,
         kind=ChangeKind.CREATE.value,
-        reason="Added a new swim lane",
+        reason=(payload.reason.strip() if payload.reason and payload.reason.strip() else "Added a new swim lane"),
         after={"name": lane.name},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
     )
     db.commit()
     db.refresh(lane)
@@ -1577,6 +1605,7 @@ def delete_lane(
     project: Annotated[Project, Depends(get_project_or_404)],
     lane_id: UUID,
     db: Annotated[Session, Depends(get_db)],
+    ai_applied: bool = False,
 ) -> None:
     lane = db.get(ProcessLane, lane_id)
     if lane is None:
@@ -1612,9 +1641,10 @@ def delete_lane(
         model_id=model_id_for_version(db, lane.version_id),
         version_id=lane.version_id,
         kind=ChangeKind.DELETE.value,
-        reason="Deleted",
+        reason="Removed by AI suggestion" if ai_applied else "Deleted",
         before={"name": lane.name},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if ai_applied else ChangeActorKind.USER.value,
     )
     db.delete(lane)
     db.flush()
@@ -1773,206 +1803,6 @@ def chat_with_map(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return ChatResponse(content=content)
-
-
-def _resolve_refs(refs, claim_ref_to_id):
-    """Map the model's short claim refs to real UUIDs; drop any not present in
-    the grounding context (defeats fabricated citations)."""
-    out = []
-    for r in refs or []:
-        cid = claim_ref_to_id.get(str(r).strip().upper())
-        if cid is not None and cid not in out:
-            out.append(cid)
-    return out
-
-
-# Op field -> (resolution map attname, RefKind). Fields not listed are literals.
-_OP_REF_FIELDS: dict[str, tuple[str, RefKind]] = {
-    "node_ref": ("node_ref_to_id", RefKind.NODE),
-    "near_node_ref": ("node_ref_to_id", RefKind.NODE),
-    "edge_ref": ("edge_ref_to_id", RefKind.EDGE),
-    "lane_ref": ("lane_ref_to_id", RefKind.LANE),
-    "from_ref": ("node_ref_to_id", RefKind.NODE),
-    "to_ref": ("node_ref_to_id", RefKind.NODE),
-    "temp_id": (None, None),  # never resolved; identifies a new object
-}
-
-
-def _resolve_one_ref(value, map_attr, ctx):
-    """Short ref (N1) -> UUID string. tmp:N and unknown refs pass through unchanged."""
-    if value is None or str(value).startswith("tmp:"):
-        return value, None
-    real = getattr(ctx, map_attr).get(str(value).strip().upper())
-    if real is None:
-        return value, None  # leave unresolved; affected_refs will skip it
-    return str(real), real
-
-
-_MENTION_RE = re.compile(r"\[\[([NELC])(\d+)\]\]")
-_MENTION_KIND = {"N": ("node", "node_ref_to_id"), "E": ("edge", "edge_ref_to_id"),
-                 "L": ("lane", "lane_ref_to_id"), "C": ("claim", "claim_ref_to_id")}
-
-
-def _resolve_mention_refs(message: str, ctx) -> str:
-    """Rewrite short refs the model emitted ([[N3]]/[[E2]]/[[C1]]/[[L1]]) into
-    stable [[kind:uuid]] mentions the frontend can link. Unknown refs are
-    flattened to plain text so prose stays readable."""
-    def _sub(m):
-        letter, num = m.group(1), m.group(2)
-        short = f"{letter}{num}"
-        kind, attr = _MENTION_KIND[letter]
-        real = getattr(ctx, attr).get(short)
-        return f"[[{kind}:{real}]]" if real is not None else short
-    return _MENTION_RE.sub(_sub, message)
-
-
-def _build_suggestion(raw: dict, ctx, index: int):
-    """Resolve a raw model suggestion into a validated ChatSuggestion, or None
-    if the op is malformed. Mirrors _resolve_refs' fabricated-ref hygiene."""
-    op_kwargs = {"kind": raw.get("kind")}
-    affected: list[ObjectRef] = []
-    real_id_by_field: dict[str, UUID] = {}
-    for field, (map_attr, ref_kind) in _OP_REF_FIELDS.items():
-        if field not in raw or raw[field] is None:
-            continue
-        if field == "temp_id":
-            op_kwargs[field] = raw[field]
-            continue
-        resolved_str, real_id = _resolve_one_ref(raw[field], map_attr, ctx)
-        op_kwargs[field] = resolved_str
-        if real_id is not None:
-            affected.append(ObjectRef(kind=ref_kind, id=real_id))
-            real_id_by_field[field] = real_id
-    # literal (non-ref) fields pass straight through
-    for field in ("new_label", "description", "name", "node_type", "edge_label", "sub_steps"):
-        if raw.get(field) is not None:
-            op_kwargs[field] = raw[field]
-
-    # add_node requires `new_label`, but the model commonly fills the generic
-    # `name` field for a new node's label instead. Coalesce so the op validates
-    # rather than being dropped (a dropped add_node orphans the add_edge ops that
-    # point at its temp_id, which then sinks the whole bundle on the client).
-    if (
-        op_kwargs.get("kind") == OpKind.ADD_NODE.value
-        and not op_kwargs.get("new_label")
-        and op_kwargs.get("name")
-    ):
-        op_kwargs["new_label"] = op_kwargs["name"]
-
-    try:
-        op = SuggestionOp(**op_kwargs)
-    except (ValueError, TypeError, KeyError):
-        return None  # malformed op -> dropped, never reaches the client
-
-    # Normalize the group to a trimmed string (or None): the model can emit a
-    # non-string or whitespace-padded value, which would otherwise miss the
-    # later group_summaries match.
-    raw_group = raw.get("group")
-    group = raw_group.strip() if isinstance(raw_group, str) and raw_group.strip() else None
-
-    # Resolve [[N3]]/[[C1]] mentions in title + rationale into [[kind:uuid]] the
-    # same way prose is resolved, so the UI renders named, clickable links there.
-    return ChatSuggestion(
-        id=f"sg-{index}-{uuid4().hex[:8]}",
-        group=group,
-        title=_resolve_mention_refs(str(raw.get("title") or op.kind.value), ctx)[:300],
-        op=op,
-        affected_refs=affected,
-        rationale=_resolve_mention_refs(str(raw.get("rationale") or ""), ctx)[:2000],
-        cited_claim_ids=_resolve_refs(raw.get("cited_claim_refs"), ctx.claim_ref_to_id),
-        before_label=_rename_before_label(op.kind, real_id_by_field, ctx),
-    )
-
-
-def _rename_before_label(kind, real_id_by_field: dict, ctx) -> str | None:
-    """For a rename-family op, the target's current name/label — frozen so the
-    card shows a stable "old -> new" instead of collapsing once applied."""
-    field, attr = {
-        OpKind.RELABEL_NODE: ("node_ref", "node_name_by_id"),
-        OpKind.RENAME_LANE: ("lane_ref", "lane_name_by_id"),
-        OpKind.RELABEL_EDGE: ("edge_ref", "edge_label_by_id"),
-    }.get(kind, (None, None))
-    if field is None or field not in real_id_by_field:
-        return None
-    return getattr(ctx, attr, {}).get(real_id_by_field[field])
-
-
-def _repair_new_lane_temp_ids(raw_suggestions) -> None:
-    """In-place: recover the producer/consumer link for a "create a lane and move
-    a step into it" bundle.
-
-    The model frequently emits `add_lane` (with a `name` but NO `temp_id`) plus a
-    `move_to_lane`/`add_node` that references the new lane via a `tmp:` `lane_ref`.
-    Without a `temp_id` the add_lane fails validation and is dropped in build,
-    which in turn orphans its consumer (pruned by `_drop_orphaned_consumers`), so
-    the whole change silently vanishes. The model taught only the add_node/add_edge
-    temp_id convention; this is the lane analogue of the add_node `new_label`
-    coalesce. Give each temp_id-less add_lane the tmp lane ref its siblings already
-    point at — matched by the shared `group` when present, or the single
-    unambiguous ref across the bundle otherwise. Only acts when unambiguous."""
-    if not isinstance(raw_suggestions, list):
-        return
-
-    def _is_tmp(v) -> bool:
-        return isinstance(v, str) and v.startswith("tmp:")
-
-    add_lane = OpKind.ADD_LANE.value
-    # tmp lane refs consumed by non-add_lane ops, overall and keyed by group.
-    consumed_all: set[str] = set()
-    consumed_by_group: dict[str, set[str]] = {}
-    for s in raw_suggestions:
-        if not isinstance(s, dict) or s.get("kind") == add_lane:
-            continue
-        ref = s.get("lane_ref")
-        if _is_tmp(ref):
-            consumed_all.add(ref)
-            group = s.get("group")
-            if isinstance(group, str):
-                consumed_by_group.setdefault(group, set()).add(ref)
-
-    needy = [
-        s for s in raw_suggestions
-        if isinstance(s, dict) and s.get("kind") == add_lane and not _is_tmp(s.get("temp_id"))
-    ]
-    for s in needy:
-        group = s.get("group")
-        by_group = consumed_by_group.get(group) if isinstance(group, str) else None
-        if by_group and len(by_group) == 1:
-            s["temp_id"] = next(iter(by_group))
-        elif len(needy) == 1 and len(consumed_all) == 1:
-            s["temp_id"] = next(iter(consumed_all))
-
-
-def _drop_orphaned_consumers(suggestions: list[ChatSuggestion]) -> list[ChatSuggestion]:
-    """Remove suggestions that consume a `tmp:` ref with no surviving producer.
-
-    A producer is an op that actually creates a referenceable object — add_node
-    (a node) or add_lane (a lane). If the model's producing op is dropped during
-    build, its `tmp:` id is left dangling on the consumers (the add_edge ops that
-    point at it). The frontend rejects an entire bundle the moment one ref is
-    unresolvable, so we prune the orphans server-side and ship only the
-    internally-consistent ops. Only genuine producers count, so a malformed op
-    that carries a stray `temp_id` can't keep a consumer alive. Runs to a fixpoint
-    in case a pruned consumer was itself a producer."""
-    producer_kinds = {OpKind.ADD_NODE, OpKind.ADD_LANE}
-    kept = list(suggestions)
-    while True:
-        produced = {s.op.temp_id for s in kept if s.op.kind in producer_kinds and s.op.temp_id}
-        survivors = []
-        for s in kept:
-            consumed = (
-                s.op.node_ref, s.op.edge_ref, s.op.lane_ref,
-                s.op.from_ref, s.op.to_ref, s.op.near_node_ref,
-            )
-            dangling = any(
-                r and str(r).startswith("tmp:") and r not in produced
-                for r in consumed
-            )
-            if not dangling:
-                survivors.append(s)
-        if len(survivors) == len(kept):
-            return survivors
-        kept = survivors
 
 
 def _resolve_node_ref(ref, node_id_by_ref):
@@ -2187,7 +2017,18 @@ def _mention_sources_from_texts(texts: list[str], ctx) -> list[MentionSource]:
     return out
 
 
-def _run_ask_agent(db, project, model_id, version, ctx, focus_refs, payload) -> ChatSuggestResponse:
+def _clamp_resolved(text: str, limit: int) -> str:
+    """Truncate resolved mention text to a schema limit without leaving a dangling,
+    unclosed `[[kind:uuid` fragment from a mid-mention cut (which would render as
+    raw markup in the UI)."""
+    t = (text or "")[:limit]
+    open_at = t.rfind("[[")
+    if open_at != -1 and "]]" not in t[open_at:]:
+        t = t[:open_at].rstrip()
+    return t
+
+
+def _run_chat_agent(db, project, model_id, version, ctx, focus_refs, payload) -> ChatSuggestResponse:
     tool_ctx = AgentToolCtx(db=db, project_id=project.id, version=version, mapctx=ctx)
     history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
     # Resolve each focused ref to its label so the loop can name the selected
@@ -2231,19 +2072,61 @@ def _run_ask_agent(db, project, model_id, version, ctx, focus_refs, payload) -> 
         )
 
     resolved = _resolve_mention_refs(result.answer, ctx)
-    mention_sources = _mention_sources_from_texts([resolved], ctx)
+    suggestions = result.proposals  # validated ChatSuggestions (resolved refs) from the loop
+    questions = []
+    for rq in (result.questions or []):
+        # Resolve THEN clamp: _resolve_mention_refs expands short refs ([[N3]]) into
+        # much longer [[node:uuid]] mentions, so a prompt/label/description near the
+        # normalize caps can overflow AgentQuestion/AgentOption's max_length and raise
+        # here (outside the try/except) — a 500 that drops the whole ask turn. Clamp
+        # the RESOLVED text to the schema limits (mirrors suggestion_ops).
+        prompt = _clamp_resolved(_resolve_mention_refs(rq.get("prompt") or "", ctx), 2000)
+        if not prompt:
+            continue
+        opts = []
+        for o in rq.get("options", []):
+            if not o.get("label"):
+                continue
+            label = _clamp_resolved(_resolve_mention_refs(o["label"], ctx), 120)
+            if not label:
+                continue
+            desc = _clamp_resolved(_resolve_mention_refs(o["description"], ctx), 300) if o.get("description") else None
+            opts.append(AgentOption(label=label, description=desc or None))
+        questions.append(AgentQuestion(prompt=prompt, options=opts))
+    # Cards alone ARE the response; but when the agent asked, its prose explains why — show it.
+    message = resolved if (questions or not suggestions) else ""
+    # Mention sources come from the answer prose AND the cards' titles/rationales.
+    claim_texts = [resolved] + [s.title for s in suggestions] + [s.rationale for s in suggestions]
+    mention_sources = _mention_sources_from_texts(claim_texts, ctx)
     cited = [str(s.claim_id) for s in mention_sources]
     grounded = assess_grounded(resolved, cited)
+    # Group summaries: only for groups actually present on an emitted suggestion.
+    used_groups = {s.group for s in suggestions if s.group}
+    group_summaries: list[GroupSummary] = []
+    seen_groups: set[str] = set()
+    for g in result.group_summaries:
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("id") or "").strip()
+        summary = str(g.get("summary") or "").strip()
+        if not gid or not summary or gid not in used_groups or gid in seen_groups:
+            continue
+        seen_groups.add(gid)
+        try:
+            group_summaries.append(GroupSummary(id=gid, summary=summary[:500]))
+        except ValueError:
+            continue
     run = _persist(
-        answer=resolved, trace=result.trace, consulted=[str(x) for x in result.consulted_claim_ids],
+        answer=resolved, trace=result.trace,
+        consulted=[str(x) for x in result.consulted_claim_ids],
         cited=cited, in_tok=result.input_tokens, out_tok=result.output_tokens,
         rounds=result.round_count, stop=result.stop_reason, grounded=grounded,
     )
     return ChatSuggestResponse(
-        message=resolved, suggestions=[], mention_sources=mention_sources,
-        group_summaries=[],
+        message=message, suggestions=suggestions, mention_sources=mention_sources,
+        group_summaries=group_summaries,
         activity_trace=[ActivityStep(**t) for t in result.trace],
-        run_id=run.id, grounded=grounded,
+        run_id=run.id, grounded=grounded, questions=questions,
     )
 
 
@@ -2258,10 +2141,11 @@ def chat_suggest(
     payload: ChatSuggestRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatSuggestResponse:
-    """Word-style chat. Ask mode answers in prose; suggest mode also returns
-    structured, applyable suggested changes. Never mutates the map. Model claim
-    refs are resolved to UUIDs and fabricated ones dropped; malformed ops are
-    discarded before reaching the client."""
+    """Word-style chat. Every request runs the agent tool loop (`_run_chat_agent`),
+    which can answer in prose and/or accumulate `propose_changes` calls into
+    applyable suggestion cards. Never mutates the map. Model claim refs are
+    resolved to UUIDs and fabricated ones dropped; malformed ops are discarded
+    before they become proposals."""
     model = db.get(ProcessModel, model_id)
     if model is None or model.project_id != project.id:
         raise HTTPException(status_code=404, detail="Process model not found")
@@ -2283,72 +2167,7 @@ def chat_suggest(
         if r.kind == RefKind.NODE and r.id in ctx.node_ref_by_id
     ]
 
-    if payload.mode == ChatMode.ASK:
-        return _run_ask_agent(db, project, model_id, version, ctx, focus_refs, payload)
-
-    map_text = ctx.text
-    if focus_refs:
-        map_text += (
-            "\n\nThe user has attached these steps as the focus of the question; "
-            "address all of them: " + ", ".join(focus_refs)
-        )
-
-    history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
-    try:
-        message, raw_suggestions, raw_groups = run_chat_suggest(
-            history=history,
-            user_message=payload.user_message,
-            map_context_text=map_text,
-            mode=payload.mode,
-        )
-    except RuntimeError as exc:  # service raises only RuntimeError; _build_suggestion swallows ValueError
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    # The model often creates a lane and moves a step into it but omits the
-    # add_lane's temp_id, only referencing the new lane via a tmp lane_ref on the
-    # move. Recover that producer/consumer link before build so the add_lane
-    # validates instead of being dropped (and its consumer pruned as an orphan).
-    _repair_new_lane_temp_ids(raw_suggestions)
-    suggestions = []
-    for i, raw in enumerate(raw_suggestions):
-        built = _build_suggestion(raw, ctx, index=i)
-        if built is not None:
-            suggestions.append(built)
-    # A dropped producing op leaves its temp_id dangling on the ops that consume
-    # it; prune those orphans so the client never sees an unresolvable bundle.
-    suggestions = _drop_orphaned_consumers(suggestions)
-    # When a command yields suggestion cards, the cards ARE the response. Drop any
-    # top-level prose: the model occasionally narrates the change (restating the
-    # node's name or echoing the proposed text) despite the prompt rules, and that
-    # prose is pure noise next to the card. Questions (no suggestions) keep prose.
-    resolved = "" if suggestions else _resolve_mention_refs(message, ctx)
-    # Build mention sources from claim refs in the prose AND in the resolved
-    # suggestion titles/rationales (those now carry [[claim:uuid]] too). Shared
-    # with the ask-agent path: dedupes, skips malformed uuids, preserves order.
-    claim_texts = [resolved] + [s.title for s in suggestions] + [s.rationale for s in suggestions]
-    mention_sources = _mention_sources_from_texts(claim_texts, ctx)
-    # Group summaries — only for groups actually present on an emitted suggestion.
-    used_groups = {s.group for s in suggestions if s.group}
-    group_summaries: list[GroupSummary] = []
-    seen_groups: set[str] = set()
-    for g in raw_groups:
-        if not isinstance(g, dict):
-            continue
-        gid = str(g.get("id") or "").strip()
-        summary = str(g.get("summary") or "").strip()
-        if not gid or not summary or gid not in used_groups or gid in seen_groups:
-            continue
-        seen_groups.add(gid)
-        try:
-            group_summaries.append(GroupSummary(id=gid, summary=summary[:500]))
-        except ValueError:
-            continue
-    return ChatSuggestResponse(
-        message=resolved,
-        suggestions=suggestions,
-        mention_sources=mention_sources,
-        group_summaries=group_summaries,
-    )
+    return _run_chat_agent(db, project, model_id, version, ctx, focus_refs, payload)
 
 
 @router.post(

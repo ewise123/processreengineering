@@ -49,6 +49,8 @@ class LaneCreate(BaseModel):
     order_index: int = Field(ge=0)
     height_px: int | None = Field(default=None, ge=80)
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    reason: str | None = None
+    ai_applied: bool = False
 
 
 class LaneUpdate(BaseModel):
@@ -85,6 +87,8 @@ class NodeCreate(BaseModel):
     lane_id: UUID
     x: float
     relative_y: float
+    reason: str | None = None
+    ai_applied: bool = False
 
 
 class EdgeCreate(BaseModel):
@@ -93,13 +97,17 @@ class EdgeCreate(BaseModel):
     source_node_id: UUID
     target_node_id: UUID
     label: str | None = Field(default=None, max_length=300)
+    reason: str | None = None
+    ai_applied: bool = False
 
 
 class EdgeUpdate(BaseModel):
     """Partial update for an edge. Empty-string labels are normalized to None
-    on the server so the persisted state matches 'no label'."""
+    on the server so the persisted state matches 'no label'. condition_text
+    gets the same empty-string-to-None treatment."""
 
     label: str | None = Field(default=None, max_length=300)
+    condition_text: str | None = None
     bend_x: float | None = None
     bend_y: float | None = None
     reason: str | None = Field(default=None, max_length=2000)

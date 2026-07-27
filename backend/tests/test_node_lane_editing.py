@@ -1,4 +1,6 @@
 """Integration tests for SP-2 node-type and lane color/collapse editing."""
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -9,6 +11,7 @@ from app.models.identity import Organization, User
 from app.models.input import Chunk, DocumentSection, Input
 from app.models.process import (
     NodeClaimLink,
+    ProcessEdge,
     ProcessLane,
     ProcessModel,
     ProcessNode,
@@ -161,3 +164,42 @@ def test_lane_read_defaults_when_unset(client, db):
     lane0 = resp.json()["lanes"][0]
     assert lane0["color"] is None
     assert lane0["collapsed"] is False
+
+
+@pytest.fixture()
+def seed_version_with_edge(db):
+    """Extends _seed_map with a second node and an edge between the two, for
+    tests that PATCH /edges/{id}."""
+    proj, version, lane, node, _claim = _seed_map(db)
+    node2 = ProcessNode(
+        version_id=version.id,
+        lane_id=lane.id,
+        type="task",
+        name="Approve",
+        position={"x": 300.0, "relative_y": 40.0},
+        properties={},
+    )
+    db.add(node2)
+    db.flush()
+    edge = ProcessEdge(
+        version_id=version.id,
+        source_node_id=node.id,
+        target_node_id=node2.id,
+        label=None,
+    )
+    db.add(edge)
+    db.commit()
+    return SimpleNamespace(project_id=proj.id, edge_id=edge.id)
+
+
+def test_update_edge_sets_condition_text(client, seed_version_with_edge):
+    """PATCH /edges/{id} with condition_text persists the gateway branch guard
+    and records an AI-attributed change when ai_applied is true."""
+    edge_id = seed_version_with_edge.edge_id
+    project_id = seed_version_with_edge.project_id
+    resp = client.patch(
+        f"/api/v2/projects/{project_id}/edges/{edge_id}",
+        json={"condition_text": "amount > 10000", "reason": "gateway guard", "ai_applied": True},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["condition_text"] == "amount > 10000"

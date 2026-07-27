@@ -3,9 +3,16 @@
 import { Check, ChevronRight, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import type { OpKind } from "@/lib/types";
+import type { OpKind, ProcessLane } from "@/lib/types";
 import { isDeleteOp, type Bundle } from "./suggestion-apply";
-import { opPayload, opTarget, renameTransition, suggestedChangesSuffix } from "./suggestion-display";
+import {
+  groundingChip,
+  laneReassignmentTarget,
+  opPayload,
+  opTarget,
+  renameTransition,
+  suggestedChangesSuffix,
+} from "./suggestion-display";
 
 export type CardStatus = "pending" | "applying" | "applied" | "failed" | "dismissed";
 
@@ -23,6 +30,9 @@ const ACTION_LABEL: Record<OpKind, string> = {
   add_lane: "Add lane",
   rename_lane: "Rename lane",
   decompose: "Break down",
+  change_node_type: "Change type",
+  remove_lane: "Remove lane",
+  set_edge_condition: "Set condition",
 };
 
 export function SuggestionList({
@@ -36,6 +46,7 @@ export function SuggestionList({
   renderText,
   summaryById,
   errorById,
+  lanes,
 }: {
   bundles: Bundle[];
   statusById: Record<string, CardStatus>;
@@ -50,6 +61,9 @@ export function SuggestionList({
   summaryById: Map<string, string>;
   /** bundle id → the apply-failure message to show on a failed card. */
   errorById: Record<string, string>;
+  /** The map's lanes, so a remove_lane card can name the lane its steps get
+   * reassigned to. */
+  lanes: ProcessLane[];
 }) {
   if (bundles.length === 0) return null;
   // Dismissed cards stay visible (dimmed); only still-pending ones feed "Apply all".
@@ -88,6 +102,7 @@ export function SuggestionList({
           onDismiss={() => onDismiss(b.id)}
           onRestore={() => onRestore(b.id)}
           renderText={renderText}
+          lanes={lanes}
         />
       ))}
     </div>
@@ -114,6 +129,7 @@ function SuggestionCard({
   onDismiss,
   onRestore,
   renderText,
+  lanes,
 }: {
   bundle: Bundle;
   status: CardStatus;
@@ -125,6 +141,7 @@ function SuggestionCard({
   onDismiss: () => void;
   onRestore: () => void;
   renderText: (text: string) => ReactNode;
+  lanes: ProcessLane[];
 }) {
   const [confirming, setConfirming] = useState(false);
   const isDelete = !bundle.undoable;
@@ -188,9 +205,12 @@ function SuggestionCard({
           // live mention target + proposed-value preview.
           const transition = renameTransition(s.op, s.before_label);
           const payload = transition ? null : opPayload(s.op);
+          // remove_lane doesn't otherwise preview a value; this reassures the
+          // user the removed lane's steps aren't lost, naming where they land.
+          const reassignTarget = laneReassignmentTarget(s.op, lanes);
           return (
             <div key={s.id} className="rounded border border-slate-200 bg-white/70 px-1.5 py-1.5">
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <span
                   className={
                     "shrink-0 rounded px-1 py-px text-[8.5px] font-bold uppercase tracking-wide " +
@@ -202,6 +222,17 @@ function SuggestionCard({
                 <span className="min-w-0 text-[11px] font-medium leading-snug text-slate-800">
                   {target ? renderText(target) : renderText(s.title)}
                 </span>
+                {(() => {
+                  const chip = groundingChip(s);
+                  return chip ? (
+                    <span
+                      className="shrink-0 rounded px-1 py-px text-[8.5px] font-bold uppercase tracking-wide bg-amber-100 text-amber-700"
+                      title="This change is not backed by your uploaded sources."
+                    >
+                      {chip.label}
+                    </span>
+                  ) : null;
+                })()}
               </div>
               {transition ? (
                 <div className="mt-1 flex flex-wrap items-center gap-1 rounded bg-slate-100/80 px-1.5 py-1 text-[11px] leading-snug">
@@ -214,6 +245,11 @@ function SuggestionCard({
                   {payload.hasMention ? renderText(payload.value) : payload.value}
                 </div>
               ) : null}
+              {reassignTarget && (
+                <div className="mt-1 whitespace-pre-wrap rounded bg-slate-100/80 px-1.5 py-1 text-[11px] leading-snug text-slate-700">
+                  → its steps move to {renderText(`[[lane:${reassignTarget}]]`)}
+                </div>
+              )}
               {s.rationale && <Reasoning rationale={s.rationale} renderText={renderText} />}
             </div>
           );
