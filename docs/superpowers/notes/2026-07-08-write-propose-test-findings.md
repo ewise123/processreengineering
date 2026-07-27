@@ -222,3 +222,27 @@ From the browser pass:
 
 ### FOLLOW-UP (tracked, NOT started) — deletes should require a reason
 User asked (2026-07-14): deleting a step/edge/lane currently needs no reason, but lane-*moves* do — inconsistent, and a delete is the most provenance-critical edit. **Decision: require a reason on delete (node/edge/lane), as its OWN small change/PR — NOT mixed into #46.** Ties to [[future_delete_consequences]] (the richer impact-preview/gap-marking delete UX the user wants later). Backend already requires a reason for relane (`process_maps.py`); mirror for delete + wire a reason prompt into the manual delete flow (panel + Delete key).
+
+---
+
+## Open follow-ups after PR #46 merge (authoritative list, 2026-07-27)
+
+PR #46 (the whole write/propose loop) squash-merged to `main` (`cf699c8`). Everything below is
+tracked but NOT started. Also mirrored in the `agent_loop_roadmap` memory.
+
+**Actionable follow-ups**
+1. **Require a reason on delete** (node/edge/lane) — own small PR, NOT mixed in. See the section above + [[future_delete_consequences]].
+2. **#16 — server-verified `ai_applied`.** Client-supplied boolean is spoofable; needs the auth / agent-execution boundary that doesn't exist yet (Layer 1 / prov-v2). Includes: **`reroute_edge`-recreated edges log as MANUAL** (the executor recreates the edge without `reason`/`ai_applied`) — fix with the same server-derived-attribution work. (`bpmn-canvas.tsx` reroute_edge path.)
+3. **#12b — exact-quote citations** and **#15 — richer Change Log (before→after)** — coordinate with the parallel `feat/provenance-v2-schema` (same records).
+
+**Cosmetic / low-priority (from the pre-merge reviews)**
+4. Extract a shared kind-resolver so `mentionsToMarkdown` and `mentionsToPlainText` (`mention-markdown.ts`) can't drift.
+5. Citation comma-collapse doesn't strip a single *leading* orphaned comma left by a deduped first citation ("`, and all state…`"). `mention-markdown.ts`.
+6. The read-only `QuestionSet` summary shows "Answered" (not the chosen text) after a reload/remount — the local answer state is gone; the answer lives only in the following composed user turn. By design; revisit if it reads as confusing.
+
+**Watch items (live behavior, not code bugs)**
+- Stateless resume could re-ask a question (mitigated: answer + prose in history). Add an explicit "don't re-ask what was answered" line to `AGENT_INSTRUCTIONS` if it ever loops.
+- Prose + `QuestionSet` could occasionally show the same question text twice.
+
+**Roadmap (each its own brainstorm → spec → plan)**
+- Streaming responses (immediate follow-on) · flow-card structured-change preview (parked) · Layer 1 (session/context runtime + Entra auth — also unblocks #16) · Layer 2 (config/capabilities incl. web browsing) · Layer 3 (feedback + observability + eval).
