@@ -545,11 +545,7 @@ def _second_lane(db, project, version):
     )
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [None, DeleteRequest(), DeleteRequest(reason=""), DeleteRequest(reason="   ")],
-    ids=["no_body", "empty_payload", "empty_reason", "whitespace_reason"],
-)
+@_NO_REASON  # shared decorator added in Task 2 — do not paste a third copy
 def test_delete_lane_without_reason_is_rejected(db, payload):
     project, version, _n1, _claim = _seed_version_for_endpoint(db)
     lane = _second_lane(db, project, version)
@@ -572,6 +568,14 @@ def test_rejected_lane_delete_leaves_nodes_in_place(db):
         pm_api.delete_lane(project=project, lane_id=original_lane_id, db=db, payload=None)
     db.expire_all()
     assert db.get(ProcessNode, n1.id).lane_id == original_lane_id
+
+
+def test_delete_lane_unknown_id_is_404_not_422(db):
+    """A bad id reads as "no such lane", not as a demand for a reason."""
+    project, _version, _n1, _claim = _seed_version_for_endpoint(db)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.delete_lane(project=project, lane_id=uuid4(), db=db, payload=None)
+    assert exc.value.status_code == 404
 
 
 def test_delete_last_lane_is_rejected_before_the_reason_gate(db):
@@ -642,6 +646,18 @@ def delete_lane(
     payload: Annotated[DeleteRequest | None, Body()] = None,
 ) -> None:
 ```
+
+Gate placement is genuinely load-bearing here, in a way it wasn't for node or edge. It must land in
+a specific window:
+
+- **after** the `others` query and the last-lane 422 — a delete that can never succeed shouldn't
+  first demand a justification;
+- **before** the bulk `update(ProcessNode).values(lane_id=fallback.id)` — `_require_delete_reason`
+  does not roll back, so a gate placed at the visually obvious spot just above `record_change`
+  would strand a pending UPDATE on the 422 path.
+
+`test_delete_last_lane_is_rejected_before_the_reason_gate` and
+`test_rejected_lane_delete_leaves_nodes_in_place` pin the two edges of that window.
 
 Insert the gate immediately after the last-lane guard — that is, after the
 `raise HTTPException(status_code=422, detail="Cannot delete the last remaining lane")` block and
