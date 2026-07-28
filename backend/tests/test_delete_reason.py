@@ -38,6 +38,16 @@ def _events_for(db, target_id):
     return list(db.scalars(select(ChangeEvent).where(ChangeEvent.target_id == target_id)).all())
 
 
+# Every endpoint's rejection test runs the same four shapes of "no reason
+# given". Sharing the model instances across sections is safe: the handlers
+# only read the payload, and `_require_delete_reason` never mutates it.
+_NO_REASON = pytest.mark.parametrize(
+    "payload",
+    [None, DeleteRequest(), DeleteRequest(reason=""), DeleteRequest(reason="   ")],
+    ids=["no_body", "empty_payload", "blank_reason", "whitespace_reason"],
+)
+
+
 def _seed_edge_for_client(db):
     """Seed an edge whose project the dev user can actually reach.
 
@@ -53,11 +63,7 @@ def _seed_edge_for_client(db):
 
 # --- edge ------------------------------------------------------------------
 
-@pytest.mark.parametrize(
-    "payload",
-    [None, DeleteRequest(), DeleteRequest(reason=""), DeleteRequest(reason="   ")],
-    ids=["no_body", "empty_payload", "blank_reason", "whitespace_reason"],
-)
+@_NO_REASON
 def test_delete_edge_without_reason_is_rejected(db, payload):
     project, version, n1, _claim = _seed_version_for_endpoint(db)
     edge = _seed_edge(db, project, version, n1)
@@ -153,11 +159,7 @@ def test_delete_edge_over_http_accepts_a_top_level_reason(client, db):
 
 # --- node ------------------------------------------------------------------
 
-@pytest.mark.parametrize(
-    "payload",
-    [None, DeleteRequest(), DeleteRequest(reason=""), DeleteRequest(reason="   ")],
-    ids=["no_body", "empty_payload", "blank_reason", "whitespace_reason"],
-)
+@_NO_REASON
 def test_delete_node_without_reason_is_rejected(db, payload):
     project, _version, n1, _claim = _seed_version_for_endpoint(db)
     with pytest.raises(HTTPException) as exc:
@@ -168,6 +170,16 @@ def test_delete_node_without_reason_is_rejected(db, payload):
     assert exc.value.detail == "A reason is required to delete a step."
     assert db.get(ProcessNode, n1.id) is not None
     assert [e for e in _events_for(db, n1.id) if e.kind == "delete"] == []
+
+
+def test_delete_node_unknown_id_is_404_not_422(db):
+    # Existence is resolved before the reason gate, so a bad id reads as "no
+    # such node" rather than sending the caller off to write a reason for
+    # something that was never there.
+    project, _version, _n1, _claim = _seed_version_for_endpoint(db)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.delete_node(project=project, node_id=uuid4(), db=db, payload=None)
+    assert exc.value.status_code == 404
 
 
 def test_rejected_node_delete_leaves_review_rows_intact(db):
