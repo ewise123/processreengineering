@@ -20,9 +20,9 @@ from app.enums import ReviewTargetType
 from app.factory import create_app
 from app.models.change_event import ChangeEvent
 from app.models.identity import User
-from app.models.process import ProcessEdge, ProcessNode
+from app.models.process import ProcessEdge, ProcessLane, ProcessNode
 from app.models.workflow import Review
-from app.schemas.process_map import DeleteRequest
+from app.schemas.process_map import DeleteRequest, LaneCreate
 from tests.test_ai_edit import _seed_version_for_endpoint
 from tests.test_change_event_capture import _seed_edge
 
@@ -234,5 +234,94 @@ def test_delete_node_ai_applied_records_chat_source_and_ai_actor(db):
     )
     ev = [e for e in _events_for(db, node_id) if e.kind == "delete"][0]
     assert ev.reason == "Not supported by any source"
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+
+
+# --- lane ------------------------------------------------------------------
+
+def _second_lane(db, project, version):
+    """Lanes can only be deleted while another one remains."""
+    return pm_api.add_lane(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=LaneCreate(name="Lane To Delete", order_index=1),
+        db=db,
+    )
+
+
+@_NO_REASON
+def test_delete_lane_without_reason_is_rejected(db, payload):
+    project, version, _n1, _claim = _seed_version_for_endpoint(db)
+    lane = _second_lane(db, project, version)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.delete_lane(project=project, lane_id=lane.id, db=db, payload=payload)
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "A reason is required to delete a lane."
+    assert db.get(ProcessLane, lane.id) is not None
+    assert [e for e in _events_for(db, lane.id) if e.kind == "delete"] == []
+
+
+def test_delete_lane_unknown_id_is_404_not_422(db):
+    """A bad id reads as "no such lane", not as a demand for a reason."""
+    project, _version, _n1, _claim = _seed_version_for_endpoint(db)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.delete_lane(project=project, lane_id=uuid4(), db=db, payload=None)
+    assert exc.value.status_code == 404
+
+
+def test_delete_last_lane_is_rejected_before_the_reason_gate(db):
+    """A delete that can never succeed shouldn't first demand a justification."""
+    project, _version, n1, _claim = _seed_version_for_endpoint(db)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.delete_lane(project=project, lane_id=n1.lane_id, db=db, payload=None)
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "Cannot delete the last remaining lane"
+
+
+def test_rejected_lane_delete_leaves_nodes_in_place(db):
+    """The gate runs before the fallback-lane reassignment, so a rejected
+    delete must not have moved the lane's nodes on its way to the 422."""
+    project, version, n1, _claim = _seed_version_for_endpoint(db)
+    original_lane_id = n1.lane_id
+    _second_lane(db, project, version)
+    with pytest.raises(HTTPException):
+        pm_api.delete_lane(project=project, lane_id=original_lane_id, db=db, payload=None)
+    db.expire_all()
+    assert db.get(ProcessNode, n1.id).lane_id == original_lane_id
+
+
+def test_delete_lane_with_reason_records_it(db):
+    project, version, _n1, _claim = _seed_version_for_endpoint(db)
+    lane = _second_lane(db, project, version)
+    pm_api.delete_lane(
+        project=project,
+        lane_id=lane.id,
+        db=db,
+        payload=DeleteRequest(reason="  Merged into Operations  "),
+    )
+    events = [e for e in _events_for(db, lane.id) if e.kind == "delete"]
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.reason == "Merged into Operations"  # stored trimmed
+    assert ev.source == "manual"
+    assert ev.actor_kind == "user"
+    assert db.get(ProcessLane, lane.id) is None
+
+
+def test_delete_lane_ai_applied_carries_the_suggestion_reason(db):
+    """The retired query param picked between two canned strings; an AI lane
+    delete now logs the suggestion's own rationale."""
+    project, version, _n1, _claim = _seed_version_for_endpoint(db)
+    lane = _second_lane(db, project, version)
+    pm_api.delete_lane(
+        project=project,
+        lane_id=lane.id,
+        db=db,
+        payload=DeleteRequest(reason="No sources place work in this lane", ai_applied=True),
+    )
+    ev = [e for e in _events_for(db, lane.id) if e.kind == "delete"][0]
+    assert ev.reason == "No sources place work in this lane"
     assert ev.source == "chat"
     assert ev.actor_kind == "ai"

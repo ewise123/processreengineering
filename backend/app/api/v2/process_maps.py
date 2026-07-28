@@ -1630,7 +1630,7 @@ def delete_lane(
     project: Annotated[Project, Depends(get_project_or_404)],
     lane_id: UUID,
     db: Annotated[Session, Depends(get_db)],
-    ai_applied: bool = False,
+    payload: Annotated[DeleteRequest | None, Body()] = None,
 ) -> None:
     lane = db.get(ProcessLane, lane_id)
     if lane is None:
@@ -1652,6 +1652,13 @@ def delete_lane(
             status_code=422, detail="Cannot delete the last remaining lane"
         )
 
+    # Structural impossibility first, provenance second: there's no point
+    # demanding a justification for a delete that can never succeed. The gate
+    # also has to precede the bulk reassignment below, which it won't roll back.
+    reason, ai_applied = _require_delete_reason(
+        payload, "A reason is required to delete a lane."
+    )
+
     fallback = others[0]
     # Reassign nodes to a remaining lane so they don't end up orphaned.
     db.execute(
@@ -1666,7 +1673,7 @@ def delete_lane(
         model_id=model_id_for_version(db, lane.version_id),
         version_id=lane.version_id,
         kind=ChangeKind.DELETE.value,
-        reason="Removed by AI suggestion" if ai_applied else "Deleted",
+        reason=reason,
         before={"name": lane.name},
         source=ChangeSource.CHAT.value if ai_applied else ChangeSource.MANUAL.value,
         actor_kind=ChangeActorKind.AI.value if ai_applied else ChangeActorKind.USER.value,

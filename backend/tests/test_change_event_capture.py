@@ -447,7 +447,12 @@ def test_delete_lane_logs_delete_event_and_lane_is_gone(db):
     lane_id = new_lane.id
     lane_name = new_lane.name
 
-    pm_api.delete_lane(project=project, lane_id=lane_id, db=db)
+    pm_api.delete_lane(
+        project=project,
+        lane_id=lane_id,
+        db=db,
+        payload=DeleteRequest(reason="Lane no longer needed"),
+    )
 
     # event survives
     events = _events_for(db, lane_id)
@@ -459,6 +464,7 @@ def test_delete_lane_logs_delete_event_and_lane_is_gone(db):
     assert ev.target_id == lane_id
     assert ev.source == "manual"
     assert ev.actor_kind == "user"
+    assert ev.reason == "Lane no longer needed"
     assert ev.before["name"] == lane_name
 
     # object is gone
@@ -477,7 +483,12 @@ def test_delete_lane_ai_applied_records_chat_source_and_ai_actor(db):
     )
     lane_id = new_lane.id
 
-    pm_api.delete_lane(project=project, lane_id=lane_id, db=db, ai_applied=True)
+    pm_api.delete_lane(
+        project=project,
+        lane_id=lane_id,
+        db=db,
+        payload=DeleteRequest(reason="Consolidated by suggestion", ai_applied=True),
+    )
 
     delete_events = [e for e in _events_for(db, lane_id) if e.kind == "delete"]
     assert len(delete_events) == 1
@@ -486,6 +497,7 @@ def test_delete_lane_ai_applied_records_chat_source_and_ai_actor(db):
     assert ev.target_id == lane_id
     assert ev.source == "chat"
     assert ev.actor_kind == "ai"
+    assert ev.reason == "Consolidated by suggestion"
 
 
 # ---------------------------------------------------------------------------
