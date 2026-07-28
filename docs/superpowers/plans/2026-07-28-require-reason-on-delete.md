@@ -1464,6 +1464,22 @@ Suggestion-executor `delete_edge` (`:802`):
           });
 ```
 
+**And its recreate (`:837`), which is a pre-existing attribution bug this task should close.**
+`reroute_edge` deletes an edge and creates a replacement, but unlike the standalone `create_edge`
+case (`:786`) the recreate passes neither `reason` nor `ai_applied` — so an AI-applied reroute
+currently logs its create half as a *manual user edit*. Task 6 now hands `reroute_edge` a reason;
+thread it into the create too:
+
+```tsx
+            created = await api.createEdge(projectId, modelId, versionId, {
+              source_node_id: newFrom,
+              target_node_id: newTo,
+              label: before.label,
+              reason: step.reason ?? APPLIED_REASON_FALLBACK,
+              ai_applied: true,
+            });
+```
+
 `create_lane` inverse (`:878`):
 
 ```tsx
