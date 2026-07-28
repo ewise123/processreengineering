@@ -35,6 +35,11 @@ export interface ReasonPromptState {
   destructive: boolean;
   /** Body copy override, or null for the dialog's default. */
   description: string | null;
+  /** Text currently in the reason field. Owned here rather than by the dialog
+   * so opening a prompt always clears it — see `promptReason`. */
+  value: string;
+  /** Update the reason field as the user types. */
+  setValue: (next: string) => void;
   /** Submit the entered reason (empty/whitespace is treated as cancel). */
   submit: (reason: string) => void;
   /** Dismiss without a reason; aborts the pending edit. */
@@ -51,6 +56,7 @@ export function useReasonPrompt(): ReasonPromptState {
   const [actionLabel, setActionLabel] = useState("");
   const [destructive, setDestructive] = useState(false);
   const [description, setDescription] = useState<string | null>(null);
+  const [value, setValue] = useState("");
   // Holds the resolver for the in-flight promptReason() promise so submit /
   // cancel can settle it. Only one prompt is ever open at a time.
   const resolverRef = useRef<((value: string | null) => void) | null>(null);
@@ -84,6 +90,12 @@ export function useReasonPrompt(): ReasonPromptState {
       setActionLabel(label);
       setDestructive(options?.destructive ?? false);
       setDescription(options?.description ?? null);
+      // Every prompt opens empty. Clearing here rather than on close covers the
+      // supersede path above too: text typed for an abandoned prompt must never
+      // be sitting in the box for the next one, which may be a destructive
+      // prompt whose Delete button would submit a reason meant for some other
+      // action.
+      setValue("");
       setOpen(true);
       return new Promise<string | null>((resolve) => {
         resolverRef.current = resolve;
@@ -92,5 +104,15 @@ export function useReasonPrompt(): ReasonPromptState {
     []
   );
 
-  return { open, actionLabel, destructive, description, submit, cancel, promptReason };
+  return {
+    open,
+    actionLabel,
+    destructive,
+    description,
+    value,
+    setValue,
+    submit,
+    cancel,
+    promptReason,
+  };
 }
