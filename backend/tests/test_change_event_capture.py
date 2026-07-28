@@ -378,7 +378,12 @@ def test_delete_node_logs_delete_event_and_node_is_gone(db):
     node_name = n1.name
     node_type = n1.type
 
-    pm_api.delete_node(project=project, node_id=node_id, db=db)
+    pm_api.delete_node(
+        project=project,
+        node_id=node_id,
+        db=db,
+        payload=DeleteRequest(reason="Step no longer performed"),
+    )
 
     # event survives
     events = _events_for(db, node_id)
@@ -388,6 +393,7 @@ def test_delete_node_logs_delete_event_and_node_is_gone(db):
     assert ev.target_type == "node"
     assert ev.target_id == node_id
     assert ev.source == "manual"
+    assert ev.reason == "Step no longer performed"
     assert ev.before["name"] == node_name
     assert ev.before["type"] == node_type
 

@@ -263,7 +263,12 @@ def test_deleting_proposed_node_cascades_edge(db):
         db=db,
     )
     new_id = result.node.id
-    pm_api.delete_node(project=project, node_id=new_id, db=db)
+    pm_api.delete_node(
+        project=project,
+        node_id=new_id,
+        db=db,
+        payload=pm_api.DeleteRequest(reason="Cleaning up the proposed step"),
+    )
     assert db.get(ProcessNode, new_id) is None
     assert db.scalars(select(ProcessEdge).where(ProcessEdge.target_node_id == new_id)).first() is None
 

@@ -1187,6 +1187,7 @@ def delete_node(
     project: Annotated[Project, Depends(get_project_or_404)],
     node_id: UUID,
     db: Annotated[Session, Depends(get_db)],
+    payload: Annotated[DeleteRequest | None, Body()] = None,
 ) -> None:
     """Delete a node. FK cascades drop the connected edges and node-claim
     links automatically."""
@@ -1194,6 +1195,9 @@ def delete_node(
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     _check_node_in_project(node, project.id, db)
+    reason, ai_applied = _require_delete_reason(
+        payload, "A reason is required to delete a step."
+    )
     version_id = node.version_id
     record_change(
         db,
@@ -1202,9 +1206,10 @@ def delete_node(
         model_id=model_id_for_version(db, node.version_id),
         version_id=node.version_id,
         kind=ChangeKind.DELETE.value,
-        reason="Deleted",
+        reason=reason,
         before={"name": node.name, "type": node.type},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if ai_applied else ChangeActorKind.USER.value,
     )
     db.execute(
         delete(Review).where(
