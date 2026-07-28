@@ -89,9 +89,9 @@ Per-endpoint messages:
 
 | Endpoint | Location | 422 `detail` |
 |---|---|---|
-| `delete_node` | `process_maps.py:1139` | `A reason is required to delete a step.` |
-| `delete_edge` | `process_maps.py:1110` | `A reason is required to delete a connection.` |
-| `delete_lane` | `process_maps.py:1576` | `A reason is required to delete a lane.` |
+| `delete_node` | `process_maps.py:1166` | `A reason is required to delete a step.` |
+| `delete_edge` | `process_maps.py:1137` | `A reason is required to delete a connection.` |
+| `delete_lane` | `process_maps.py:1604` | `A reason is required to delete a lane.` |
 
 The returned reason replaces the hardcoded `reason="Deleted"` in each endpoint's `record_change`
 call, and `payload.ai_applied` drives `source` / `actor_kind` the same way the edit paths do:
@@ -101,16 +101,31 @@ source=ChangeSource.CHAT.value if ai_applied else ChangeSource.MANUAL.value,
 actor_kind=ChangeActorKind.AI.value if ai_applied else ChangeActorKind.USER.value,
 ```
 
-Today the delete paths pass `source=ChangeSource.MANUAL.value` unconditionally and omit
-`actor_kind` entirely, so an AI-applied delete is currently indistinguishable from a hand delete
-in the log. Threading `ai_applied` fixes that as a direct consequence of this work.
+`delete_node` and `delete_edge` currently pass `source=ChangeSource.MANUAL.value` unconditionally
+and omit `actor_kind` entirely, so an AI-applied delete of a step or connection is indistinguishable
+from a hand delete in the log. Threading `ai_applied` fixes that as a direct consequence of this
+work.
+
+**`delete_lane` is a partial exception, and its existing mechanism gets replaced.** It already
+takes `ai_applied` — but as a **query parameter** (`process_maps.py:1608`), reached from the client
+as `?ai_applied=true` (`src/lib/api.ts:347`). It uses that flag to pick between two canned strings:
+`"Removed by AI suggestion"` and `"Deleted"` (`:1644`). That is the right instinct implemented
+before there was anywhere to put a real reason. This spec supersedes it:
+
+- the query parameter is removed in favour of the body field, so all three deletes take one shape;
+- the canned `"Removed by AI suggestion"` string goes away, because an AI lane delete can now carry
+  the suggestion's actual rationale — strictly better provenance than a fixed label.
+
+This is the only place where the work *removes* an existing parameter rather than adding one, so
+it is the one place a caller could break silently. The lane tests at
+`test_change_event_capture.py:438` and `:468` pin both paths and must be updated together with it.
 
 ### 1.3 Ordering within each handler
 
 The gate runs **before any mutation**, so a rejected delete leaves nothing behind. Concretely:
 
-- `delete_node` — gate before the `Review` cleanup `DELETE` at `:1162`.
-- `delete_lane` — gate before the node-reassignment `UPDATE` at `:1603`.
+- `delete_node` — gate before the `Review` cleanup `DELETE` at `:1189`.
+- `delete_lane` — gate before the node-reassignment `UPDATE` at `:1632`.
 - `delete_edge` — no pre-mutation work; gate sits with the other validation.
 
 The existing edit paths reach for `db.rollback()` before raising because they mutate the ORM
@@ -118,7 +133,7 @@ objects first and only then discover the reason is missing. Deletes have no such
 is pure validation and runs first, so **no `rollback()` is needed** and none should be added.
 
 One deliberate exception to "gate first": in `delete_lane`, the structural
-*"Cannot delete the last remaining lane"* guard (`:1596`) stays **ahead** of the reason gate. That
+*"Cannot delete the last remaining lane"* guard (`:1625`) stays **ahead** of the reason gate. That
 delete can never succeed, so demanding a reason for it first would cost the caller a round trip to
 learn something we already know. Provenance gates guard real state changes; they do not guard
 impossibilities.
@@ -128,8 +143,12 @@ impossibilities.
 This change touches only the *arguments* passed to `record_change`. It adds no column, no
 migration, and no new event kind — the `DELETE` kind and the `reason` column both already exist.
 The prov-v2 branch extends `record_change` additively (`event_kind`, `group_id`,
-`related_event_id`, `cited_targets`), so the two are compatible by construction. The only overlap
-is textual, inside the three delete functions, and resolves as an ordinary merge.
+`related_event_id`, `cited_targets`), so the two are compatible by construction.
+
+Verified concretely: `git diff --stat origin/main...feat/provenance-v2-schema` touches
+`change_log.py`, `change_event.py`, `enums.py`, the migrations, and their tests — **not**
+`api/v2/process_maps.py` and **not** `schemas/process_map.py`, the only two backend files this
+work modifies. There is no file-level overlap at all, so no merge conflict to sequence around.
 
 ---
 
@@ -142,7 +161,7 @@ The three delete implementations become **pure and reason-taking**:
 ```
 deleteNodeImpl(id, reason)     // bpmn-canvas.tsx:296
 deleteEdgeImpl(id, reason)     // bpmn-canvas.tsx:551
-deleteLaneImpl(id, reason)     // bpmn-canvas.tsx:2291 (renamed from deleteLane)
+deleteLaneImpl(id, reason)     // bpmn-canvas.tsx:2358 (renamed from deleteLane)
 ```
 
 Prompting lifts out into thin wrappers (`requestDeleteNode`, `requestDeleteEdge`,
@@ -160,11 +179,11 @@ keeps that behavior; only the prompt is new.
 | Surface | Entry point | Modal label |
 |---|---|---|
 | Properties panel Delete | `properties-panel.tsx:147` → handle `deleteNode` | Delete step |
-| Delete / Backspace key | `bpmn-canvas.tsx:1074` → `deleteSelectionImpl` | count-aware (below) |
-| Node context menu → Delete | `bpmn-canvas.tsx:2070` → `deleteSelectionImpl` | count-aware |
+| Delete / Backspace key | `bpmn-canvas.tsx:1143` → `deleteSelectionImpl` | count-aware (below) |
+| Node context menu → Delete | `bpmn-canvas.tsx:2137` → `deleteSelectionImpl` | count-aware |
 | Selection toolbar → Delete | page `:510` → handle `deleteSelection` | count-aware |
-| Edge context menu → Delete | `bpmn-canvas.tsx:2087` | Delete connection |
-| Lane rail kebab → Delete | page → `onDeleteLane` | Delete lane |
+| Edge context menu → Delete | `bpmn-canvas.tsx:2154` | Delete connection |
+| Lane rail kebab → Delete | `lane-rail.tsx:575` → `onDeleteLane` | Delete lane |
 
 Count-aware labels come from a small pure module, `src/components/canvas/delete-reason.ts`:
 
@@ -196,26 +215,49 @@ the undo case an outright trap (undoing a create should not interrogate the user
 
 | Call site | Line | Reason passed |
 |---|---|---|
-| `delete_node` suggestion step | `:731` | `step.reason ?? APPLIED_REASON_FALLBACK`, `ai_applied: true` |
-| `delete_edge` suggestion step | `:789` | `step.reason ?? APPLIED_REASON_FALLBACK`, `ai_applied: true` |
-| `reroute_edge` internal delete | `:818` | `step.reason ?? APPLIED_REASON_FALLBACK`, `ai_applied: true` |
-| Undo of AI `create_node` | `:764` | `REVERT_REASON` |
-| Undo of AI `create_edge` | `:782` | `REVERT_REASON` |
-| Undo of AI `create_lane` | `:863` | `REVERT_REASON` |
+| `delete_node` suggestion step | `:740` | `step.reason ?? APPLIED_REASON_FALLBACK`, `ai_applied: true` |
+| `delete_edge` suggestion step | `:802` | `step.reason ?? APPLIED_REASON_FALLBACK`, `ai_applied: true` |
+| `reroute_edge` internal delete | `:831` | `step.reason ?? APPLIED_REASON_FALLBACK`, `ai_applied: true` |
+| `delete_lane` suggestion step | `:906` | `step.reason ?? APPLIED_REASON_FALLBACK`, `ai_applied: true` |
+| Undo of AI `create_node` | `:775` | `REVERT_REASON` |
+| Undo of AI `create_edge` | `:795` | `REVERT_REASON` |
+| Undo of AI `create_lane` | `:878` | `REVERT_REASON` |
 | Undo of `addProposedStep` | `:515` | `Undo of Add AI-proposed step` |
 | Undo of `createEdgeImpl` | `:667` | `Undo of Create edge` |
 | Redo of `deleteEdgeImpl` | `:584` | `Redo of Delete edge` |
-| Paste undo (`remove()`) | `:2025`–`:2026` | `Undo of Paste` |
+| Paste undo (`remove()`) | `:2092`–`:2093` | `Undo of Paste` |
+
+**The delete steps do not carry a `reason` today, and that is a prerequisite.** In
+`src/components/canvas/suggestion-apply.ts`, the `MutationStep` union gives `reason?: string` only
+to the edit and create kinds (`:19`–`:28`), and `withReason` (`:316`) deliberately passes delete
+steps through untouched — its comment says deletes "auto-log on the backend", which was true while
+the backend hardcoded `"Deleted"`. Once the backend requires a reason, that assumption inverts.
+
+So this work must also:
+
+- add `reason?: string` to the `delete_node`, `delete_edge`, `reroute_edge`, and `delete_lane`
+  members of `MutationStep`;
+- add those four kinds to the `withReason` switch;
+- update the stale comment above it.
+
+`reasonForSuggestion` (`:304`) already produces the string — the suggestion's rationale, falling
+back to its title — so the delete steps simply start receiving what the edit steps already get.
+This is pure, exported, and already covered by `suggestion-apply.test.ts`, which makes it the
+cheapest part of the change to test and the easiest to forget.
 
 `APPLIED_REASON_FALLBACK` (`"Applied AI suggestion"`) and `REVERT_REASON`
 (`"Reverted an applied AI suggestion"`) already exist at `bpmn-canvas.tsx:209`–`:210`. The
 `Undo of …` / `Redo of …` strings follow the convention the edit paths already use
 (`:369`–`:370`, `:636`–`:637`).
 
+The `delete_lane` suggestion step needs one extra beat: it currently calls
+`api.deleteLane(projectId, id, true)` (`:906`), passing `ai_applied` positionally. With the query
+param gone (§1.2) that becomes `api.deleteLane(projectId, id, { reason: …, ai_applied: true })`.
+
 Note the `ai_applied` asymmetry: the forward suggestion steps set it, the `REVERT_REASON` undos do
-not. That matches the existing edit inverses (`:724`, `:803`, `:877`), which pass `REVERT_REASON`
-without `ai_applied`, and it is the correct reading — the AI made the change, but the *user* chose
-to revert it.
+not. That matches the existing edit inverses (`:728`, `:816`, `:892`, `:935`), which pass
+`REVERT_REASON` without `ai_applied`, and it is the correct reading — the AI made the change, but
+the *user* chose to revert it.
 
 The AI-applied deletes carry the suggestion's own rationale, which is strictly better provenance
 than anything a prompt could collect — the user already saw and accepted that rationale on the
@@ -278,6 +320,10 @@ deleteNode: (projectId: UUID, nodeId: UUID, body: DeleteRequest) =>
   }),
 ```
 
+`deleteLane` changes shape rather than merely gaining an argument — its current third parameter is
+`aiApplied = false`, appended to the URL as a query string (`api.ts:347`). That parameter is
+removed and replaced by the same `body` argument as the other two, so all three read identically.
+
 `src/lib/types.ts` gains `DeleteRequest = { reason: string; ai_applied?: boolean }`. Note the
 frontend type declares `reason` as **required** `string` even though the backend schema allows
 null — the wire contract permits null so the server can return a good error; no frontend caller
@@ -316,7 +362,8 @@ The "no `change_event` written" assertion is the one that catches a gate placed 
 
 | File | Line | Change |
 |---|---|---|
-| `test_change_event_capture.py` | `:279`, `:304`, `:336` | pass a `DeleteRequest` payload; assert the reason reaches the event |
+| `test_change_event_capture.py` | `:381`, `:406`, `:438` | pass a `DeleteRequest` payload; assert the reason reaches the event |
+| `test_change_event_capture.py` | `:468` | `test_delete_lane_ai_applied_…` — swap the `ai_applied=True` kwarg for the payload field, and assert the event carries the supplied reason instead of the retired `"Removed by AI suggestion"` string |
 | `test_ai_edit.py` | `:266` | pass a payload to the direct `pm_api.delete_node` call |
 | `test_stakeholder_review.py` | `:138`, `:160` | `client.delete(..., json={"reason": …})` |
 
@@ -331,15 +378,20 @@ Canvas tests in this repo are pure-logic, not rendered (`selection.test.ts`,
 
 - `delete-reason.test.ts` — the full `deleteActionLabel` table from §2.2, including singular /
   plural and the mixed-selection collapse
+- `suggestion-apply.test.ts` — extend the existing `bundleSuggestions` coverage to assert that
+  `delete_node`, `delete_edge`, `reroute_edge`, and `delete_lane` steps now come back carrying the
+  suggestion's reason (§2.3). This is the regression guard for the `withReason` change.
 - `api.deleteNode` / `deleteEdge` / `deleteLane` send `method: "DELETE"` with the reason in a JSON
-  body and `Content-Type: application/json` (fetch stubbed)
+  body and `Content-Type: application/json` (fetch stubbed), and `deleteLane` no longer appends
+  `?ai_applied=true`
 
 ### 3.4 Manual verification
 
 Run the app (`./run-local.sh`) and confirm end to end: panel delete prompts and the reason appears
 in the change log; Cancel aborts with the step still on canvas; multi-select shows one modal;
-Cmd+Z still restores a deleted edge; an AI suggestion containing a delete applies with no prompt
-and logs the card's rationale.
+Cmd+Z still restores a deleted edge; deleting a lane moves its steps to the first remaining lane
+and logs the typed reason; an AI suggestion containing a delete applies with no prompt and logs the
+card's rationale.
 
 ---
 
