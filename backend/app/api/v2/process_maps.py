@@ -4,7 +4,7 @@ import re
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -51,6 +51,7 @@ from app.schemas.process_map import (
     ClaimSummary,
     ClaimWithCitations,
     ConsistencyFinding,
+    DeleteRequest,
     EdgeCreate,
     EdgeUpdate,
     LaneCreate,
@@ -1133,16 +1134,36 @@ def update_edge(
     return edge
 
 
+def _require_delete_reason(payload: DeleteRequest | None, message: str) -> str:
+    """Return the trimmed delete reason, or 422 with `message` if it's missing.
+
+    Deletes carry the same hard reason requirement as a rename or a lane move:
+    they are the only edit that removes evidence from the map, so they are the
+    last place a silent change should be possible. Callers run this before
+    touching the session, so — unlike the update paths — it never needs a
+    rollback.
+    """
+    reason = (payload.reason or "").strip() if payload else ""
+    if not reason:
+        raise HTTPException(status_code=422, detail=message)
+    return reason
+
+
 @router.delete("/edges/{edge_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_edge(
     project: Annotated[Project, Depends(get_project_or_404)],
     edge_id: UUID,
     db: Annotated[Session, Depends(get_db)],
+    payload: Annotated[DeleteRequest | None, Body()] = None,
 ) -> None:
     edge = db.get(ProcessEdge, edge_id)
     if edge is None:
         raise HTTPException(status_code=404, detail="Edge not found")
     _check_edge_in_project(edge, project.id, db)
+    reason = _require_delete_reason(
+        payload, "A reason is required to delete a connection."
+    )
+    ai_applied = payload.ai_applied if payload else False
     record_change(
         db,
         target_type=ChangeTargetType.EDGE.value,
@@ -1150,13 +1171,14 @@ def delete_edge(
         model_id=model_id_for_version(db, edge.version_id),
         version_id=edge.version_id,
         kind=ChangeKind.DELETE.value,
-        reason="Deleted",
+        reason=reason,
         before={
             "source_node_id": str(edge.source_node_id),
             "target_node_id": str(edge.target_node_id),
             "label": edge.label,
         },
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if ai_applied else ChangeActorKind.USER.value,
     )
     db.delete(edge)
     db.commit()

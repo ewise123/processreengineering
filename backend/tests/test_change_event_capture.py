@@ -8,7 +8,7 @@ from app.api.v2 import process_maps as pm_api
 from app.models.change_event import ChangeEvent
 from app.models.claim import Claim
 from app.models.process import ProcessLane
-from app.schemas.process_map import EdgeCreate, EdgeUpdate, LaneCreate, LaneUpdate, NodeCreate, NodeUpdate, NodeClaimLinkRequest
+from app.schemas.process_map import DeleteRequest, EdgeCreate, EdgeUpdate, LaneCreate, LaneUpdate, NodeCreate, NodeUpdate, NodeClaimLinkRequest
 from tests.test_ai_edit import _seed_version_for_endpoint
 
 
@@ -403,7 +403,12 @@ def test_delete_edge_logs_delete_event_and_edge_is_gone(db):
     src_id = edge.source_node_id
     tgt_id = edge.target_node_id
 
-    pm_api.delete_edge(project=project, edge_id=edge_id, db=db)
+    pm_api.delete_edge(
+        project=project,
+        edge_id=edge_id,
+        db=db,
+        payload=DeleteRequest(reason="No longer part of the flow"),
+    )
 
     # event survives
     events = _events_for(db, edge_id)
@@ -413,6 +418,7 @@ def test_delete_edge_logs_delete_event_and_edge_is_gone(db):
     assert ev.target_type == "edge"
     assert ev.target_id == edge_id
     assert ev.source == "manual"
+    assert ev.reason == "No longer part of the flow"
     assert ev.before["source_node_id"] == str(src_id)
     assert ev.before["target_node_id"] == str(tgt_id)
     assert "label" in ev.before
