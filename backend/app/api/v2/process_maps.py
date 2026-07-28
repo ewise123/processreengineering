@@ -1134,19 +1134,18 @@ def update_edge(
     return edge
 
 
-def _require_delete_reason(payload: DeleteRequest | None, message: str) -> str:
-    """Return the trimmed delete reason, or 422 with `message` if it's missing.
+def _require_delete_reason(
+    payload: DeleteRequest | None, message: str
+) -> tuple[str, bool]:
+    """Return the trimmed delete reason and the payload's `ai_applied` flag,
+    raising 422 with `message` if the reason is missing or blank.
 
-    Deletes carry the same hard reason requirement as a rename or a lane move:
-    they are the only edit that removes evidence from the map, so they are the
-    last place a silent change should be possible. Callers run this before
-    touching the session, so — unlike the update paths — it never needs a
-    rollback.
+    Call this before any session mutation — it does not roll back.
     """
     reason = (payload.reason or "").strip() if payload else ""
     if not reason:
         raise HTTPException(status_code=422, detail=message)
-    return reason
+    return reason, payload.ai_applied
 
 
 @router.delete("/edges/{edge_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1160,10 +1159,9 @@ def delete_edge(
     if edge is None:
         raise HTTPException(status_code=404, detail="Edge not found")
     _check_edge_in_project(edge, project.id, db)
-    reason = _require_delete_reason(
+    reason, ai_applied = _require_delete_reason(
         payload, "A reason is required to delete a connection."
     )
-    ai_applied = payload.ai_applied if payload else False
     record_change(
         db,
         target_type=ChangeTargetType.EDGE.value,
