@@ -99,14 +99,18 @@ def _events_for(db, target_id):
 
 # --- edge ------------------------------------------------------------------
 
-@pytest.mark.parametrize("payload", [None, DeleteRequest(), DeleteRequest(reason="   ")])
+@pytest.mark.parametrize(
+    "payload",
+    [None, DeleteRequest(), DeleteRequest(reason=""), DeleteRequest(reason="   ")],
+    ids=["no_body", "empty_payload", "empty_reason", "whitespace_reason"],
+)
 def test_delete_edge_without_reason_is_rejected(db, payload):
     project, version, n1, _claim = _seed_version_for_endpoint(db)
     edge = _seed_edge(db, project, version, n1)
     with pytest.raises(HTTPException) as exc:
         pm_api.delete_edge(project=project, edge_id=edge.id, db=db, payload=payload)
     assert exc.value.status_code == 422
-    assert "reason is required" in exc.value.detail
+    assert exc.value.detail == "A reason is required to delete a connection."
     # The edge survives and nothing was logged — a gate that ran after
     # record_change would leave a phantom delete in the change log.
     assert db.get(ProcessEdge, edge.id) is not None
@@ -184,20 +188,23 @@ Add `DeleteRequest` to the `app.schemas.process_map` import block (alphabeticall
 Insert the helper immediately above the `@router.delete("/edges/{edge_id}"...)` decorator:
 
 ```python
-def _require_delete_reason(payload: DeleteRequest | None, message: str) -> str:
-    """Return the trimmed delete reason, or 422 with `message` if it's missing.
+def _require_delete_reason(
+    payload: DeleteRequest | None, message: str
+) -> tuple[str, bool]:
+    """Return the trimmed delete reason and the ai_applied flag.
 
-    Deletes carry the same hard reason requirement as a rename or a lane move:
-    they are the only edit that removes evidence from the map, so they are the
-    last place a silent change should be possible. Callers run this before
-    touching the session, so — unlike the update paths — it never needs a
-    rollback.
+    Raises 422 with `message` when the reason is missing or blank. Call this
+    before any session mutation — it does not roll back.
     """
     reason = (payload.reason or "").strip() if payload else ""
     if not reason:
         raise HTTPException(status_code=422, detail=message)
-    return reason
+    return reason, payload.ai_applied
 ```
+
+It returns the flag as well as the reason so the caller's `payload` doesn't stay typed
+`DeleteRequest | None` past the gate — otherwise every one of the three endpoints needs a
+`payload.ai_applied if payload else False` whose `else` branch is unreachable.
 
 Then replace the body of `delete_edge` (currently `process_maps.py:1136-1162`) with:
 
@@ -213,10 +220,9 @@ def delete_edge(
     if edge is None:
         raise HTTPException(status_code=404, detail="Edge not found")
     _check_edge_in_project(edge, project.id, db)
-    reason = _require_delete_reason(
+    reason, ai_applied = _require_delete_reason(
         payload, "A reason is required to delete a connection."
     )
-    ai_applied = payload.ai_applied if payload else False
     record_change(
         db,
         target_type=ChangeTargetType.EDGE.value,
@@ -302,13 +308,19 @@ Append to `backend/tests/test_delete_reason.py`:
 ```python
 # --- node ------------------------------------------------------------------
 
-@pytest.mark.parametrize("payload", [None, DeleteRequest(), DeleteRequest(reason="   ")])
+@pytest.mark.parametrize(
+    "payload",
+    [None, DeleteRequest(), DeleteRequest(reason=""), DeleteRequest(reason="   ")],
+    ids=["no_body", "empty_payload", "empty_reason", "whitespace_reason"],
+)
 def test_delete_node_without_reason_is_rejected(db, payload):
     project, _version, n1, _claim = _seed_version_for_endpoint(db)
     with pytest.raises(HTTPException) as exc:
         pm_api.delete_node(project=project, node_id=n1.id, db=db, payload=payload)
     assert exc.value.status_code == 422
-    assert "reason is required" in exc.value.detail
+    # Pin the whole string, not a substring: a copied "connection" message here
+    # would keep the suite green while telling the user the wrong noun.
+    assert exc.value.detail == "A reason is required to delete a step."
     assert db.get(ProcessNode, n1.id) is not None
     assert [e for e in _events_for(db, n1.id) if e.kind == "delete"] == []
 
@@ -401,8 +413,9 @@ def delete_node(
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     _check_node_in_project(node, project.id, db)
-    reason = _require_delete_reason(payload, "A reason is required to delete a step.")
-    ai_applied = payload.ai_applied if payload else False
+    reason, ai_applied = _require_delete_reason(
+        payload, "A reason is required to delete a step."
+    )
     version_id = node.version_id
     record_change(
         db,
@@ -458,25 +471,31 @@ and add after `assert ev.source == "manual"`:
 (`process_maps` re-exports the schema names it imports, which is how the file already reaches
 `pm_api.AiProposedStepRequest` on line 259.)
 
-`backend/tests/test_stakeholder_review.py:138` and `:160` — add a body to each `client.delete`:
+`backend/tests/test_stakeholder_review.py:138` and `:160` — add a body to each delete.
+
+**`client.delete(url, json=...)` does not work.** `httpx` deliberately omits the body shorthand
+from `.delete()` — passing `json=` raises `TypeError: got an unexpected keyword argument 'json'`.
+Use the general form:
 
 ```python
-    d = client.delete(
+    d = client.request(
+        "DELETE",
         f"/api/v2/projects/{proj.id}/nodes/{nodes[0].id}",
         json={"reason": "Removed during review"},
     )
 ```
 
 ```python
-    d = client.delete(
+    d = client.request(
+        "DELETE",
         f"/api/v2/projects/{proj.id}/nodes/{nodes[1].id}",
         json={"reason": "Removed during review"},
     )
 ```
 
-These two are the only HTTP-level delete calls in the suite, so they are also the proof that
-`DELETE`-with-a-body round-trips through Starlette's TestClient rather than only working at the
-function level.
+(This is a Python-client quirk only — browser `fetch` sends a DELETE body fine, so the frontend
+tasks are unaffected. Task 1's wire-level tests in `test_delete_reason.py` use the same
+`client.request("DELETE", ...)` form; copy from there.)
 
 - [ ] **Step 6: Run the affected suites**
 
@@ -526,14 +545,19 @@ def _second_lane(db, project, version):
     )
 
 
-@pytest.mark.parametrize("payload", [None, DeleteRequest(), DeleteRequest(reason="   ")])
+@pytest.mark.parametrize(
+    "payload",
+    [None, DeleteRequest(), DeleteRequest(reason=""), DeleteRequest(reason="   ")],
+    ids=["no_body", "empty_payload", "empty_reason", "whitespace_reason"],
+)
 def test_delete_lane_without_reason_is_rejected(db, payload):
     project, version, _n1, _claim = _seed_version_for_endpoint(db)
     lane = _second_lane(db, project, version)
     with pytest.raises(HTTPException) as exc:
         pm_api.delete_lane(project=project, lane_id=lane.id, db=db, payload=payload)
     assert exc.value.status_code == 422
-    assert "reason is required" in exc.value.detail
+    # Pin the whole string — see the note on the node equivalent.
+    assert exc.value.detail == "A reason is required to delete a lane."
     assert db.get(ProcessLane, lane.id) is not None
     assert [e for e in _events_for(db, lane.id) if e.kind == "delete"] == []
 
@@ -626,8 +650,9 @@ before `fallback = others[0]`:
 ```python
     # Structural impossibility first, provenance second: there's no point
     # demanding a justification for a delete that can never succeed.
-    reason = _require_delete_reason(payload, "A reason is required to delete a lane.")
-    ai_applied = payload.ai_applied if payload else False
+    reason, ai_applied = _require_delete_reason(
+        payload, "A reason is required to delete a lane."
+    )
 ```
 
 Then replace the three affected lines of the `record_change` call:
@@ -1612,6 +1637,26 @@ the issue closes when the PR merges, and merging to `main` needs explicit approv
 ---
 
 ## Notes for the implementer
+
+**Refinements adopted during Task 1's code review** — Tasks 2 and 3 inherit these, so don't
+reintroduce the earlier shapes:
+
+- `_require_delete_reason` returns `(reason, ai_applied)`, not just the reason. Returning both
+  keeps `payload` from staying typed `DeleteRequest | None` past the gate, which is what forced the
+  unreachable `payload.ai_applied if payload else False` in the first draft.
+- Its docstring states the rollback rule **imperatively** ("call this before any session
+  mutation — it does not roll back") rather than observing what callers happen to do. That matters
+  most in `delete_lane`, where the visually obvious spot for the gate — just above
+  `record_change` — sits *after* a bulk `UPDATE ProcessNode SET lane_id=...`.
+- Rejection tests pin the **full** 422 string, not a substring. A substring match passes for all
+  three endpoints, so a copied message would leave the suite green while telling the user the
+  wrong noun.
+- The parametrize lists cover `reason=""` as well as `None` and whitespace, and carry `ids=` so a
+  failure names the case.
+- Task 1 also added wire-level `TestClient` coverage of the new contract (optional, non-embedded
+  JSON body on a `DELETE`). Reuse its `client.request("DELETE", url, json=...)` form —
+  `client.delete(url, json=...)` raises `TypeError`, because `httpx` omits the body shorthand from
+  `.delete()`.
 
 **Do not weaken the gate to make a test pass.** If a backend test fails with "A reason is required",
 the fix is to give that caller a reason, not to make the reason optional. The whole point of the
