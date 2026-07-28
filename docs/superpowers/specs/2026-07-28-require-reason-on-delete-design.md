@@ -348,12 +348,10 @@ and logs the card's rationale.
 **Cascaded-edge provenance.** Deleting a node FK-cascades its touching edges and writes **no**
 `change_event` for them. The edges vanish from the log's point of view. This is a real pre-existing
 hole, but it is a separate defect from the reason requirement and would roughly double this diff.
-A follow-up issue gets filed: *node delete should log `DELETE` change_events for its cascaded
-edges*, carrying the node's reason.
+Filed as [#77](https://github.com/ewise123/processreengineering/issues/77).
 
 **Lane-delete node reassignment.** `delete_lane` moves the lane's nodes to a fallback lane
-(`:1603`) and records no per-node lane-change event. Same category as the above; folded into the
-same follow-up issue.
+(`:1603`) and records no per-node lane-change event. Same category as the above; folded into #77.
 
 **Delete with consequences** (#54) — impact preview, gap-marking, replacement offers.
 
