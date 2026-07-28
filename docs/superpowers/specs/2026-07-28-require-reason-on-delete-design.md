@@ -159,20 +159,27 @@ work modifies. There is no file-level overlap at all, so no merge conflict to se
 The three delete implementations become **pure and reason-taking**:
 
 ```
-deleteNodeImpl(id, reason)     // bpmn-canvas.tsx:296
+deleteNodeImpl(id, body)       // bpmn-canvas.tsx:296  — body: DeleteRequest
 deleteEdgeImpl(id, reason)     // bpmn-canvas.tsx:551
-deleteLaneImpl(id, reason)     // bpmn-canvas.tsx:2358 (renamed from deleteLane)
 ```
 
-Prompting lifts out into thin wrappers (`requestDeleteNode`, `requestDeleteEdge`,
-`requestDeleteLane`, `requestDeleteSelection`) that call `promptReason(...)`, bail on `null`, and
-delegate. This is the load-bearing decision: making `reason` a required parameter turns every one
-of the ~12 call sites into a compile error until it states its reason, which is exactly the audit
-we want. A default value, or an optional param, would let a call site silently keep writing
-`"Deleted"`.
+`deleteNodeImpl` takes the whole request body rather than a bare string because the AI path needs
+`ai_applied: true` on the wire while reusing the identical local-state cleanup. `deleteEdgeImpl`
+takes just a reason: the AI path can't reuse it anyway, since it records an undo entry that
+delete-containing plans must not get.
 
-`deleteLane` also currently swallows its own errors in a `try/catch` with a toast. The wrapper
-keeps that behavior; only the prompt is new.
+Prompting lifts out into thin wrappers — `requestDeleteNode` and `requestDeleteEdge` for the
+single-target surfaces — that call `promptReason(...)`, bail on `null`, and delegate. The two paths
+that already own their whole flow, `deleteSelectionImpl` and `deleteLane`, keep their names and gain
+the prompt inline; wrapping them would mean renaming without changing anything.
+
+This is the load-bearing decision: making the reason a **required** parameter turns every one of the
+~12 call sites into a compile error until it states its reason, which is exactly the audit we want.
+A default value, or an optional param, would let a call site silently keep writing `"Deleted"`.
+
+`deleteLane` also currently swallows its own errors in a `try/catch` with a toast, and early-returns
+when only one lane is left. The prompt slots in after that guard and before the `flush()`, so a
+cancelled prompt costs nothing and the last lane never prompts at all.
 
 ### 2.2 Which paths prompt
 
