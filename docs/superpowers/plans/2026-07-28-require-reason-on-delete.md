@@ -1621,6 +1621,14 @@ the rename and lane-move paths already raise — and that reason lands on the
 - AI-applied deletes, undo-of-create, redo, and paste-undo supply reasons
   programmatically and never prompt.
 
+## Deploy order — not a concern
+A code review raised this: `render.yaml` deploys only the backend from `main`, so merging would
+promote a strict backend against a frontend that still sends no body, 422-ing every delete.
+
+Confirmed with the repo owner that **the app is not deployed anywhere** — `render.yaml` is a
+leftover from the port this repo was forked from. There is no deploy order to get wrong. Removing
+the stale deploy config is tracked separately; it does not belong in this PR.
+
 ## Out of scope
 - Richer delete UX (impact preview, gap-marking, replacements) — #54.
 - Cascaded edge deletes and lane-delete node reassignment still write no
