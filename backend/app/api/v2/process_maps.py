@@ -1654,7 +1654,8 @@ def delete_lane(
 
     # Structural impossibility first, provenance second: there's no point
     # demanding a justification for a delete that can never succeed. The gate
-    # also has to precede the bulk reassignment below, which it won't roll back.
+    # also has to precede the bulk reassignment below, which nothing here
+    # would roll back.
     reason, ai_applied = _require_delete_reason(
         payload, "A reason is required to delete a lane."
     )

@@ -286,8 +286,12 @@ def test_rejected_lane_delete_leaves_nodes_in_place(db):
     project, version, n1, _claim = _seed_version_for_endpoint(db)
     original_lane_id = n1.lane_id
     _second_lane(db, project, version)
-    with pytest.raises(HTTPException):
+    with pytest.raises(HTTPException) as exc:
         pm_api.delete_lane(project=project, lane_id=original_lane_id, db=db, payload=None)
+    # Pin which 422 we got. A bare `raises(HTTPException)` would still pass if
+    # the last-lane guard fired instead — nodes are trivially unmoved on that
+    # path — and this is the only test covering the gate-before-UPDATE window.
+    assert exc.value.detail == "A reason is required to delete a lane."
     db.expire_all()
     assert db.get(ProcessNode, n1.id).lane_id == original_lane_id
 
@@ -325,3 +329,41 @@ def test_delete_lane_ai_applied_carries_the_suggestion_reason(db):
     assert ev.reason == "No sources place work in this lane"
     assert ev.source == "chat"
     assert ev.actor_kind == "ai"
+
+
+# --- lane, over the wire ---------------------------------------------------
+
+def _seed_lane_for_client(db):
+    """Seed a deletable lane in a project the dev user can actually reach.
+
+    Mirrors `_seed_edge_for_client` — the wire tests go through
+    `get_project_or_404`, which resolves the caller as `dev@local`. The second
+    lane is what makes the delete legal at all: the seed's own lane would be
+    the last remaining one.
+    """
+    project, version, _n1, _claim = _seed_version_for_endpoint(db)
+    db.add(User(org_id=project.org_id, email=DEV_USER_EMAIL, name="Dev"))
+    db.commit()
+    return project, _second_lane(db, project, version)
+
+
+def test_delete_lane_over_http_ignores_the_retired_ai_applied_query_param(client, db):
+    """`ai_applied` used to be a query param, and FastAPI drops unknown ones
+    silently rather than 422ing — so its removal needs pinning from the wire.
+    Attribution now comes from the body alone; re-adding the parameter would
+    reintroduce a second, competing source of it and turn this red.
+    """
+    project, lane = _seed_lane_for_client(db)
+    lane_id = lane.id
+    resp = client.request(
+        "DELETE",
+        f"/api/v2/projects/{project.id}/lanes/{lane_id}?ai_applied=true",
+        json={"reason": "Merged into Operations"},
+    )
+    assert resp.status_code == 204, resp.text
+    db.expire_all()
+    assert db.get(ProcessLane, lane_id) is None
+    ev = [e for e in _events_for(db, lane_id) if e.kind == "delete"][0]
+    assert ev.source == "manual"  # the URL can no longer forge AI attribution
+    assert ev.actor_kind == "user"
+    assert ev.reason == "Merged into Operations"
