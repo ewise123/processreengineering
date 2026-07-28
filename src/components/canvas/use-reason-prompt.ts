@@ -12,26 +12,45 @@ import { useCallback, useRef, useState } from "react";
  * and send nothing. Cosmetic edits (drag-to-reposition, bend, recolor) never
  * call this.
  *
+ * Deletes use the same prompt with `{ destructive: true }`: because cancelling
+ * aborts the pending delete, the prompt doubles as the confirm step.
+ *
  * The hook returns plain state + handlers rather than JSX so the consuming
  * component can render `<ReasonPromptDialog {...reasonPrompt} />` once and keep
  * all the canvas markup in one place.
  */
+export interface ReasonPromptOptions {
+  /** Render as a destructive action: red confirm button labelled "Delete". */
+  destructive?: boolean;
+  /** Replace the modal's body copy (deletes explain what else they remove). */
+  description?: string;
+}
+
 export interface ReasonPromptState {
   /** True while the dialog is open and awaiting input. */
   open: boolean;
   /** Human label for the action being explained, e.g. "Rename step". */
   actionLabel: string;
+  /** True when the pending action destroys something (see ReasonPromptOptions). */
+  destructive: boolean;
+  /** Body copy override, or null for the dialog's default. */
+  description: string | null;
   /** Submit the entered reason (empty/whitespace is treated as cancel). */
   submit: (reason: string) => void;
   /** Dismiss without a reason; aborts the pending edit. */
   cancel: () => void;
   /** Open the prompt and await the result. */
-  promptReason: (actionLabel: string) => Promise<string | null>;
+  promptReason: (
+    actionLabel: string,
+    options?: ReasonPromptOptions
+  ) => Promise<string | null>;
 }
 
 export function useReasonPrompt(): ReasonPromptState {
   const [open, setOpen] = useState(false);
   const [actionLabel, setActionLabel] = useState("");
+  const [destructive, setDestructive] = useState(false);
+  const [description, setDescription] = useState<string | null>(null);
   // Holds the resolver for the in-flight promptReason() promise so submit /
   // cancel can settle it. Only one prompt is ever open at a time.
   const resolverRef = useRef<((value: string | null) => void) | null>(null);
@@ -54,19 +73,24 @@ export function useReasonPrompt(): ReasonPromptState {
 
   const cancel = useCallback(() => settle(null), [settle]);
 
-  const promptReason = useCallback((label: string) => {
-    // If a prompt is somehow already open, cancel it before opening the next.
-    if (resolverRef.current) {
-      const prev = resolverRef.current;
-      resolverRef.current = null;
-      prev(null);
-    }
-    setActionLabel(label);
-    setOpen(true);
-    return new Promise<string | null>((resolve) => {
-      resolverRef.current = resolve;
-    });
-  }, []);
+  const promptReason = useCallback(
+    (label: string, options?: ReasonPromptOptions) => {
+      // If a prompt is somehow already open, cancel it before opening the next.
+      if (resolverRef.current) {
+        const prev = resolverRef.current;
+        resolverRef.current = null;
+        prev(null);
+      }
+      setActionLabel(label);
+      setDestructive(options?.destructive ?? false);
+      setDescription(options?.description ?? null);
+      setOpen(true);
+      return new Promise<string | null>((resolve) => {
+        resolverRef.current = resolve;
+      });
+    },
+    []
+  );
 
-  return { open, actionLabel, submit, cancel, promptReason };
+  return { open, actionLabel, destructive, description, submit, cancel, promptReason };
 }

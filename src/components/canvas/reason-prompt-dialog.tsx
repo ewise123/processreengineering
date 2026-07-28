@@ -23,6 +23,8 @@ import type { ReasonPromptState } from "./use-reason-prompt";
 export function ReasonPromptDialog({
   open,
   actionLabel,
+  destructive,
+  description,
   submit,
   cancel,
 }: ReasonPromptState) {
@@ -55,14 +57,18 @@ export function ReasonPromptDialog({
         <DialogHeader>
           <DialogTitle>{actionLabel}</DialogTitle>
           <DialogDescription>
-            Add a short reason for this change. It is saved to the change log so
-            the edit history stays explainable.
+            {description ??
+              "Add a short reason for this change. It is saved to the change log so the edit history stays explainable."}
           </DialogDescription>
         </DialogHeader>
         <Textarea
           autoFocus
           value={value}
-          placeholder="e.g. Corrected per the SOP review"
+          placeholder={
+            destructive
+              ? "e.g. Duplicate of the intake step"
+              : "e.g. Corrected per the SOP review"
+          }
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             // Cmd/Ctrl+Enter submits; plain Enter keeps a newline.
@@ -77,10 +83,11 @@ export function ReasonPromptDialog({
             Cancel
           </Button>
           <Button
+            variant={destructive ? "destructive" : "default"}
             onClick={() => submitAndReset(value)}
             disabled={value.trim() === ""}
           >
-            Save change
+            {destructive ? "Delete" : "Save change"}
           </Button>
         </DialogFooter>
       </DialogContent>
