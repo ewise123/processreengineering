@@ -8,7 +8,7 @@ from app.api.v2 import process_maps as pm_api
 from app.models.change_event import ChangeEvent
 from app.models.claim import Claim
 from app.models.process import ProcessLane
-from app.schemas.process_map import EdgeCreate, EdgeUpdate, LaneCreate, LaneUpdate, NodeCreate, NodeUpdate, NodeClaimLinkRequest
+from app.schemas.process_map import DeleteRequest, EdgeCreate, EdgeUpdate, LaneCreate, LaneUpdate, NodeCreate, NodeUpdate, NodeClaimLinkRequest
 from tests.test_ai_edit import _seed_version_for_endpoint
 
 
@@ -378,7 +378,12 @@ def test_delete_node_logs_delete_event_and_node_is_gone(db):
     node_name = n1.name
     node_type = n1.type
 
-    pm_api.delete_node(project=project, node_id=node_id, db=db)
+    pm_api.delete_node(
+        project=project,
+        node_id=node_id,
+        db=db,
+        payload=DeleteRequest(reason="Step no longer performed"),
+    )
 
     # event survives
     events = _events_for(db, node_id)
@@ -388,6 +393,7 @@ def test_delete_node_logs_delete_event_and_node_is_gone(db):
     assert ev.target_type == "node"
     assert ev.target_id == node_id
     assert ev.source == "manual"
+    assert ev.reason == "Step no longer performed"
     assert ev.before["name"] == node_name
     assert ev.before["type"] == node_type
 
@@ -403,7 +409,12 @@ def test_delete_edge_logs_delete_event_and_edge_is_gone(db):
     src_id = edge.source_node_id
     tgt_id = edge.target_node_id
 
-    pm_api.delete_edge(project=project, edge_id=edge_id, db=db)
+    pm_api.delete_edge(
+        project=project,
+        edge_id=edge_id,
+        db=db,
+        payload=DeleteRequest(reason="No longer part of the flow"),
+    )
 
     # event survives
     events = _events_for(db, edge_id)
@@ -413,6 +424,7 @@ def test_delete_edge_logs_delete_event_and_edge_is_gone(db):
     assert ev.target_type == "edge"
     assert ev.target_id == edge_id
     assert ev.source == "manual"
+    assert ev.reason == "No longer part of the flow"
     assert ev.before["source_node_id"] == str(src_id)
     assert ev.before["target_node_id"] == str(tgt_id)
     assert "label" in ev.before
@@ -435,7 +447,12 @@ def test_delete_lane_logs_delete_event_and_lane_is_gone(db):
     lane_id = new_lane.id
     lane_name = new_lane.name
 
-    pm_api.delete_lane(project=project, lane_id=lane_id, db=db)
+    pm_api.delete_lane(
+        project=project,
+        lane_id=lane_id,
+        db=db,
+        payload=DeleteRequest(reason="Lane no longer needed"),
+    )
 
     # event survives
     events = _events_for(db, lane_id)
@@ -447,6 +464,7 @@ def test_delete_lane_logs_delete_event_and_lane_is_gone(db):
     assert ev.target_id == lane_id
     assert ev.source == "manual"
     assert ev.actor_kind == "user"
+    assert ev.reason == "Lane no longer needed"
     assert ev.before["name"] == lane_name
 
     # object is gone
@@ -465,7 +483,12 @@ def test_delete_lane_ai_applied_records_chat_source_and_ai_actor(db):
     )
     lane_id = new_lane.id
 
-    pm_api.delete_lane(project=project, lane_id=lane_id, db=db, ai_applied=True)
+    pm_api.delete_lane(
+        project=project,
+        lane_id=lane_id,
+        db=db,
+        payload=DeleteRequest(reason="Consolidated by suggestion", ai_applied=True),
+    )
 
     delete_events = [e for e in _events_for(db, lane_id) if e.kind == "delete"]
     assert len(delete_events) == 1
@@ -474,6 +497,7 @@ def test_delete_lane_ai_applied_records_chat_source_and_ai_actor(db):
     assert ev.target_id == lane_id
     assert ev.source == "chat"
     assert ev.actor_kind == "ai"
+    assert ev.reason == "Consolidated by suggestion"
 
 
 # ---------------------------------------------------------------------------

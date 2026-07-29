@@ -11,20 +11,22 @@ export function isDeleteOp(kind: OpKind): boolean {
 
 /** A single executable mutation. Ref fields hold either a real UUID or a
  * tmp placeholder (a producing step's `tempId`); the executor resolves them.
- * `reason` is the change-log reason the executor sends with the PATCH — only
- * the semantic-edit steps carry it (the backend requires a reason for those);
+ * `reason` is the change-log reason the executor sends with the request. Every
+ * step kind carries one: the backend requires a reason for semantic edits, for
+ * creates (to attribute them to the AI rather than a manual user edit), and —
+ * since #53 — for deletes, which are the most provenance-critical edit of all.
  * `planBundle` fills it from the owning suggestion's rationale. */
 export type MutationStep =
   | { kind: "update_node"; nodeRef: string; name?: string; description?: string; laneRef?: string; nodeType?: string; reason?: string }
-  | { kind: "delete_node"; nodeRef: string }
+  | { kind: "delete_node"; nodeRef: string; reason?: string }
   | { kind: "create_node"; tempId: string; laneRef: string | null; nodeType: string; label: string; nearNodeRef: string | null; role?: string | null; reason?: string }
   | { kind: "create_edge"; tempId?: string; fromRef: string; toRef: string; label: string | null; reason?: string }
-  | { kind: "delete_edge"; edgeRef: string }
+  | { kind: "delete_edge"; edgeRef: string; reason?: string }
   | { kind: "update_edge_label"; edgeRef: string; label: string; reason?: string }
-  | { kind: "reroute_edge"; edgeRef: string; fromRef: string | null; toRef: string | null }
+  | { kind: "reroute_edge"; edgeRef: string; fromRef: string | null; toRef: string | null; reason?: string }
   | { kind: "create_lane"; tempId: string; name: string; reason?: string }
   | { kind: "update_lane"; laneRef: string; name: string; reason?: string }
-  | { kind: "delete_lane"; laneRef: string }
+  | { kind: "delete_lane"; laneRef: string; reason?: string }
   | { kind: "update_edge_condition"; edgeRef: string; conditionText: string; reason?: string };
 
 /** Translate one op into its ordered mutation steps. Pure; no ref resolution. */
@@ -308,24 +310,11 @@ export function reasonForSuggestion(s: ChatSuggestion): string {
   return cap(title ? `Applied AI suggestion: ${title}` : "Applied AI suggestion");
 }
 
-/** Attach the owning suggestion's reason to the semantic-edit steps that need
- * one; other step kinds (create/delete/connect) auto-log on the backend.
- * Create steps also carry the reason: they're AI-applied and the backend's
- * create endpoints need a reason + ai_applied flag to attribute the resulting
- * Change Log entry to the AI instead of defaulting to a manual user edit. */
+/** Attach the owning suggestion's reason to every step. The backend requires a
+ * reason on semantic edits, on creates (so the Change Log attributes them to the
+ * AI instead of defaulting to a manual user edit), and on deletes. */
 function withReason(step: MutationStep, reason: string): MutationStep {
-  switch (step.kind) {
-    case "update_node":
-    case "update_edge_label":
-    case "update_lane":
-    case "update_edge_condition":
-    case "create_node":
-    case "create_edge":
-    case "create_lane":
-      return { ...step, reason };
-    default:
-      return step;
-  }
+  return { ...step, reason };
 }
 
 /** Build an ordered, validated plan for one bundle. Suggestions are reordered so

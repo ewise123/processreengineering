@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,38 +11,34 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
+import { REASON_PROMPT_DESCRIPTION } from "./delete-reason";
 import type { ReasonPromptState } from "./use-reason-prompt";
 
 /**
  * Modal that captures the `reason` for a semantic edit. Driven entirely by
  * `useReasonPrompt()` — render one instance and spread the hook's state into
- * it. Closing via the X / overlay / Escape counts as a cancel.
+ * it, including the field's own text. Closing via the X / overlay / Escape
+ * counts as a cancel.
+ *
+ * The view holds no state of its own: the hook clears the field when it opens a
+ * prompt, so a prompt superseded mid-typing cannot leave its text behind for
+ * the next one.
  */
 export function ReasonPromptDialog({
   open,
   actionLabel,
+  destructive,
+  description,
+  value,
+  setValue,
   submit,
   cancel,
 }: ReasonPromptState) {
-  const [value, setValue] = useState("");
-
-  // Clear the field as the dialog closes so the next prompt opens empty. This
-  // keeps the reset out of an effect (no cascading render) — the field is only
-  // ever shown while `open`, and every close path routes through here.
-  const submitAndReset = (reason: string) => {
-    setValue("");
-    submit(reason);
-  };
-  const cancelAndReset = () => {
-    setValue("");
-    cancel();
-  };
-
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) cancelAndReset();
+        if (!next) cancel();
       }}
     >
       <DialogContent
@@ -55,32 +49,36 @@ export function ReasonPromptDialog({
         <DialogHeader>
           <DialogTitle>{actionLabel}</DialogTitle>
           <DialogDescription>
-            Add a short reason for this change. It is saved to the change log so
-            the edit history stays explainable.
+            {description ?? REASON_PROMPT_DESCRIPTION}
           </DialogDescription>
         </DialogHeader>
         <Textarea
           autoFocus
           value={value}
-          placeholder="e.g. Corrected per the SOP review"
+          placeholder={
+            destructive
+              ? "e.g. Duplicate of the intake step"
+              : "e.g. Corrected per the SOP review"
+          }
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             // Cmd/Ctrl+Enter submits; plain Enter keeps a newline.
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
-              submitAndReset(value);
+              submit(value);
             }
           }}
         />
         <DialogFooter>
-          <Button variant="outline" onClick={cancelAndReset}>
+          <Button variant="outline" onClick={cancel}>
             Cancel
           </Button>
           <Button
-            onClick={() => submitAndReset(value)}
+            variant={destructive ? "destructive" : "default"}
+            onClick={() => submit(value)}
             disabled={value.trim() === ""}
           >
-            Save change
+            {destructive ? "Delete" : "Save change"}
           </Button>
         </DialogFooter>
       </DialogContent>

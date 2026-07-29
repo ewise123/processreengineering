@@ -92,15 +92,6 @@ export default function CanvasPage() {
     [router, params.id, params.modelId]
   );
 
-  const handleNodeDelete = useCallback(
-    async (id: UUID) => {
-      if (!canvasRef.current) return;
-      await canvasRef.current.deleteNode(id);
-      setSelected({ kind: "none" });
-    },
-    []
-  );
-
   const handleNodeUpdate = useCallback(
     async (id: UUID, patch: { name?: string; laneId?: UUID; type?: string; description?: string }) => {
       if (!canvasRef.current) return;
@@ -463,7 +454,10 @@ export default function CanvasPage() {
             lanes={data.lanes}
             collapsed={propertiesCollapsed}
             onCollapsedChange={setPropertiesCollapsed}
-            onDelete={handleNodeDelete}
+            // Clears the panel by way of the canvas: a successful delete
+            // deselects the node, which re-emits the selection as "none". The
+            // panel must NOT close itself — the prompt may have been cancelled.
+            onDelete={(id) => canvasRef.current?.deleteNode(id)}
             onUpdate={handleNodeUpdate}
             onAddStep={handleAddStep}
             onOpenSource={(target) => {

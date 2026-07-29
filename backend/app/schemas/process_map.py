@@ -114,6 +114,19 @@ class EdgeUpdate(BaseModel):
     ai_applied: bool = False
 
 
+class DeleteRequest(BaseModel):
+    """Body for the node / edge / lane delete endpoints.
+
+    `reason` is required in practice — the handlers reject a missing or blank one
+    with a 422 — but it is declared optional here so that rejection carries our
+    own message instead of a pydantic validation envelope. Same trick, and same
+    motivation, as `NodeUpdate` / `EdgeUpdate` / `LaneUpdate`.
+    """
+
+    reason: str | None = Field(default=None, max_length=2000)
+    ai_applied: bool = False
+
+
 class CitationDetail(BaseModel):
     """A single supporting quote with the input + section it came from."""
 
