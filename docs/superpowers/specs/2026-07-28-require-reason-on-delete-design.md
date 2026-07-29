@@ -77,13 +77,23 @@ transport work.
 A module-level helper in `process_maps.py`, next to the existing change-recording helpers:
 
 ```python
-def _require_delete_reason(payload: DeleteRequest | None, message: str) -> str:
-    """Return the trimmed reason, or 422 with `message` if it's missing/blank."""
+def _require_delete_reason(
+    payload: DeleteRequest | None, message: str
+) -> tuple[str, bool]:
+    """Return the trimmed delete reason and the ai_applied flag.
+
+    Raises 422 with `message` when the reason is missing or blank. Call this
+    before any session mutation — it does not roll back.
+    """
     reason = (payload.reason or "").strip() if payload else ""
     if not reason:
         raise HTTPException(status_code=422, detail=message)
-    return reason
+    return reason, payload.ai_applied
 ```
+
+It returns the flag as well as the reason so `payload` doesn't stay typed
+`DeleteRequest | None` past the gate — otherwise each of the three endpoints needs a
+`payload.ai_applied if payload else False` whose `else` branch is unreachable.
 
 Per-endpoint messages:
 

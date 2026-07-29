@@ -246,7 +246,7 @@ def delete_edge(
 - [ ] **Step 5: Run the new tests to verify they pass**
 
 Run: `cd backend && python -m pytest tests/test_delete_reason.py -v`
-Expected: 5 passed (3 parametrized rejections + 2 accept cases).
+Expected: 6 passed (4 parametrized rejection cases + 2 accept cases).
 
 - [ ] **Step 6: Fix the existing edge-delete test**
 
@@ -305,14 +305,27 @@ Refs #53"
 
 Append to `backend/tests/test_delete_reason.py`:
 
+First hoist the rejection cases into a shared decorator at module level, next to `_events_for` —
+Task 1 inlined them, Task 3 needs them a third time, and pasting the list three times invites the
+three copies to drift:
+
+```python
+# Sharing the model instances across endpoints is safe: handlers only read the
+# payload, and _require_delete_reason never mutates it.
+_NO_REASON = pytest.mark.parametrize(
+    "payload",
+    [None, DeleteRequest(), DeleteRequest(reason=""), DeleteRequest(reason="   ")],
+    ids=["no_body", "empty_payload", "blank_reason", "whitespace_reason"],
+)
+```
+
+Apply `@_NO_REASON` to Task 1's `test_delete_edge_without_reason_is_rejected` in place of its
+inline `parametrize`, then append the node section:
+
 ```python
 # --- node ------------------------------------------------------------------
 
-@pytest.mark.parametrize(
-    "payload",
-    [None, DeleteRequest(), DeleteRequest(reason=""), DeleteRequest(reason="   ")],
-    ids=["no_body", "empty_payload", "empty_reason", "whitespace_reason"],
-)
+@_NO_REASON
 def test_delete_node_without_reason_is_rejected(db, payload):
     project, _version, n1, _claim = _seed_version_for_endpoint(db)
     with pytest.raises(HTTPException) as exc:
@@ -894,6 +907,9 @@ Add two fields to `ReasonPromptState`, after `actionLabel`:
   destructive: boolean;
   /** Body copy override, or null for the dialog's default. */
   description: string | null;
+  /** The textarea's text. Owned here so it clears on open — see below. */
+  value: string;
+  setValue: (next: string) => void;
 ```
 
 and change the `promptReason` member's type to:
@@ -912,6 +928,17 @@ In the hook body, add state next to `actionLabel`:
   const [description, setDescription] = useState<string | null>(null);
 ```
 
+Also **move the textarea's value into the hook**. Today it is component-local state in
+`reason-prompt-dialog.tsx`, cleared only on submit or cancel — so a prompt superseded while open
+leaves its typed text in the box for the next one. Once deletes are destructive that becomes a
+provenance bug: a reason written for one action could be submitted as the justification for a
+different delete. Clearing on open closes it from every path, and puts all prompt state in one
+place instead of split across the hook and the view.
+
+```ts
+  const [value, setValue] = useState("");
+```
+
 Replace `promptReason` with:
 
 ```ts
@@ -926,6 +953,8 @@ Replace `promptReason` with:
       setActionLabel(label);
       setDestructive(options?.destructive ?? false);
       setDescription(options?.description ?? null);
+      // Every prompt opens empty, however the previous one ended.
+      setValue("");
       setOpen(true);
       return new Promise<string | null>((resolve) => {
         resolverRef.current = resolve;
@@ -938,8 +967,14 @@ Replace `promptReason` with:
 and the return:
 
 ```ts
-  return { open, actionLabel, destructive, description, submit, cancel, promptReason };
+  return {
+    open, actionLabel, destructive, description,
+    value, setValue, submit, cancel, promptReason,
+  };
 ```
+
+`ReasonPromptDialog` then holds no state of its own — it reads `value` and calls `setValue`, and
+its `submitAndReset` / `cancelAndReset` wrappers disappear.
 
 Finally extend the module docstring — after the sentence ending "...never call this." add:
 
