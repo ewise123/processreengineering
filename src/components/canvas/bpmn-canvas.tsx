@@ -144,8 +144,11 @@ export type CanvasSelection =
   | { kind: "multi"; nodeIds: UUID[]; edgeIds: UUID[] };
 
 export interface BpmnCanvasHandle {
-  /** Calls the API + removes the node (and any edges touching it) from
-   * local state without re-fetching the whole graph. */
+  /** Prompt for a deletion reason, then — unless the user cancels — call the
+   * API and remove the node (and any edges touching it) from local state
+   * without re-fetching the whole graph. Resolves either way, so a caller
+   * cannot tell a cancel from a delete; it should react to the resulting
+   * selection change rather than assuming the node is gone. */
   deleteNode: (id: UUID) => Promise<void>;
   /** Apply a node-level edit (label, lane assignment, description) from
    * outside the canvas (e.g. the Properties panel). Records an undo entry. */
@@ -173,7 +176,8 @@ export interface BpmnCanvasHandle {
   /** Clear a node's child-sub-process link locally (drops the "+" marker)
    * after the sub-process is removed via the API. */
   clearChildModelId: (id: UUID) => void;
-  /** Delete every selected node and edge (node deletes are non-undoable). */
+  /** Prompt once for a deletion reason, then — unless the user cancels — delete
+   * every selected node and edge under it (node deletes are non-undoable). */
   deleteSelection: () => Promise<void>;
   /** Copy the current selection to the in-memory clipboard. */
   copySelection: () => void;
@@ -557,6 +561,10 @@ function BpmnCanvas({
     []
   );
 
+  // Takes a bare `reason` rather than a DeleteRequest (as deleteNodeImpl does)
+  // because no AI path routes through here — applied suggestions delete edges
+  // via api.deleteEdge directly, since this impl records an undo entry that
+  // delete-containing plans must not get. So `ai_applied` is never wanted.
   const deleteEdgeImpl = useCallback(
     async (id: UUID, reason: string) => {
       const edge = edgesRef.current.find((e) => e.id === id);
@@ -573,6 +581,7 @@ function BpmnCanvas({
           source_node_id: edge.from,
           target_node_id: edge.to,
           label: edge.label,
+          reason: "Undo of Delete edge",
         });
         currentId = created.id;
         setEdges((curr) => [
@@ -610,6 +619,10 @@ function BpmnCanvas({
     if (ids.length === 0) return;
     const nodeIds = ids.filter((id) => nodesRef.current.some((n) => n.id === id));
     const edgeIds = ids.filter((id) => edgesRef.current.some((e) => e.id === id));
+    // Ids can be selected but present in neither list (e.g. removed by a
+    // concurrent apply). Bail before prompting: both loops below would no-op,
+    // so the modal would ask the user to justify nothing.
+    if (nodeIds.length + edgeIds.length === 0) return;
     const counts = { nodes: nodeIds.length, edges: edgeIds.length };
     const reason = await promptReason(deleteActionLabel(counts), {
       destructive: true,
