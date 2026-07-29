@@ -15,10 +15,16 @@ import {
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
-import type { IssueSeverity, NodeUpdate, UUID } from "@/lib/types";
+import type { DeleteRequest, IssueSeverity, NodeUpdate, UUID } from "@/lib/types";
 import type { BundlePlan, BatchResult, MutationStep } from "./suggestion-apply";
 
 import { CanvasContextMenu, type ContextMenuItem } from "./canvas-context-menu";
+import {
+  DELETE_LANE_DESCRIPTION,
+  DELETE_LANE_LABEL,
+  deleteActionDescription,
+  deleteActionLabel,
+} from "./delete-reason";
 import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType } from "./layout";
@@ -294,8 +300,8 @@ function BpmnCanvas({
   }, []);
 
   const deleteNodeImpl = useCallback(
-    async (id: UUID) => {
-      await api.deleteNode(projectId, id);
+    async (id: UUID, body: DeleteRequest) => {
+      await api.deleteNode(projectId, id, body);
       setNodes((curr) => curr.filter((n) => n.id !== id));
       setEdges((curr) => curr.filter((e) => e.from !== id && e.to !== id));
       deselect(id);
@@ -512,7 +518,10 @@ function BpmnCanvas({
               throw err;
             }
           },
-          undo: () => deleteNodeImpl(liveNode.id),
+          undo: () =>
+            deleteNodeImpl(liveNode.id, {
+              reason: "Undo of Add AI-proposed step",
+            }),
         });
       } catch (err) {
         console.error("Failed to apply proposed step", err);
@@ -549,7 +558,7 @@ function BpmnCanvas({
   );
 
   const deleteEdgeImpl = useCallback(
-    async (id: UUID) => {
+    async (id: UUID, reason: string) => {
       const edge = edgesRef.current.find((e) => e.id === id);
       if (!edge) return;
       // currentId tracks whichever UUID the edge has now — across undo/redo
@@ -576,12 +585,15 @@ function BpmnCanvas({
           },
         ]);
       };
-      await api.deleteEdge(projectId, currentId);
+      await api.deleteEdge(projectId, currentId, { reason });
       remove(currentId);
+      const description = "Delete edge";
       record({
-        description: "Delete edge",
+        description,
         do: async () => {
-          await api.deleteEdge(projectId, currentId);
+          await api.deleteEdge(projectId, currentId, {
+            reason: `Redo of ${description}`,
+          });
           remove(currentId);
         },
         undo: recreate,
@@ -590,22 +602,59 @@ function BpmnCanvas({
     [projectId, modelId, versionId, record, deselect]
   );
 
+  /** Prompt for a reason, then delete every selected node and edge with it.
+   * One prompt covers the whole selection: one user decision, one rationale,
+   * N recorded consequences. */
   const deleteSelectionImpl = useCallback(async () => {
     const ids = [...selectedIdsRef.current];
     if (ids.length === 0) return;
     const nodeIds = ids.filter((id) => nodesRef.current.some((n) => n.id === id));
     const edgeIds = ids.filter((id) => edgesRef.current.some((e) => e.id === id));
+    const counts = { nodes: nodeIds.length, edges: edgeIds.length };
+    const reason = await promptReason(deleteActionLabel(counts), {
+      destructive: true,
+      description: deleteActionDescription(counts),
+    });
+    if (reason === null) return;
     // Nodes first: deleteNodeImpl also strips their touching edges locally.
     for (const id of nodeIds) {
-      await deleteNodeImpl(id);
+      await deleteNodeImpl(id, { reason });
     }
     // Then any still-present standalone edges (skip ones a node delete removed).
     for (const id of edgeIds) {
       if (edgesRef.current.some((e) => e.id === id)) {
-        await deleteEdgeImpl(id);
+        await deleteEdgeImpl(id, reason);
       }
     }
-  }, [deleteNodeImpl, deleteEdgeImpl]);
+  }, [deleteNodeImpl, deleteEdgeImpl, promptReason]);
+
+  /** Panel/handle entry point for deleting one node. */
+  const requestDeleteNode = useCallback(
+    async (id: UUID) => {
+      const counts = { nodes: 1, edges: 0 };
+      const reason = await promptReason(deleteActionLabel(counts), {
+        destructive: true,
+        description: deleteActionDescription(counts),
+      });
+      if (reason === null) return;
+      await deleteNodeImpl(id, { reason });
+    },
+    [deleteNodeImpl, promptReason]
+  );
+
+  /** Context-menu entry point for deleting one edge. */
+  const requestDeleteEdge = useCallback(
+    async (id: UUID) => {
+      const counts = { nodes: 0, edges: 1 };
+      const reason = await promptReason(deleteActionLabel(counts), {
+        destructive: true,
+        description: deleteActionDescription(counts),
+      });
+      if (reason === null) return;
+      await deleteEdgeImpl(id, reason);
+    },
+    [deleteEdgeImpl, promptReason]
+  );
 
   const updateEdgeLabelLocal = useCallback(
     async (id: UUID, label: string | null, reason: string) => {
@@ -664,7 +713,9 @@ function BpmnCanvas({
         description: "Create edge",
         do: create,
         undo: async () => {
-          await api.deleteEdge(projectId, currentId);
+          await api.deleteEdge(projectId, currentId, {
+            reason: "Undo of Create edge",
+          });
           setEdges((curr) => curr.filter((e) => e.id !== currentId));
           deselect(currentId);
         },
@@ -737,7 +788,10 @@ function BpmnCanvas({
         }
         case "delete_node": {
           const id = resolve(step.nodeRef);
-          await deleteNodeImpl(id);
+          await deleteNodeImpl(id, {
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
+          });
           // delete-containing plans aren't undoable; no inverse pushed.
           break;
         }
@@ -772,7 +826,7 @@ function BpmnCanvas({
           tmp[step.tempId] = created.id;
           setNodes((curr) => [...curr, newNode]);
           inverses.push(async () => {
-            await api.deleteNode(projectId, created.id);
+            await api.deleteNode(projectId, created.id, { reason: REVERT_REASON });
             setNodes((curr) => curr.filter((n) => n.id !== created.id));
             setEdges((curr) => curr.filter((e) => e.from !== created.id && e.to !== created.id));
           });
@@ -792,14 +846,17 @@ function BpmnCanvas({
             { id: created.id, from: created.source_node_id, to: created.target_node_id, label: created.label ?? null },
           ]);
           inverses.push(async () => {
-            await api.deleteEdge(projectId, created.id);
+            await api.deleteEdge(projectId, created.id, { reason: REVERT_REASON });
             setEdges((curr) => curr.filter((e) => e.id !== created.id));
           });
           break;
         }
         case "delete_edge": {
           const id = resolve(step.edgeRef);
-          await api.deleteEdge(projectId, id);
+          await api.deleteEdge(projectId, id, {
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
+          });
           setEdges((curr) => curr.filter((e) => e.id !== id));
           // delete-containing plan: no inverse.
           break;
@@ -828,7 +885,10 @@ function BpmnCanvas({
           if (!before) throw new Error("Edge no longer exists.");
           const newFrom = step.fromRef ? resolve(step.fromRef) : before.from;
           const newTo = step.toRef ? resolve(step.toRef) : before.to;
-          await api.deleteEdge(projectId, id);
+          await api.deleteEdge(projectId, id, {
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
+          });
           setEdges((curr) => curr.filter((e) => e.id !== id));
           // The edge is already gone; if the recreate fails we can't restore it
           // (non-undoable batch), so surface a clear, recoverable message.
@@ -838,6 +898,10 @@ function BpmnCanvas({
               source_node_id: newFrom,
               target_node_id: newTo,
               label: before.label,
+              // Both halves of the reroute are the AI's doing; without these the
+              // create logs as a manual user edit.
+              reason: step.reason ?? APPLIED_REASON_FALLBACK,
+              ai_applied: true,
             });
           } catch {
             throw new Error(
@@ -875,7 +939,7 @@ function BpmnCanvas({
           };
           setLanes((curr) => recomputeY([...curr, newLane]));
           inverses.push(async () => {
-            await api.deleteLane(projectId, created.id);
+            await api.deleteLane(projectId, created.id, { reason: REVERT_REASON });
             setLanes((curr) => recomputeY(curr.filter((l) => l.id !== created.id)));
           });
           break;
@@ -903,7 +967,10 @@ function BpmnCanvas({
           // Flush pending PATCHes so we don't fire a 404 against a deleted lane
           // (mirrors the manual deleteLane callback).
           await flush();
-          await api.deleteLane(projectId, id, true);
+          await api.deleteLane(projectId, id, {
+            reason: step.reason ?? APPLIED_REASON_FALLBACK,
+            ai_applied: true,
+          });
           // Backend reassigns this lane's nodes to the first REMAINING lane (by order),
           // not to no lane — mirror it so local state matches the server and the
           // reassigned nodes keep rendering inside a real lane.
@@ -1971,7 +2038,7 @@ function BpmnCanvas({
   useImperativeHandle(
     ref,
     () => ({
-      deleteNode: deleteNodeImpl,
+      deleteNode: requestDeleteNode,
       updateNode: updateNodeImpl,
       addProposedStep,
       selectNode: (id) => {
@@ -1992,7 +2059,7 @@ function BpmnCanvas({
       applySuggestionBatch,
     }),
     [
-      deleteNodeImpl,
+      requestDeleteNode,
       updateNodeImpl,
       addProposedStep,
       focusNodeInViewport,
@@ -2089,8 +2156,14 @@ function BpmnCanvas({
     const remove = async () => {
       const nodeIds = currentNodeIds;
       const edgeIds = currentEdgeIds;
-      for (const id of edgeIds) await api.deleteEdge(projectId, id).catch(() => {});
-      for (const id of nodeIds) await api.deleteNode(projectId, id).catch(() => {});
+      for (const id of edgeIds)
+        await api
+          .deleteEdge(projectId, id, { reason: "Undo of Paste" })
+          .catch(() => {});
+      for (const id of nodeIds)
+        await api
+          .deleteNode(projectId, id, { reason: "Undo of Paste" })
+          .catch(() => {});
       setEdges((curr) => curr.filter((e) => !edgeIds.includes(e.id)));
       setNodes((curr) => curr.filter((n) => !nodeIds.includes(n.id)));
       setSelectedIds(new Set());
@@ -2151,11 +2224,11 @@ function BpmnCanvas({
         y: e.clientY,
         items: [
           { label: "Edit label", onSelect: () => setEditingEdgeId(edgeId) },
-          { label: "Delete", onSelect: () => void deleteEdgeImpl(edgeId) },
+          { label: "Delete", onSelect: () => void requestDeleteEdge(edgeId) },
         ],
       });
     },
-    [selectOnly, deleteEdgeImpl]
+    [selectOnly, requestDeleteEdge]
   );
 
   const openCanvasMenu = useCallback(
@@ -2358,10 +2431,15 @@ function BpmnCanvas({
   const deleteLane = useCallback(
     async (laneId: string) => {
       if (lanesRef.current.length <= 1) return;
+      const reason = await promptReason(DELETE_LANE_LABEL, {
+        destructive: true,
+        description: DELETE_LANE_DESCRIPTION,
+      });
+      if (reason === null) return;
       // Flush pending PATCHes so we don't fire a 404 against a deleted lane.
       await flush();
       try {
-        await api.deleteLane(projectId, laneId);
+        await api.deleteLane(projectId, laneId, { reason });
         const latest = lanesRef.current;
         const remaining = latest.filter((l) => l.id !== laneId);
         if (remaining.length === 0) return;
@@ -2391,7 +2469,7 @@ function BpmnCanvas({
         toast.error("Couldn't delete the lane — please try again.");
       }
     },
-    [projectId, flush]
+    [projectId, flush, promptReason]
   );
 
   return (
