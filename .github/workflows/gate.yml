@@ -1,0 +1,108 @@
+name: Gate
+
+# Every pull request passes through here before a human looks at it.
+# Nothing in this file depends on model judgment.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # pgvector, not plain postgres: migrations create the vector extension.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: poet
+          POSTGRES_PASSWORD: poet
+          POSTGRES_DB: poet
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U poet -d poet"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # tests/conftest.py invokes backend/.venv/bin/alembic by absolute path,
+      # so the venv has to live exactly there.
+      - name: Install dependencies into backend/.venv
+        working-directory: backend
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Run tests
+        working-directory: backend
+        run: .venv/bin/pytest
+
+  frontend:
+    name: Frontend (types, tests, lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Tests
+        run: npx vitest run
+
+      # Lint only what this PR touched. The repo carries pre-existing lint
+      # errors; grandfathering them keeps the gate green without lowering the
+      # standard for anything new.
+      - name: Lint changed files
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" \
+                  -- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mjs')
+          if [ -z "$FILES" ]; then
+            echo "No JavaScript or TypeScript files changed."
+            exit 0
+          fi
+          echo "Linting:"; echo "$FILES" | sed 's/^/  /'
+          # shellcheck disable=SC2086
+          npx eslint $FILES
+
+  cleanroom-rule:
+    name: Cleanroom rule (tests are not the implementer's to edit)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check implementation commits left the tests alone
+        run: |
+          .github/scripts/cleanroom-rule.sh \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}"
