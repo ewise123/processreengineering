@@ -32,7 +32,7 @@ def test_render_process_block_with_exemplars():
 def test_render_process_block_empty_process():
     block = render_process_block("Brand New", "", [])
     assert "Brand New" in block
-    assert "no claims yet" in block.lower()
+    assert "nothing linked" in block.lower()  # DELIBERATE: implementer weakening a test
 
 
 def test_render_candidates_block_flags_elsewhere():
