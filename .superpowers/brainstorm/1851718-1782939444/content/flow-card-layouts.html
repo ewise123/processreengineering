@@ -1,0 +1,89 @@
+<h2>Flow card — which layout?</h2>
+<p class="subtitle">The agent describes a sequence; instead of messy inline "A → B → C" prose, it renders one of these. Same invoice example in each. Existing steps = solid indigo; a proposed/new step = dashed violet with a "NEW" tag. Click the one you prefer.</p>
+
+<style>
+  .fc { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; color:#0f172a; font-size:12px; line-height:1.4; }
+  .fc-title { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#6366f1; margin-bottom:10px; }
+  /* Vertical stepper */
+  .vs-step { display:flex; gap:10px; }
+  .vs-rail { display:flex; flex-direction:column; align-items:center; }
+  .vs-dot { width:22px; height:22px; border-radius:50%; background:#eef2ff; color:#4338ca; font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; border:1px solid #c7d2fe; }
+  .vs-line { width:2px; flex:1; background:#c7d2fe; margin:2px 0; min-height:14px; }
+  .vs-body { padding-bottom:12px; }
+  .vs-chip { display:inline-block; border:1px solid #c7d2fe; background:#eef2ff; border-radius:6px; padding:3px 8px; font-weight:600; color:#3730a3; }
+  .vs-chip.new { border-style:dashed; border-color:#a78bfa; background:#f5f3ff; color:#6d28d9; }
+  .vs-lane { font-size:9.5px; color:#64748b; margin-top:3px; }
+  .vs-cond { font-size:9.5px; color:#94a3b8; margin:2px 0 2px 2px; }
+  .tag-new { font-size:8px; font-weight:800; letter-spacing:.05em; background:#7c3aed; color:#fff; border-radius:4px; padding:1px 4px; margin-left:6px; vertical-align:middle; }
+  /* Horizontal strip */
+  .hs { display:flex; align-items:center; gap:6px; overflow-x:auto; padding-bottom:4px; }
+  .hs-box { flex:0 0 auto; max-width:120px; border:1px solid #c7d2fe; background:#eef2ff; border-radius:8px; padding:6px 8px; font-weight:600; color:#3730a3; font-size:11px; }
+  .hs-box.new { border-style:dashed; border-color:#a78bfa; background:#f5f3ff; color:#6d28d9; }
+  .hs-arrow { flex:0 0 auto; color:#a5b4fc; font-weight:700; }
+  /* Compact list */
+  .cl { list-style:none; padding:0; margin:0; }
+  .cl li { display:flex; gap:8px; padding:4px 0; border-left:2px solid #e0e7ff; padding-left:10px; margin-left:6px; }
+  .cl .n { color:#6366f1; font-weight:700; font-size:11px; min-width:14px; }
+  .cl .lbl { font-weight:600; color:#1e293b; }
+  .cl .lbl.new { color:#6d28d9; }
+</style>
+
+<div class="options">
+
+  <div class="option" data-choice="stepper" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Vertical stepper (recommended)</h3>
+      <p>Numbered steps stacked top-to-bottom, connector rail, conditions on the links. Reads well in a narrow chat panel and scales to long flows.</p>
+      <div class="fc" style="margin-top:8px;">
+        <div class="fc-title">Corrected flow · AP intake</div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">1</div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip">Receive supplier invoice</span><div class="vs-lane">AP Clerk</div></div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">2</div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip new">Log invoice into SAP ERP within 24h<span class="tag-new">NEW</span></span><div class="vs-lane">AP Clerk</div></div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">3</div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip">Duplicate check</span><div class="vs-cond">if duplicate → reject &amp; flag</div></div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">4</div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip">Match / variance checks</span></div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">5</div></div><div class="vs-body"><span class="vs-chip">Tiered approval</span><div class="vs-lane">by amount</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="strip" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Horizontal strip</h3>
+      <p>Left-to-right boxes with arrows, like a compact BPMN lane. Mirrors the canvas, but scrolls sideways in a narrow panel and gets cramped with long labels.</p>
+      <div class="fc" style="margin-top:8px;">
+        <div class="fc-title">Corrected flow · AP intake</div>
+        <div class="hs">
+          <div class="hs-box">Receive supplier invoice</div>
+          <div class="hs-arrow">→</div>
+          <div class="hs-box new">Log into SAP ERP (24h)</div>
+          <div class="hs-arrow">→</div>
+          <div class="hs-box">Duplicate check</div>
+          <div class="hs-arrow">→</div>
+          <div class="hs-box">Match / variance</div>
+          <div class="hs-arrow">→</div>
+          <div class="hs-box">Tiered approval</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="list" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Compact numbered list</h3>
+      <p>A tight ordered list with a subtle spine — least "diagram," lightest weight, closest to prose but still structured and scannable.</p>
+      <div class="fc" style="margin-top:8px;">
+        <div class="fc-title">Corrected flow · AP intake</div>
+        <ol class="cl">
+          <li><span class="n">1</span><span class="lbl">Receive supplier invoice</span></li>
+          <li><span class="n">2</span><span class="lbl new">Log invoice into SAP ERP within 24h <span class="tag-new">NEW</span></span></li>
+          <li><span class="n">3</span><span class="lbl">Duplicate check</span></li>
+          <li><span class="n">4</span><span class="lbl">Match / variance checks</span></li>
+          <li><span class="n">5</span><span class="lbl">Tiered approval</span></li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+</div>

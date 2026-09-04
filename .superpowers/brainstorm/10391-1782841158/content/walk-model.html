@@ -1,0 +1,74 @@
+<h2>"Walk the change" — how committal should the preview be?</h2>
+<p class="subtitle">
+  A suggestion card proposes: <em>"Add an Approval step between Submit and Process."</em>
+  Before the user clicks <strong>Apply</strong>, how do we show what it will do on the canvas?
+  Pick the interaction model that feels right — we can refine the look after.
+</p>
+
+<style>
+  .sk { font: 11px/1.3 -apple-system, system-ui, sans-serif; }
+  .lane { display:flex; align-items:center; gap:10px; padding:8px 10px; border-top:1px solid #e2e8f0; min-height:48px; }
+  .lane:first-child { border-top:none; }
+  .lanelabel { width:54px; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:#94a3b8; }
+  .node { padding:6px 9px; border:1.5px solid #cbd5e1; border-radius:7px; background:#fff; font-weight:600; color:#334155; white-space:nowrap; }
+  .arrow { color:#94a3b8; font-weight:700; }
+  .canvas { border:1px solid #e2e8f0; border-radius:10px; background:#f8fafc; overflow:hidden; }
+  .glow { border-color:#7c3aed; box-shadow:0 0 0 3px rgba(124,58,237,.18); color:#6d28d9; }
+  .ghost { border-style:dashed; border-color:#7c3aed; background:repeating-linear-gradient(45deg,#faf5ff,#faf5ff 5px,#f3e8ff 5px,#f3e8ff 10px); color:#7c3aed; }
+  .ghost-arrow { color:#a78bfa; }
+  .struck { opacity:.4; text-decoration:line-through; }
+  .badge { display:inline-block; background:#ede9fe; color:#6d28d9; font-size:9px; font-weight:700; padding:2px 7px; border-radius:99px; }
+  .ctl { display:flex; gap:6px; padding:7px 10px; border-top:1px dashed #ddd6fe; background:#faf5ff; }
+  .btn { font-size:9px; font-weight:700; padding:3px 9px; border-radius:5px; border:1px solid #c4b5fd; background:#fff; color:#6d28d9; }
+  .btn.solid { background:#7c3aed; color:#fff; border-color:#7c3aed; }
+  .stepbar { display:flex; align-items:center; gap:6px; padding:7px 10px; border-top:1px dashed #ddd6fe; background:#faf5ff; font-size:9px; font-weight:700; color:#6d28d9; }
+  .dot { width:6px; height:6px; border-radius:99px; background:#ddd6fe; }
+  .dot.on { background:#7c3aed; }
+</style>
+
+<div class="options">
+  <div class="option" data-choice="highlight" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Highlight only — point at what's affected</h3>
+      <p>Hovering / clicking the card pans to and glows the <em>existing</em> objects the change touches. No preview of new content; you read the card text for "what," the canvas tells you "where." Cheapest — reuses the navigate + flash we already have.</p>
+      <div class="canvas sk" style="margin-top:8px">
+        <div class="lane"><span class="lanelabel">Intake</span><span class="node glow">Submit</span><span class="arrow">→</span><span class="node glow">Process</span><span class="arrow">→</span><span class="node">Notify</span></div>
+        <div class="ctl" style="background:#fff;border-top-style:solid;border-color:#e2e8f0;justify-content:flex-start;align-items:center">
+          <span class="badge">2 steps highlighted</span>
+          <span style="font-size:9px;color:#94a3b8">— glow only; nothing drawn yet</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="ghost" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Ghost preview — draw the result, don't commit it</h3>
+      <p>Clicking <strong>Preview</strong> renders the would-be outcome on the canvas as dashed "ghosts": the new Approval node and its edges appear; the edge being replaced fades/strikes through. Nothing is saved. <strong>Apply</strong> commits the ghosts; leaving the card reverts them. Shows the full shape of the change.</p>
+      <div class="canvas sk" style="margin-top:8px">
+        <div class="lane"><span class="lanelabel">Intake</span><span class="node">Submit</span><span class="ghost-arrow">⇢</span><span class="node ghost">Approve</span><span class="ghost-arrow">⇢</span><span class="node">Process</span><span class="struck arrow">→</span><span class="node">Notify</span></div>
+        <div class="ctl"><span class="btn solid">Apply</span><span class="btn">Cancel preview</span><span style="font-size:9px;color:#a78bfa;align-self:center">ghosts = not yet saved</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="walkthrough" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Step-by-step walkthrough — one change at a time</h3>
+      <p>For a multi-change bundle, a stepper walks through each op in order: "Step 2 of 3 — connect Submit → Approve." Each step ghosts <em>just</em> that one change and pans to it; Next advances. Best for understanding a big bundle, but heavier to build and slower to skim.</p>
+      <div class="canvas sk" style="margin-top:8px">
+        <div class="lane"><span class="lanelabel">Intake</span><span class="node">Submit</span><span class="ghost-arrow">⇢</span><span class="node ghost glow">Approve</span><span class="arrow" style="opacity:.3">→</span><span class="node" style="opacity:.4">Process</span></div>
+        <div class="stepbar"><span class="dot on"></span><span class="dot on"></span><span class="dot"></span><span style="margin-left:4px">Step 2 of 3 · Add "Approve"</span><span style="margin-left:auto" class="btn">‹ Back</span><span class="btn solid">Next ›</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:14px">
+  My lean: <strong>B (ghost preview)</strong> — it shows the actual shape of the change and reuses the
+  <code>aiProposed</code> ghost-rendering the canvas already has, without the cost of a full stepper.
+  But tell me how you picture it.
+</p>

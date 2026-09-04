@@ -1,0 +1,66 @@
+<h2>Refined flow card — linearized, shape-typed</h2>
+<p class="subtitle">Numbered steps with labeled jumps (topology-agnostic — no 2D layout, so complex flows never break the rendering). Rendered by KIND: task = rounded card, gateway = diamond, start/end = circle. Existing = solid, proposed = dashed violet NEW. Blue mention-pills are reserved for node links in prose, not used here.</p>
+
+<style>
+  .fc { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:14px; color:#0f172a; font-size:12px; line-height:1.4; max-width:430px; }
+  .fc-title { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#6366f1; margin-bottom:12px; }
+  .row { display:flex; gap:10px; align-items:flex-start; margin-bottom:8px; }
+  .num { flex:0 0 20px; width:20px; height:20px; border-radius:50%; background:#f1f5f9; color:#475569; font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center; margin-top:2px; }
+  /* task/action = rounded card with left accent + small icon */
+  .task { flex:1; display:flex; align-items:center; gap:8px; background:#fff; border:1px solid #cbd5e1; border-radius:8px; padding:6px 10px; box-shadow: inset 3px 0 0 0 #6366f1; }
+  .task .ico { flex:0 0 auto; width:12px; height:9px; border:1.5px solid #6366f1; border-radius:2px; }
+  .task .t { font-weight:600; color:#1e293b; }
+  .task.new { border-style:dashed; border-color:#a78bfa; box-shadow: inset 3px 0 0 0 #7c3aed; }
+  .task.new .ico { border-color:#7c3aed; }
+  .task.new .t { color:#6d28d9; }
+  .tag-new { font-size:8px; font-weight:800; background:#7c3aed; color:#fff; border-radius:4px; padding:1px 4px; margin-left:6px; }
+  .link { font-size:9px; color:#6366f1; margin-left:6px; }
+  /* gateway = diamond + label + option rows */
+  .gate { flex:1; }
+  .gate-head { display:flex; align-items:center; gap:8px; }
+  .diamond { flex:0 0 auto; width:15px; height:15px; background:#fffbeb; border:1.5px solid #f59e0b; transform:rotate(45deg); }
+  .gate-label { font-weight:700; color:#92400e; }
+  .opt { display:flex; align-items:center; gap:8px; margin:4px 0 0 24px; }
+  .cond { font-size:9.5px; font-weight:700; color:#475569; background:#f1f5f9; border-radius:5px; padding:2px 7px; min-width:64px; text-align:center; }
+  .goto { font-size:11px; color:#334155; }
+  .goto b { color:#6366f1; }
+  /* start / end = circle */
+  .ev { flex:1; display:flex; align-items:center; gap:8px; }
+  .circle { flex:0 0 auto; width:16px; height:16px; border-radius:50%; border:2px solid #16a34a; }
+  .circle.end { border-color:#dc2626; border-width:3px; }
+  .rework { display:inline-block; font-size:9px; font-weight:700; background:#fee2e2; color:#b91c1c; border:1px solid #fecaca; border-radius:5px; padding:1px 6px; margin-left:6px; }
+  .converge { font-size:9.5px; color:#64748b; margin-left:30px; margin-top:-2px; margin-bottom:6px; }
+</style>
+
+<div class="fc">
+  <div class="fc-title">Corrected flow · AP intake</div>
+
+  <div class="row"><div class="num">1</div><div class="task"><span class="ico"></span><span class="t">Receive supplier invoice</span><span class="link">↗ N2</span></div></div>
+
+  <div class="row"><div class="num">2</div><div class="task new"><span class="ico"></span><span class="t">Log invoice into SAP ERP within 24h</span><span class="tag-new">NEW</span></div></div>
+
+  <div class="row"><div class="num">3</div><div class="gate">
+    <div class="gate-head"><span class="diamond"></span><span class="gate-label">Duplicate invoice detected?</span></div>
+    <div class="opt"><span class="cond">Yes</span><span class="goto">→ <b>Step 4</b> · Reject &amp; flag</span></div>
+    <div class="opt"><span class="cond">No</span><span class="goto">→ <b>Step 5</b></span></div>
+  </div></div>
+
+  <div class="row"><div class="num">4</div><div class="task"><span class="ico"></span><span class="t">Reject &amp; flag for review</span><span class="rework">↩ back to Step 1</span></div></div>
+
+  <div class="row"><div class="num">5</div><div class="task"><span class="ico"></span><span class="t">Match / variance checks</span></div></div>
+
+  <div class="row"><div class="num">6</div><div class="gate">
+    <div class="gate-head"><span class="diamond"></span><span class="gate-label">Invoice amount?</span></div>
+    <div class="opt"><span class="cond">&lt; $10k</span><span class="goto">→ <b>Step 7</b> · Auto-approve</span></div>
+    <div class="opt"><span class="cond">$10k–50k</span><span class="goto">→ <b>Step 8</b> · Manager approval</span></div>
+    <div class="opt"><span class="cond">&gt; $50k</span><span class="goto">→ <b>Step 9</b> · Co-approval</span></div>
+  </div></div>
+
+  <div class="row"><div class="num">7</div><div class="task"><span class="ico"></span><span class="t">Auto-approve</span><span class="link">→ Step 10</span></div></div>
+  <div class="row"><div class="num">8</div><div class="task"><span class="ico"></span><span class="t">Manager approval</span><span class="link">→ Step 10</span></div></div>
+  <div class="row"><div class="num">9</div><div class="task"><span class="ico"></span><span class="t">Co-approval (2 approvers)</span><span class="link">→ Step 10</span></div></div>
+
+  <div class="converge">↳ all approval paths converge</div>
+
+  <div class="row"><div class="num">10</div><div class="ev"><span class="circle end"></span><span class="task" style="box-shadow:inset 3px 0 0 0 #dc2626;border-color:#e2e8f0;"><span class="t">Execute payment (ACH / wire)</span></span></div></div>
+</div>

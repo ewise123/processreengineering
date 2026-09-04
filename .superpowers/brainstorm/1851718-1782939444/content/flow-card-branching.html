@@ -1,0 +1,86 @@
+<h2>Stepper — gateways, branches &amp; rework</h2>
+<p class="subtitle">A flow is really a small graph. Below: a gateway with a Yes/No split + a rework loop-back, and a 3-way amount gateway. Two ways to render the branches — click the one you prefer. (Gateway = amber diamond; rework = "↩ back to" badge; proposed step = dashed violet NEW.)</p>
+
+<style>
+  .fc { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:12px 14px; color:#0f172a; font-size:12px; line-height:1.4; }
+  .fc-title { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#6366f1; margin-bottom:10px; }
+  .vs-step { display:flex; gap:10px; }
+  .vs-rail { display:flex; flex-direction:column; align-items:center; }
+  .vs-dot { width:22px; height:22px; border-radius:50%; background:#eef2ff; color:#4338ca; font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; border:1px solid #c7d2fe; }
+  .vs-gate { width:22px; height:22px; background:#fef3c7; border:1px solid #fcd34d; transform:rotate(45deg); display:flex; align-items:center; justify-content:center; }
+  .vs-gate span { transform:rotate(-45deg); font-size:11px; }
+  .vs-line { width:2px; flex:1; background:#c7d2fe; margin:2px 0; min-height:14px; }
+  .vs-body { padding-bottom:12px; flex:1; }
+  .vs-chip { display:inline-block; border:1px solid #c7d2fe; background:#eef2ff; border-radius:6px; padding:3px 8px; font-weight:600; color:#3730a3; }
+  .vs-chip.new { border-style:dashed; border-color:#a78bfa; background:#f5f3ff; color:#6d28d9; }
+  .vs-chip.gate { border-color:#fcd34d; background:#fffbeb; color:#92400e; }
+  .vs-lane { font-size:9.5px; color:#64748b; margin-top:3px; }
+  .rework { display:inline-block; font-size:9px; font-weight:700; background:#fee2e2; color:#b91c1c; border:1px solid #fecaca; border-radius:5px; padding:1px 6px; margin-left:6px; }
+  .tag-new { font-size:8px; font-weight:800; background:#7c3aed; color:#fff; border-radius:4px; padding:1px 4px; margin-left:6px; }
+  /* indented branch (Option A) */
+  .branch { border-left:2px dashed #cbd5e1; margin:6px 0 2px 8px; padding:2px 0 2px 12px; }
+  .cond { font-size:9.5px; font-weight:700; color:#475569; background:#f1f5f9; border-radius:5px; padding:1px 6px; margin-bottom:4px; display:inline-block; }
+  .branch .vs-chip { font-size:11px; }
+  .branch-row { margin:4px 0; }
+  /* compact option rows (Option B) */
+  .opts { margin:6px 0 2px 32px; }
+  .opt-row { display:flex; align-items:center; gap:8px; padding:3px 0; }
+  .opt-cond { font-size:9.5px; font-weight:700; color:#475569; background:#f1f5f9; border-radius:5px; padding:2px 7px; min-width:70px; text-align:center; }
+  .opt-arrow { color:#a5b4fc; }
+</style>
+
+<div class="options">
+
+  <div class="option" data-choice="indented" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Indented branches</h3>
+      <p>Each gateway's paths become indented sub-flows under it, headed by their condition. Most faithful; a rework path ends with a "↩ back to" badge instead of drawing a line upward.</p>
+      <div class="fc" style="margin-top:8px;">
+        <div class="fc-title">Corrected flow · AP intake</div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">1</div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip">Receive supplier invoice</span></div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">2</div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip new">Log into SAP ERP within 24h<span class="tag-new">NEW</span></span></div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-gate"><span>◇</span></div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip gate">Duplicate invoice detected?</span>
+          <div class="branch"><div class="cond">Yes</div><div class="branch-row"><span class="vs-chip">Reject &amp; flag for review</span><span class="rework">↩ back to Step 1</span></div></div>
+          <div class="branch"><div class="cond">No</div><div class="branch-row" style="color:#94a3b8;font-size:11px;">continues below ↓</div></div>
+        </div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">3</div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip">Match / variance checks</span></div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-gate"><span>◇</span></div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip gate">Invoice amount?</span>
+          <div class="branch"><div class="cond">&lt; $10k</div><div class="branch-row"><span class="vs-chip">Auto-approve</span></div></div>
+          <div class="branch"><div class="cond">$10k–50k</div><div class="branch-row"><span class="vs-chip">Manager approval</span></div></div>
+          <div class="branch"><div class="cond">&gt; $50k</div><div class="branch-row"><span class="vs-chip">Co-approval (2 approvers)</span></div></div>
+        </div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">4</div></div><div class="vs-body"><span class="vs-chip">Execute payment (ACH/wire)</span><div class="vs-lane">all approval paths rejoin here</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="compact" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Compact option rows</h3>
+      <p>A gateway shows its paths as tidy condition → outcome rows (no deep nesting). Denser and more uniform for many options; deep sub-flows get summarized rather than fully drawn.</p>
+      <div class="fc" style="margin-top:8px;">
+        <div class="fc-title">Corrected flow · AP intake</div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">1</div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip">Receive supplier invoice</span></div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">2</div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip new">Log into SAP ERP within 24h<span class="tag-new">NEW</span></span></div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-gate"><span>◇</span></div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip gate">Duplicate invoice detected?</span>
+          <div class="opts">
+            <div class="opt-row"><span class="opt-cond">Yes</span><span class="opt-arrow">→</span><span class="vs-chip">Reject &amp; flag</span><span class="rework">↩ Step 1</span></div>
+            <div class="opt-row"><span class="opt-cond">No</span><span class="opt-arrow">→</span><span style="color:#94a3b8;font-size:11px;">continue</span></div>
+          </div>
+        </div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">3</div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip">Match / variance checks</span></div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-gate"><span>◇</span></div><div class="vs-line"></div></div><div class="vs-body"><span class="vs-chip gate">Invoice amount?</span>
+          <div class="opts">
+            <div class="opt-row"><span class="opt-cond">&lt; $10k</span><span class="opt-arrow">→</span><span class="vs-chip">Auto-approve</span></div>
+            <div class="opt-row"><span class="opt-cond">$10k–50k</span><span class="opt-arrow">→</span><span class="vs-chip">Manager approval</span></div>
+            <div class="opt-row"><span class="opt-cond">&gt; $50k</span><span class="opt-arrow">→</span><span class="vs-chip">Co-approval</span></div>
+          </div>
+        </div></div>
+        <div class="vs-step"><div class="vs-rail"><div class="vs-dot">4</div></div><div class="vs-body"><span class="vs-chip">Execute payment (ACH/wire)</span><div class="vs-lane">all paths rejoin here</div></div></div>
+      </div>
+    </div>
+  </div>
+
+</div>

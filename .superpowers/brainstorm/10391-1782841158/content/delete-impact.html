@@ -1,0 +1,81 @@
+<h2>Deletion impact — how far should the preview go?</h2>
+<p class="subtitle">
+  A suggestion proposes <em>"Remove the <strong>Process</strong> step."</em> Process sits in the middle:
+  <strong>Submit → Process → Notify</strong>. Removing it deletes its two edges and leaves
+  <strong>Notify</strong> with nothing feeding it. How much should the preview detect and offer?
+</p>
+
+<style>
+  .sk { font: 11px/1.3 system-ui, sans-serif; }
+  .canvas { border:1px solid #e2e8f0; border-radius:10px; background:#f8fafc; padding:10px; margin-top:8px; }
+  .row { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .node { padding:6px 9px; border:1.5px solid #cbd5e1; border-radius:7px; background:#fff; font-weight:600; color:#334155; white-space:nowrap; }
+  .arrow { color:#94a3b8; font-weight:700; }
+  .struck { opacity:.45; text-decoration:line-through; border-color:#fca5a5; color:#b91c1c; }
+  .struck-arrow { color:#fca5a5; text-decoration:line-through; }
+  .orphan { border-color:#f59e0b; box-shadow:0 0 0 3px rgba(245,158,11,.18); color:#b45309; }
+  .bridge { border-style:dashed; border-color:#7c3aed; color:#7c3aed; }
+  .bridge-arrow { color:#a78bfa; font-weight:700; }
+  .gap { border:1.5px dashed #f59e0b; border-radius:7px; padding:6px 9px; background:repeating-linear-gradient(45deg,#fffbeb,#fffbeb 5px,#fef3c7 5px,#fef3c7 10px); color:#b45309; font-weight:600; }
+  .warn { margin-top:8px; font-size:9.5px; }
+  .chip { display:inline-block; padding:2px 7px; border-radius:99px; font-size:9px; font-weight:700; margin-right:5px; }
+  .chip.red { background:#fee2e2; color:#b91c1c; }
+  .chip.amber { background:#fef3c7; color:#b45309; }
+  .chip.violet { background:#ede9fe; color:#6d28d9; }
+</style>
+
+<div class="options">
+  <div class="option" data-choice="warn-only" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Show impact only — warn, don't fix</h3>
+      <p>Preview strikes through Process + its edges, and flags <strong>Notify</strong> as orphaned. A short summary lists the fallout. The user applies (or not) with eyes open; healing the gap is on them afterward.</p>
+      <div class="canvas sk">
+        <div class="row"><span class="node">Submit</span><span class="struck-arrow">→</span><span class="node struck">Process</span><span class="struck-arrow">→</span><span class="node orphan">Notify ⚠</span></div>
+        <div class="warn"><span class="chip red">1 step removed</span><span class="chip red">2 links cut</span><span class="chip amber">1 step orphaned: Notify</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="bridge" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Impact + offer to heal the gap (auto-bridge)</h3>
+      <p>Everything in A, plus a one-click <strong>"Reconnect Submit → Notify"</strong> drawn as a dashed bridge, so removing a middle step doesn't silently break the flow. Bridging is opt-in and rolls into the same Apply.</p>
+      <div class="canvas sk">
+        <div class="row"><span class="node">Submit</span><span class="struck-arrow">→</span><span class="node struck">Process</span><span class="struck-arrow">→</span><span class="node">Notify</span></div>
+        <div class="row" style="margin-top:6px"><span class="node">Submit</span><span class="bridge-arrow">⇢</span><span class="node">Notify</span><span style="font-size:9px;color:#a78bfa">proposed bridge</span></div>
+        <div class="warn"><span class="chip violet">Heal gap: reconnect Submit → Notify</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="gap-marker" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Impact + leave a gap marker (institutional memory)</h3>
+      <p>Instead of silently closing the hole, drop a visible <strong>"removed step"</strong> placeholder where Process was — a documented gap answering "why is there nothing here?" Ties to the provenance north-star (removed things are kept, with reason), but persisting a real marker likely needs backend work.</p>
+      <div class="canvas sk">
+        <div class="row"><span class="node">Submit</span><span class="arrow">→</span><span class="gap">⚠ removed: Process</span><span class="arrow">→</span><span class="node">Notify</span></div>
+        <div class="warn"><span class="chip amber">gap kept &amp; labeled</span><span style="font-size:9px;color:#94a3b8">— needs backend support to persist</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="all" onclick="toggleSelect(this)">
+    <div class="letter">D</div>
+    <div class="content">
+      <h3>All three, user chooses per deletion</h3>
+      <p>Preview always shows impact (A). Then offers a choice: <strong>bridge the gap</strong> (B) or <strong>leave a marker</strong> (C) or just delete. Richest, but the most to build — and the marker piece may have to wait for backend support.</p>
+      <div class="warn" style="margin-top:10px"><span class="chip red">impact</span><span class="chip violet">+ bridge</span><span class="chip amber">+ marker</span><span style="font-size:9px;color:#94a3b8">— scoped across this build + a later one</span></div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:14px">
+  Two things I'm weighing: (1) you've said before you want impact preview + gap-marking + replacement
+  options — so the ambition points at C/D; (2) but this build is frontend-only, and a <em>persisted</em>
+  gap marker (C) likely needs the backend / provenance work that's still a later phase. My lean:
+  <strong>B now</strong> (impact + auto-bridge, fully frontend), with the gap-marker as a documented
+  follow-up. Which way do you want to go?
+</p>

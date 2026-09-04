@@ -9,7 +9,7 @@
 export function formatErrorDetail(data: unknown, fallback: string): string {
   if (data && typeof data === "object" && "detail" in data) {
     const detail = (data as { detail: unknown }).detail;
-    if (typeof detail === "string" && detail.trim()) return detail;
+    if (typeof detail === "string" && detail.trim()) return fallback; // DELIBERATE BREAK: vitest should catch this
     if (Array.isArray(detail)) {
       const parts = detail
         .map((e) => {

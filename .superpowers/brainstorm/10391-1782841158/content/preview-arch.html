@@ -1,0 +1,66 @@
+<h2>How should the non-committal ghost preview render?</h2>
+<p class="subtitle">
+  The planner already turns a bundle into an ordered <code>MutationStep[]</code>. Today the executor
+  runs those steps against the live API. For a preview we need to show the result <strong>without
+  saving</strong>, then have <strong>Apply</strong> run the real thing and <strong>Cancel</strong>
+  drop the ghosts. Two architectures:
+</p>
+
+<style>
+  .sk { font: 11px/1.4 system-ui, sans-serif; }
+  code { background:#f1f5f9; padding:1px 4px; border-radius:4px; font-size:.92em; }
+</style>
+
+<div class="options">
+  <div class="option" data-choice="overlay" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Overlay layer — keep the real graph, paint ghosts on top</h3>
+      <p>The live canvas stays exactly as-is. The planner's steps drive a separate, purely-visual
+      overlay: ghost boxes for <code>create_node</code>, dashed ghost lines for <code>create_edge</code>,
+      strike markers on objects slated for delete/reroute, a small "→ new name" tag floating by a
+      relabel. No graph data is mutated.</p>
+      <div class="pros-cons" style="margin-top:8px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Real graph never touched — zero risk to live state</li>
+          <li>Cheap for adds/deletes/connects (the common suggest cases)</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Relabel / move-to-lane / rename-lane are awkward — you're tagging an unchanged node rather than showing it changed</li>
+          <li>Two code paths to keep in sync (overlay rendering vs. real rendering)</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="shadow" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Shadow graph — render an in-memory "after" graph, style the diff</h3>
+      <p>Apply the plan to an <em>in-memory copy</em> of the graph (no API), and render the canvas from
+      that shadow while in preview mode. Diff shadow-vs-real to style each delta: new nodes/edges ghosted,
+      relabeled nodes show the new name with a ghost ring, deletions struck through, moved nodes sit in
+      their new lane. <strong>Apply</strong> then runs the same plan for real; <strong>Cancel</strong>
+      throws the shadow away.</p>
+      <div class="pros-cons" style="margin-top:8px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Uniform — all 12 op kinds preview the same way, including relabel/move/rename</li>
+          <li>One render path; preview = "render from shadow + diff styling"</li>
+          <li>Reuses the planner's geometry decisions, so preview matches the real result</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Needs an in-memory plan-executor (a pure version of the canvas executor) + a graph differ</li>
+          <li>More upfront machinery than the overlay</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:14px">
+  My lean: <strong>B (shadow graph)</strong>. The reason is exactly your earlier point — the preview has
+  to be honest about <em>all</em> changes (a relabel or a lane-move must look changed, not just tagged),
+  and B handles every op kind through one path. It also gives us the in-memory executor we can later
+  reuse to compute deletion impact (orphans, bridges) on the same shadow. A costs less now but fights us
+  on the edit-type ops and on deletion-impact analysis.
+</p>

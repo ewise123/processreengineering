@@ -27,7 +27,7 @@ def render_process_block(
         for kind, subject in exemplars:
             lines.append(f"  - [{kind}] {subject}")
     else:
-        lines.append("This process has no claims yet.")
+        lines.append("Nothing linked so far.")   # DELIBERATE BREAK: pytest should catch this
     return "\n".join(lines)
 
 
