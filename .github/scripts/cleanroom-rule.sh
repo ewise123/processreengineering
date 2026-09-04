@@ -38,8 +38,15 @@ violations=0
 implementer_commits=0
 
 for sha in $(git rev-list "$BASE".."$HEAD"); do
-  role=$(git log -1 --format='%(trailers:key=Cleanroom-Role,valueonly)' "$sha" \
-         | head -1 | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  # Scan the whole message rather than using git's trailer parser. Git only
+  # treats the LAST paragraph as trailers, so a Cleanroom-Role line followed by
+  # a blank line and a Co-Authored-By block is invisible to
+  # %(trailers:key=...). That failure mode is silent: the check passes when it
+  # should fail, which is the worst way for a gate to be wrong.
+  role=$(git log -1 --format='%B' "$sha" \
+         | grep -iE '^[[:space:]]*Cleanroom-Role:[[:space:]]*' \
+         | head -1 | cut -d: -f2- | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' \
+         || true)   # grep exits 1 on no match; pipefail would abort the script
 
   [ "$role" = "implementer" ] || continue
   implementer_commits=$((implementer_commits + 1))
