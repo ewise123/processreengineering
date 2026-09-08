@@ -1,0 +1,49 @@
+name: Ready labels
+
+# Keeps `status:ready` accurate as work lands.
+#
+# An issue becomes ready when the blockers it declared in its body are all
+# closed, and goes back to blocked if one reopens. It never touches plain
+# backlog issues, and never clears a `status:blocked` that has no declared
+# blocker, because the reason for that block is not written anywhere this can
+# read and absence of information is not evidence.
+
+on:
+  pull_request:
+    types: [closed]
+  issues:
+    types: [closed, reopened]
+  schedule:
+    - cron: '0 7 * * 1-5'   # weekday catch-all, in case an event was missed
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Actually change labels (unchecked = dry run)'
+        type: boolean
+        default: false
+
+permissions:
+  issues: write
+
+concurrency:
+  group: ready-labels
+  cancel-in-progress: false   # label edits should not race each other
+
+jobs:
+  ready-labels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Maintain status:ready
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # Manual runs default to a dry run; everything else applies.
+          APPLY: ${{ github.event_name != 'workflow_dispatch' && 'yes' || inputs.apply && 'yes' || 'no' }}
+        run: |
+          if [ "$APPLY" = "yes" ]; then
+            ./.github/scripts/ready-labels.sh --apply
+          else
+            ./.github/scripts/ready-labels.sh
+          fi
