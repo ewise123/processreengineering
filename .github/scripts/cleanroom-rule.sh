@@ -34,6 +34,30 @@ is_test_path() {
   esac
 }
 
+# A check has to report what it examined. This one has twice reported success
+# while looking at nothing: once because git's trailer parser saw no roles, and
+# once because it was run from a directory where the commits did not exist, so
+# the range was empty. A bare "pass" cannot be told apart from a pass over an
+# empty set.
+if ! git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null; then
+  echo "::error::Cleanroom rule: base revision '$BASE' does not resolve here."
+  echo "The check examined nothing. That is a failure, not a pass."
+  exit 1
+fi
+if ! git rev-parse --verify --quiet "$HEAD^{commit}" >/dev/null; then
+  echo "::error::Cleanroom rule: head revision '$HEAD' does not resolve here."
+  echo "The check examined nothing. That is a failure, not a pass."
+  exit 1
+fi
+
+total_commits=$(git rev-list --count "$BASE".."$HEAD")
+if [ "$total_commits" -eq 0 ]; then
+  echo "::error::Cleanroom rule: no commits between $BASE and $HEAD."
+  echo "A pull request always has at least one commit, so this range is wrong."
+  echo "The check examined nothing. That is a failure, not a pass."
+  exit 1
+fi
+
 violations=0
 implementer_commits=0
 
@@ -68,8 +92,9 @@ if [ "$violations" -gt 0 ]; then
   exit 1
 fi
 
+# Always state the denominator, so a pass over an empty set is visible as one.
 if [ "$implementer_commits" -eq 0 ]; then
-  echo "Cleanroom rule: no commits marked 'implementer' in this range. Nothing to check."
+  echo "Cleanroom rule: examined ${total_commits} commit(s); none marked 'implementer'; nothing to enforce."
 else
-  echo "Cleanroom rule: ${implementer_commits} implementer commit(s) checked, no test files touched."
+  echo "Cleanroom rule: examined ${total_commits} commit(s); ${implementer_commits} marked 'implementer'; no test files touched."
 fi
