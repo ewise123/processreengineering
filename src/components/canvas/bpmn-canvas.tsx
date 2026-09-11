@@ -274,7 +274,7 @@ function BpmnCanvas({
 
   const { record, undo, redo, canUndo, canRedo } = useUndoStack();
   const clipboard = useClipboard();
-  const reasonPrompt = useReasonPrompt();
+  const reasonPrompt = useReasonPrompt(versionId);
   const { promptReason } = reasonPrompt;
 
   const selectOnly = useCallback((id: string) => setSelectedIds(new Set([id])), []);

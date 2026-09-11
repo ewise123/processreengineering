@@ -43,3 +43,64 @@ export function resolveReasonPrompt({ note, destructive }: ReasonContext): Reaso
   if (destructive) return { mode: "prompt", seed: trimmed };
   return { mode: "auto", reason: trimmed };
 }
+
+/** The subset of the Web Storage API we use; injected so the store is
+ * testable in the node test env and SSR-safe. Mirrors `chat-session.ts`. */
+export interface StorageLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+const keyFor = (versionId: string) => `poet-working-note:${versionId}`;
+
+export interface WorkingNoteStore {
+  load(versionId: string): string;
+  save(versionId: string, note: string): void;
+}
+
+/**
+ * Keeps the working note alive across a refresh and across navigating away
+ * from the canvas and back, which is the difference between "set it once this
+ * sitting" and "set it again every time I glance at a source document".
+ *
+ * Keyed by version: two maps open in one session must not stamp each other's
+ * reasons. Tab-scoped (sessionStorage) rather than permanent — a note left set
+ * from last Monday silently explaining today's edits would be worse than being
+ * asked again.
+ *
+ * Every call is guarded: private browsing and blocked site data make storage
+ * throw. Losing the note is a nuisance; taking the canvas down with it is not.
+ */
+export function makeWorkingNoteStore(storage: StorageLike): WorkingNoteStore {
+  return {
+    load(versionId) {
+      try {
+        return storage.getItem(keyFor(versionId)) ?? "";
+      } catch {
+        return "";
+      }
+    },
+    save(versionId, note) {
+      try {
+        if (note.trim() === "") storage.removeItem(keyFor(versionId));
+        else storage.setItem(keyFor(versionId), note);
+      } catch {
+        // Storage unavailable — the note stays in memory for this page view.
+      }
+    },
+  };
+}
+
+/** The sessionStorage-backed store, or a no-op during SSR / when storage is
+ * unavailable. */
+export function browserWorkingNoteStore(): WorkingNoteStore {
+  if (typeof window === "undefined" || !window.sessionStorage) {
+    return makeWorkingNoteStore({
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+    });
+  }
+  return makeWorkingNoteStore(window.sessionStorage);
+}

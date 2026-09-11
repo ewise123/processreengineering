@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveReasonPrompt } from "./working-note";
+import { makeWorkingNoteStore, resolveReasonPrompt } from "./working-note";
 
 describe("resolveReasonPrompt", () => {
   describe("with no working note set", () => {
@@ -51,5 +51,69 @@ describe("resolveReasonPrompt", () => {
         reason: note,
       });
     });
+  });
+});
+
+describe("makeWorkingNoteStore", () => {
+  function fakeStorage(seed: Record<string, string> = {}) {
+    const data = { ...seed };
+    return {
+      data,
+      getItem: (k: string) => (k in data ? data[k] : null),
+      setItem: (k: string, v: string) => {
+        data[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete data[k];
+      },
+    };
+  }
+
+  const V1 = "01a09136-0000-0000-0000-000000000001";
+  const V2 = "01a09136-0000-0000-0000-000000000002";
+
+  it("returns an empty note when nothing has been stored", () => {
+    expect(makeWorkingNoteStore(fakeStorage()).load(V1)).toBe("");
+  });
+
+  it("round-trips a note", () => {
+    const store = makeWorkingNoteStore(fakeStorage());
+    store.save(V1, "Redraw O2C after the Maria Chen interview");
+    expect(store.load(V1)).toBe("Redraw O2C after the Maria Chen interview");
+  });
+
+  it("keeps each map version's note separate", () => {
+    // Two maps open in one session must not stamp each other's reasons.
+    const store = makeWorkingNoteStore(fakeStorage());
+    store.save(V1, "Redrawing order-to-cash");
+    expect(store.load(V2)).toBe("");
+  });
+
+  it("forgets the note when it is cleared", () => {
+    const storage = fakeStorage();
+    const store = makeWorkingNoteStore(storage);
+    store.save(V1, "Redrawing order-to-cash");
+    store.save(V1, "");
+    expect(store.load(V1)).toBe("");
+    expect(Object.keys(storage.data)).toHaveLength(0);
+  });
+
+  it("survives storage being unavailable rather than crashing the canvas", () => {
+    // Private browsing and blocked site data make these throw. Losing the note
+    // is a nuisance; taking the canvas down with it is not acceptable.
+    const throwing = {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+      removeItem: () => {
+        throw new Error("blocked");
+      },
+    };
+    const store = makeWorkingNoteStore(throwing);
+    expect(store.load(V1)).toBe("");
+    expect(() => store.save(V1, "anything")).not.toThrow();
   });
 });
