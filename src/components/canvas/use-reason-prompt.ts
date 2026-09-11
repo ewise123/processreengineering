@@ -2,6 +2,8 @@
 
 import { useCallback, useRef, useState } from "react";
 
+import { resolveReasonPrompt } from "./working-note";
+
 /**
  * Backing state for a single reusable "why did you make this change?" prompt.
  *
@@ -44,6 +46,11 @@ export interface ReasonPromptState {
   submit: (reason: string) => void;
   /** Dismiss without a reason; aborts the pending edit. */
   cancel: () => void;
+  /** The working note: one sentence covering this sitting. Blank = ask every
+   * time. See `./working-note`. */
+  note: string;
+  /** Update the working note. */
+  setNote: (next: string) => void;
   /** Open the prompt and await the result. */
   promptReason: (
     actionLabel: string,
@@ -57,9 +64,21 @@ export function useReasonPrompt(): ReasonPromptState {
   const [destructive, setDestructive] = useState(false);
   const [description, setDescription] = useState<string | null>(null);
   const [value, setValue] = useState("");
+  const [note, setNoteState] = useState("");
   // Holds the resolver for the in-flight promptReason() promise so submit /
   // cancel can settle it. Only one prompt is ever open at a time.
   const resolverRef = useRef<((value: string | null) => void) | null>(null);
+
+  // The ref shadows the note state so `promptReason` can read the latest value
+  // while keeping a stable identity — it is a dependency of a dozen memoised
+  // canvas callbacks, and rebuilding them on every keystroke in the note field
+  // would be a needless re-render storm. Written in the setter (an event
+  // handler) rather than during render.
+  const noteRef = useRef("");
+  const setNote = useCallback((next: string) => {
+    noteRef.current = next;
+    setNoteState(next);
+  }, []);
 
   const settle = useCallback((value: string | null) => {
     const resolve = resolverRef.current;
@@ -81,6 +100,16 @@ export function useReasonPrompt(): ReasonPromptState {
 
   const promptReason = useCallback(
     (label: string, options?: ReasonPromptOptions) => {
+      const resolution = resolveReasonPrompt({
+        note: noteRef.current,
+        destructive: options?.destructive ?? false,
+      });
+      // A working note answers for every ordinary edit, so the dialog never
+      // opens. Resolving without touching the open-prompt state matters: a
+      // delete dialog may be open, and it owns a different pending action.
+      if (resolution.mode === "auto") {
+        return Promise.resolve<string | null>(resolution.reason);
+      }
       // If a prompt is somehow already open, cancel it before opening the next.
       if (resolverRef.current) {
         const prev = resolverRef.current;
@@ -90,12 +119,12 @@ export function useReasonPrompt(): ReasonPromptState {
       setActionLabel(label);
       setDestructive(options?.destructive ?? false);
       setDescription(options?.description ?? null);
-      // Every prompt opens empty. Clearing here rather than on close covers the
-      // supersede path above too: text typed for an abandoned prompt must never
-      // be sitting in the box for the next one, which may be a destructive
-      // prompt whose Delete button would submit a reason meant for some other
-      // action.
-      setValue("");
+      // Every prompt opens from its own seed — the working note, or empty.
+      // Assigning here rather than clearing on close covers the supersede path
+      // above too: text typed for an abandoned prompt must never be sitting in
+      // the box for the next one, which may be a destructive prompt whose
+      // Delete button would submit a reason meant for some other action.
+      setValue(resolution.seed);
       setOpen(true);
       return new Promise<string | null>((resolve) => {
         resolverRef.current = resolve;
@@ -113,6 +142,8 @@ export function useReasonPrompt(): ReasonPromptState {
     setValue,
     submit,
     cancel,
+    note,
+    setNote,
     promptReason,
   };
 }

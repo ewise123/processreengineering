@@ -2767,6 +2767,8 @@ function BpmnCanvas({
         canRedo={canRedo}
         onUndo={() => void undo()}
         onRedo={() => void redo()}
+        note={reasonPrompt.note}
+        onNoteChange={reasonPrompt.setNote}
       />
 
       {contextMenu && (
