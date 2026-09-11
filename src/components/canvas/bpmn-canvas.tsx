@@ -274,7 +274,7 @@ function BpmnCanvas({
 
   const { record, undo, redo, canUndo, canRedo } = useUndoStack();
   const clipboard = useClipboard();
-  const reasonPrompt = useReasonPrompt();
+  const reasonPrompt = useReasonPrompt(versionId);
   const { promptReason } = reasonPrompt;
 
   const selectOnly = useCallback((id: string) => setSelectedIds(new Set([id])), []);
@@ -2767,6 +2767,8 @@ function BpmnCanvas({
         canRedo={canRedo}
         onUndo={() => void undo()}
         onRedo={() => void redo()}
+        note={reasonPrompt.note}
+        onNoteChange={reasonPrompt.setNote}
       />
 
       {contextMenu && (
