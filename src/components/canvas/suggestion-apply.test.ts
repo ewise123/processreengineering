@@ -458,3 +458,44 @@ describe("planBundle reason threading", () => {
     }
   });
 });
+
+describe("planBundle reasons on delete steps", () => {
+  const RATIONALE = "The SOP shows this path was retired.";
+
+  /** One suggestion carrying a real rationale (the `sg` helper leaves it ""). */
+  const withRationale = (
+    opOverrides: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }
+  ): ChatSuggestion => ({ ...sg("a", opOverrides), rationale: RATIONALE });
+
+  const stepsFor = (opOverrides: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }) =>
+    planBundle(bundleSuggestions([withRationale(opOverrides)])[0], idx()).steps;
+
+  it("gives delete_node the owning suggestion's rationale", () => {
+    expect(stepsFor({ kind: "remove_node", node_ref: "N1" })[0]).toMatchObject({
+      kind: "delete_node",
+      reason: RATIONALE,
+    });
+  });
+
+  it("gives delete_edge, reroute_edge and delete_lane a reason too", () => {
+    expect(stepsFor({ kind: "remove_edge", edge_ref: "E1" })[0]).toMatchObject({
+      kind: "delete_edge",
+      reason: RATIONALE,
+    });
+    expect(
+      stepsFor({ kind: "reroute_edge", edge_ref: "E1", from_ref: "N1", to_ref: "N2" })[0]
+    ).toMatchObject({ kind: "reroute_edge", reason: RATIONALE });
+    expect(stepsFor({ kind: "remove_lane", lane_ref: "L1" })[0]).toMatchObject({
+      kind: "delete_lane",
+      reason: RATIONALE,
+    });
+  });
+
+  it("falls back to a title-derived reason when there is no rationale", () => {
+    // `sg` sets title = id, so this reads "Applied AI suggestion: a".
+    const bundle = bundleSuggestions([sg("a", { kind: "remove_node", node_ref: "N1" })])[0];
+    expect(planBundle(bundle, idx()).steps[0]).toMatchObject({
+      reason: "Applied AI suggestion: a",
+    });
+  });
+});

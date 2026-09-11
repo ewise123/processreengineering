@@ -250,6 +250,14 @@ export interface EdgeCreate {
   ai_applied?: boolean;
 }
 
+/** Body for the node / edge / lane delete endpoints. `reason` is required —
+ * the backend 422s on a blank one — even though the schema permits null so the
+ * server can return a readable error rather than a validation envelope. */
+export type DeleteRequest = {
+  reason: string;
+  ai_applied?: boolean;
+};
+
 export interface EdgeUpdate {
   label?: string | null;
   bend_x?: number | null;

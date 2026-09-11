@@ -4,7 +4,7 @@ import re
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -51,6 +51,7 @@ from app.schemas.process_map import (
     ClaimSummary,
     ClaimWithCitations,
     ConsistencyFinding,
+    DeleteRequest,
     EdgeCreate,
     EdgeUpdate,
     LaneCreate,
@@ -1133,16 +1134,34 @@ def update_edge(
     return edge
 
 
+def _require_delete_reason(
+    payload: DeleteRequest | None, message: str
+) -> tuple[str, bool]:
+    """Return the trimmed delete reason and the payload's `ai_applied` flag,
+    raising 422 with `message` if the reason is missing or blank.
+
+    Call this before any session mutation — it does not roll back.
+    """
+    reason = (payload.reason or "").strip() if payload else ""
+    if not reason:
+        raise HTTPException(status_code=422, detail=message)
+    return reason, payload.ai_applied
+
+
 @router.delete("/edges/{edge_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_edge(
     project: Annotated[Project, Depends(get_project_or_404)],
     edge_id: UUID,
     db: Annotated[Session, Depends(get_db)],
+    payload: Annotated[DeleteRequest | None, Body()] = None,
 ) -> None:
     edge = db.get(ProcessEdge, edge_id)
     if edge is None:
         raise HTTPException(status_code=404, detail="Edge not found")
     _check_edge_in_project(edge, project.id, db)
+    reason, ai_applied = _require_delete_reason(
+        payload, "A reason is required to delete a connection."
+    )
     record_change(
         db,
         target_type=ChangeTargetType.EDGE.value,
@@ -1150,13 +1169,14 @@ def delete_edge(
         model_id=model_id_for_version(db, edge.version_id),
         version_id=edge.version_id,
         kind=ChangeKind.DELETE.value,
-        reason="Deleted",
+        reason=reason,
         before={
             "source_node_id": str(edge.source_node_id),
             "target_node_id": str(edge.target_node_id),
             "label": edge.label,
         },
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if ai_applied else ChangeActorKind.USER.value,
     )
     db.delete(edge)
     db.commit()
@@ -1167,6 +1187,7 @@ def delete_node(
     project: Annotated[Project, Depends(get_project_or_404)],
     node_id: UUID,
     db: Annotated[Session, Depends(get_db)],
+    payload: Annotated[DeleteRequest | None, Body()] = None,
 ) -> None:
     """Delete a node. FK cascades drop the connected edges and node-claim
     links automatically."""
@@ -1174,6 +1195,9 @@ def delete_node(
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     _check_node_in_project(node, project.id, db)
+    reason, ai_applied = _require_delete_reason(
+        payload, "A reason is required to delete a step."
+    )
     version_id = node.version_id
     record_change(
         db,
@@ -1182,9 +1206,10 @@ def delete_node(
         model_id=model_id_for_version(db, node.version_id),
         version_id=node.version_id,
         kind=ChangeKind.DELETE.value,
-        reason="Deleted",
+        reason=reason,
         before={"name": node.name, "type": node.type},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if ai_applied else ChangeActorKind.USER.value,
     )
     db.execute(
         delete(Review).where(
@@ -1605,7 +1630,7 @@ def delete_lane(
     project: Annotated[Project, Depends(get_project_or_404)],
     lane_id: UUID,
     db: Annotated[Session, Depends(get_db)],
-    ai_applied: bool = False,
+    payload: Annotated[DeleteRequest | None, Body()] = None,
 ) -> None:
     lane = db.get(ProcessLane, lane_id)
     if lane is None:
@@ -1627,6 +1652,14 @@ def delete_lane(
             status_code=422, detail="Cannot delete the last remaining lane"
         )
 
+    # Structural impossibility first, provenance second: there's no point
+    # demanding a justification for a delete that can never succeed. The gate
+    # also has to precede the bulk reassignment below, which nothing here
+    # would roll back.
+    reason, ai_applied = _require_delete_reason(
+        payload, "A reason is required to delete a lane."
+    )
+
     fallback = others[0]
     # Reassign nodes to a remaining lane so they don't end up orphaned.
     db.execute(
@@ -1641,7 +1674,7 @@ def delete_lane(
         model_id=model_id_for_version(db, lane.version_id),
         version_id=lane.version_id,
         kind=ChangeKind.DELETE.value,
-        reason="Removed by AI suggestion" if ai_applied else "Deleted",
+        reason=reason,
         before={"name": lane.name},
         source=ChangeSource.CHAT.value if ai_applied else ChangeSource.MANUAL.value,
         actor_kind=ChangeActorKind.AI.value if ai_applied else ChangeActorKind.USER.value,

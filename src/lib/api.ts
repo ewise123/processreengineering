@@ -12,6 +12,7 @@ import type {
   ChangeLogPage,
   DecomposeRequest,
   DecomposeResult,
+  DeleteRequest,
   ChatRequest,
   ChatResponse,
   ChatSuggestRequest,
@@ -296,9 +297,10 @@ export const api = {
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/review/request`,
       { method: "POST" }
     ),
-  deleteNode: (projectId: UUID, nodeId: UUID) =>
+  deleteNode: (projectId: UUID, nodeId: UUID, body: DeleteRequest) =>
     request<void>(`/api/v2/projects/${projectId}/nodes/${nodeId}`, {
       method: "DELETE",
+      json: body,
     }),
   createEdge: (
     projectId: UUID,
@@ -315,9 +317,10 @@ export const api = {
       method: "PATCH",
       json: body,
     }),
-  deleteEdge: (projectId: UUID, edgeId: UUID) =>
+  deleteEdge: (projectId: UUID, edgeId: UUID, body: DeleteRequest) =>
     request<void>(`/api/v2/projects/${projectId}/edges/${edgeId}`, {
       method: "DELETE",
+      json: body,
     }),
   createNode: (
     projectId: UUID,
@@ -344,11 +347,11 @@ export const api = {
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/lanes`,
       { method: "POST", json: body }
     ),
-  deleteLane: (projectId: UUID, laneId: UUID, aiApplied = false) =>
-    request<void>(
-      `/api/v2/projects/${projectId}/lanes/${laneId}${aiApplied ? "?ai_applied=true" : ""}`,
-      { method: "DELETE" }
-    ),
+  deleteLane: (projectId: UUID, laneId: UUID, body: DeleteRequest) =>
+    request<void>(`/api/v2/projects/${projectId}/lanes/${laneId}`, {
+      method: "DELETE",
+      json: body,
+    }),
   getNodeCitations: (projectId: UUID, nodeId: UUID) =>
     request<NodeCitations>(
       `/api/v2/projects/${projectId}/nodes/${nodeId}/citations`

@@ -135,7 +135,11 @@ def test_approved_version_deapproves_on_change_request(client, db):
 def test_deleted_node_review_is_removed(client, db):
     proj, model, version, nodes = _seed(db)
     client.patch(f"/api/v2/projects/{proj.id}/nodes/{nodes[0].id}/review", json={"status": "approved"})
-    d = client.delete(f"/api/v2/projects/{proj.id}/nodes/{nodes[0].id}")
+    d = client.request(
+        "DELETE",
+        f"/api/v2/projects/{proj.id}/nodes/{nodes[0].id}",
+        json={"reason": "Removed during review"},
+    )
     assert d.status_code == 204, d.text
     body = client.get(_state_url(proj, model, version)).json()
     assert body["counts"]["total"] == 1
@@ -157,7 +161,11 @@ def test_deleting_last_pending_node_completes_signoff(client, db):
     client.post(f"{_state_url(proj, model, version)}/request")
     client.patch(f"/api/v2/projects/{proj.id}/nodes/{nodes[0].id}/review", json={"status": "approved"})
     assert client.get(_state_url(proj, model, version)).json()["version_status"] == "review"
-    d = client.delete(f"/api/v2/projects/{proj.id}/nodes/{nodes[1].id}")
+    d = client.request(
+        "DELETE",
+        f"/api/v2/projects/{proj.id}/nodes/{nodes[1].id}",
+        json={"reason": "Removed during review"},
+    )
     assert d.status_code == 204, d.text
     body = client.get(_state_url(proj, model, version)).json()
     assert body["counts"] == {"approved": 1, "changes_requested": 0, "pending": 0, "total": 1}
