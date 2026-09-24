@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { opToSteps, isDeleteOp, bundleSuggestions, indexGraph, planBundle } from "./suggestion-apply";
+import { opToSteps, isDeleteOp, bundleSuggestions, indexGraph, planBundle, reasonForSuggestion } from "./suggestion-apply";
 import type { SuggestionOp, ChatSuggestion, ProcessGraph } from "@/lib/types";
 import type { GraphIndex } from "./suggestion-apply";
 
@@ -111,6 +111,23 @@ describe("opToSteps", () => {
   });
 });
 
+describe("new op kinds → steps", () => {
+  it("change_node_type → update_node with nodeType", () => {
+    expect(opToSteps({ kind: "change_node_type", node_ref: "N1", node_type: "gateway_exclusive" }))
+      .toEqual([{ kind: "update_node", nodeRef: "N1", nodeType: "gateway_exclusive" }]);
+  });
+  it("remove_lane → delete_lane", () => {
+    expect(opToSteps({ kind: "remove_lane", lane_ref: "L1" })).toEqual([{ kind: "delete_lane", laneRef: "L1" }]);
+  });
+  it("set_edge_condition → update_edge_condition", () => {
+    expect(opToSteps({ kind: "set_edge_condition", edge_ref: "E1", condition_text: "amt > 10000" }))
+      .toEqual([{ kind: "update_edge_condition", edgeRef: "E1", conditionText: "amt > 10000" }]);
+  });
+  it("remove_lane is a delete op", () => {
+    expect(isDeleteOp("remove_lane")).toBe(true);
+  });
+});
+
 const sg = (id: string, opOverrides: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }, group?: string): ChatSuggestion => ({
   id,
   group: group ?? null,
@@ -204,7 +221,7 @@ describe("planBundle", () => {
     const bundle = bundleSuggestions([sg("a", { kind: "relabel_node", node_ref: "GONE", new_label: "X" })])[0];
     const plan = planBundle(bundle, idx());
     expect(plan.applyable).toBe(false);
-    expect(plan.reason).toMatch(/no longer/i);
+    expect(plan.reason).toMatch(/not on the current map/i);
   });
   it("marks a bundle unapplyable when a consumed tmp is never produced", () => {
     // "ghost" is neither produced in-plan nor a real graph ref, so it trips the
@@ -212,13 +229,50 @@ describe("planBundle", () => {
     const bundle = bundleSuggestions([sg("a", { kind: "add_edge", from_ref: "N1", to_ref: "ghost" })])[0];
     const plan = planBundle(bundle, idx());
     expect(plan.applyable).toBe(false);
-    expect(plan.reason).toMatch(/no longer/i);
+    expect(plan.reason).toMatch(/not on the current map/i);
   });
   it("classifies a delete bundle as non-undoable but applyable", () => {
     const bundle = bundleSuggestions([sg("a", { kind: "remove_edge", edge_ref: "E1" })])[0];
     const plan = planBundle(bundle, idx());
     expect(plan.applyable).toBe(true);
     expect(plan.undoable).toBe(false);
+  });
+  it("infers nearNodeRef from a same-plan incoming edge when add_node omits near_node_ref", () => {
+    // Model emits add_node with no near_node_ref, then connects it via a
+    // separate add_edge from N1 -> t1. The placement anchor should come from
+    // the edge's fromRef (N1), not fall back to the far-right-of-lane default.
+    const bundle = bundleSuggestions([
+      sg("a", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "New" }),
+      sg("b", { kind: "add_edge", from_ref: "N1", to_ref: "t1" }),
+    ])[0];
+    const plan = planBundle(bundle, idx());
+    const createStep = plan.steps.find((s) => s.kind === "create_node");
+    if (!createStep || createStep.kind !== "create_node") throw new Error("Expected a create_node step");
+    expect(createStep.nearNodeRef).toBe("N1");
+  });
+  it("keeps an explicit near_node_ref on add_node instead of overwriting it from an incoming edge", () => {
+    const bundle = bundleSuggestions([
+      sg("a", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "New", near_node_ref: "N2" }),
+      sg("b", { kind: "add_edge", from_ref: "N1", to_ref: "t1" }),
+    ])[0];
+    const plan = planBundle(bundle, idx());
+    const createStep = plan.steps.find((s) => s.kind === "create_node");
+    if (!createStep || createStep.kind !== "create_node") throw new Error("Expected a create_node step");
+    expect(createStep.nearNodeRef).toBe("N2");
+  });
+  it("leaves nearNodeRef null when the only incoming edge's fromRef is itself an unresolved tmp", () => {
+    // t0 (another new node) -> t1 (the node under test). t0 isn't a real graph
+    // node, so there's no resolved position to anchor against yet.
+    const bundle = bundleSuggestions([
+      sg("a", { kind: "add_node", temp_id: "t0", lane_ref: "L1", node_type: "task", new_label: "First" }),
+      sg("b", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "Second" }),
+      sg("c", { kind: "add_edge", from_ref: "t0", to_ref: "t1" }),
+    ])[0];
+    const plan = planBundle(bundle, idx());
+    const createSteps = plan.steps.filter((s) => s.kind === "create_node");
+    const second = createSteps.find((s) => s.kind === "create_node" && s.tempId === "t1");
+    if (!second || second.kind !== "create_node") throw new Error("Expected the t1 create_node step");
+    expect(second.nearNodeRef).toBeNull();
   });
   it("resolves a decompose sub-step role to a lane id when the role matches an existing lane name", () => {
     const bundle = bundleSuggestions([
@@ -249,5 +303,199 @@ describe("planBundle", () => {
     const createStep = plan.steps.find((s) => s.kind === "create_node");
     if (!createStep || createStep.kind !== "create_node") throw new Error("Expected a create_node step");
     expect(createStep.laneRef).toBeNull();
+  });
+});
+
+// A suggestion with a custom title + rationale (the `sg` helper hardcodes both).
+const sgWith = (
+  id: string,
+  opOverrides: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] },
+  extra: { title?: string; rationale?: string }
+): ChatSuggestion => ({
+  id,
+  group: null,
+  title: extra.title ?? id,
+  op: op(opOverrides),
+  affected_refs: [],
+  rationale: extra.rationale ?? "",
+  cited_claim_ids: [],
+});
+
+describe("reasonForSuggestion", () => {
+  it("uses the rationale, stripping [[kind:uuid]] mentions to readable text", () => {
+    const s = sgWith("a", { kind: "relabel_node", node_ref: "N1", new_label: "X" }, {
+      rationale: "Per [[claim:11111111-1111-1111-1111-111111111111]], rename [[node:22222222-2222-2222-2222-222222222222]].",
+    });
+    const reason = reasonForSuggestion(s);
+    expect(reason).not.toMatch(/\[\[/); // no raw mention markup survives
+    expect(reason).toContain("a cited source");
+    expect(reason).toContain("this step");
+  });
+
+  it("falls back to 'Applied AI suggestion: <title>' (title also stripped) when rationale is empty", () => {
+    const s = sgWith("a", { kind: "relabel_node", node_ref: "N1", new_label: "X" }, {
+      title: "Rename [[node:22222222-2222-2222-2222-222222222222]]",
+      rationale: "",
+    });
+    const reason = reasonForSuggestion(s);
+    expect(reason).toMatch(/^Applied AI suggestion: Rename this step$/);
+  });
+
+  it("caps the stored reason at the backend's 2000-char max_length", () => {
+    const s = sgWith("a", { kind: "relabel_node", node_ref: "N1", new_label: "X" }, {
+      rationale: "x".repeat(5000),
+    });
+    const reason = reasonForSuggestion(s);
+    expect(reason).toHaveLength(2000);
+    expect(reason.endsWith("…")).toBe(true);
+    expect(reason.slice(0, -1)).toBe("x".repeat(1999));
+  });
+});
+
+describe("planBundle reason threading", () => {
+  it("attaches the suggestion's reason to update_node steps", () => {
+    const bundle = bundleSuggestions([
+      sgWith("a", { kind: "relabel_node", node_ref: "N1", new_label: "Receive PO" }, {
+        rationale: "Matches the source wording.",
+      }),
+    ])[0];
+    const step = planBundle(bundle, idx()).steps[0];
+    if (step.kind !== "update_node") throw new Error("expected update_node step");
+    expect(step.reason).toBe("Matches the source wording.");
+  });
+
+  it("attaches the reason to update_edge_label and update_lane steps", () => {
+    const edgePlan = planBundle(
+      bundleSuggestions([
+        sgWith("e", { kind: "relabel_edge", edge_ref: "E1", new_label: "if approved" }, { rationale: "Branch is conditional." }),
+      ])[0],
+      idx()
+    );
+    const edgeStep = edgePlan.steps[0];
+    if (edgeStep.kind !== "update_edge_label") throw new Error("expected update_edge_label step");
+    expect(edgeStep.reason).toBe("Branch is conditional.");
+
+    const lanePlan = planBundle(
+      bundleSuggestions([
+        sgWith("l", { kind: "rename_lane", lane_ref: "L1", name: "Operations" }, { rationale: "Owner is Ops." }),
+      ])[0],
+      idx()
+    );
+    const laneStep = lanePlan.steps[0];
+    if (laneStep.kind !== "update_lane") throw new Error("expected update_lane step");
+    expect(laneStep.reason).toBe("Owner is Ops.");
+  });
+
+  it("gives each suggestion in a grouped bundle its own reason", () => {
+    // Two suggestions of different kinds, grouped, with distinct rationales — a
+    // regression that reused the first suggestion's reason for the whole bundle
+    // would be caught here.
+    const a = { ...sgWith("a", { kind: "relabel_node", node_ref: "N1", new_label: "Receive PO" }, { rationale: "Reason A." }), group: "g1" };
+    const b = { ...sgWith("b", { kind: "relabel_edge", edge_ref: "E1", new_label: "if approved" }, { rationale: "Reason B." }), group: "g1" };
+    const bundle = bundleSuggestions([a, b])[0];
+    expect(bundle.suggestions).toHaveLength(2);
+    const plan = planBundle(bundle, idx());
+    const nodeStep = plan.steps.find((s) => s.kind === "update_node");
+    const edgeStep = plan.steps.find((s) => s.kind === "update_edge_label");
+    if (nodeStep?.kind !== "update_node" || edgeStep?.kind !== "update_edge_label") {
+      throw new Error("expected one update_node and one update_edge_label step");
+    }
+    expect(nodeStep.reason).toBe("Reason A.");
+    expect(edgeStep.reason).toBe("Reason B.");
+  });
+
+  it("attaches the suggestion's reason to a create_node step (add_node)", () => {
+    const bundle = bundleSuggestions([
+      sgWith("a", { kind: "add_node", temp_id: "t1", lane_ref: "L1", node_type: "task", new_label: "New" }, {
+        rationale: "Suggested by chat.",
+      }),
+    ])[0];
+    const step = planBundle(bundle, idx()).steps[0];
+    if (step.kind !== "create_node") throw new Error("expected create_node step");
+    expect(step.reason).toBe("Suggested by chat.");
+  });
+
+  it("attaches the suggestion's reason to a create_edge step (add_edge)", () => {
+    const bundle = bundleSuggestions([
+      sgWith("a", { kind: "add_edge", from_ref: "N1", to_ref: "N2" }, {
+        rationale: "Connects the two steps.",
+      }),
+    ])[0];
+    const step = planBundle(bundle, idx()).steps[0];
+    if (step.kind !== "create_edge") throw new Error("expected create_edge step");
+    expect(step.reason).toBe("Connects the two steps.");
+  });
+
+  it("attaches the suggestion's reason to a create_lane step (add_lane)", () => {
+    const bundle = bundleSuggestions([
+      sgWith("a", { kind: "add_lane", temp_id: "tL1", name: "Finance" }, {
+        rationale: "New owning team.",
+      }),
+    ])[0];
+    const step = planBundle(bundle, idx()).steps[0];
+    if (step.kind !== "create_lane") throw new Error("expected create_lane step");
+    expect(step.reason).toBe("New owning team.");
+  });
+
+  it("propagates the reason to every create_node/create_edge step generated by decompose", () => {
+    const bundle = bundleSuggestions([
+      sgWith("a", {
+        kind: "decompose",
+        node_ref: "N1",
+        sub_steps: [
+          { proposed_name: "A", proposed_type: "task", role: null, edge_label: "start" },
+          { proposed_name: "B", proposed_type: "task", role: null, edge_label: null },
+        ],
+      }, { rationale: "Breaking this step down." }),
+    ])[0];
+    const steps = planBundle(bundle, idx()).steps;
+    expect(steps).toHaveLength(4);
+    for (const s of steps) {
+      if (s.kind !== "create_node" && s.kind !== "create_edge") {
+        throw new Error("expected only create_node/create_edge steps from decompose");
+      }
+      expect(s.reason).toBe("Breaking this step down.");
+    }
+  });
+});
+
+describe("planBundle reasons on delete steps", () => {
+  const RATIONALE = "The SOP shows this path was retired.";
+
+  /** One suggestion carrying a real rationale (the `sg` helper leaves it ""). */
+  const withRationale = (
+    opOverrides: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }
+  ): ChatSuggestion => ({ ...sg("a", opOverrides), rationale: RATIONALE });
+
+  const stepsFor = (opOverrides: Partial<SuggestionOp> & { kind: SuggestionOp["kind"] }) =>
+    planBundle(bundleSuggestions([withRationale(opOverrides)])[0], idx()).steps;
+
+  it("gives delete_node the owning suggestion's rationale", () => {
+    expect(stepsFor({ kind: "remove_node", node_ref: "N1" })[0]).toMatchObject({
+      kind: "delete_node",
+      reason: RATIONALE,
+    });
+  });
+
+  it("gives delete_edge, reroute_edge and delete_lane a reason too", () => {
+    expect(stepsFor({ kind: "remove_edge", edge_ref: "E1" })[0]).toMatchObject({
+      kind: "delete_edge",
+      reason: RATIONALE,
+    });
+    expect(
+      stepsFor({ kind: "reroute_edge", edge_ref: "E1", from_ref: "N1", to_ref: "N2" })[0]
+    ).toMatchObject({ kind: "reroute_edge", reason: RATIONALE });
+    expect(stepsFor({ kind: "remove_lane", lane_ref: "L1" })[0]).toMatchObject({
+      kind: "delete_lane",
+      reason: RATIONALE,
+    });
+  });
+
+  it("falls back to a title-derived reason when there is no rationale", () => {
+    // `sg` sets title = id, so this reads "Applied AI suggestion: a".
+    const bundle = bundleSuggestions([sg("a", { kind: "remove_node", node_ref: "N1" })])[0];
+    expect(planBundle(bundle, idx()).steps[0]).toMatchObject({
+      reason: "Applied AI suggestion: a",
+    });
   });
 });

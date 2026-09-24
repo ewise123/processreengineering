@@ -20,6 +20,7 @@ from app.models.analysis import Analysis, Output
 from app.models.workflow import Review, ReviewComment
 from app.models.audit import GenerationJob
 from app.models.change_event import ChangeEvent
+from app.models.agent_run import AgentRun
 
 __all__ = [
     "Organization",
@@ -49,4 +50,5 @@ __all__ = [
     "ReviewComment",
     "GenerationJob",
     "ChangeEvent",
+    "AgentRun",
 ]

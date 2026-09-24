@@ -17,7 +17,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-TEST_URL = "postgresql+psycopg://poet:poet@localhost:5433/poet_test"
+TEST_URL = f"postgresql+psycopg://poet:poet@localhost:5433/{os.getenv('POET_TEST_DB', 'poet_test')}"
 
 
 def _alembic(target: str) -> None:

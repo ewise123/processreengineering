@@ -40,6 +40,9 @@ class OpKind(StrEnum):
     ADD_LANE = "add_lane"
     RENAME_LANE = "rename_lane"
     DECOMPOSE = "decompose"
+    CHANGE_NODE_TYPE = "change_node_type"
+    REMOVE_LANE = "remove_lane"
+    SET_EDGE_CONDITION = "set_edge_condition"
 
 
 # Per-kind required op fields. reroute_edge needs edge_ref plus at least one of
@@ -57,6 +60,9 @@ _REQUIRED_BY_KIND: dict[OpKind, tuple[str, ...]] = {
     OpKind.ADD_LANE: ("temp_id", "name"),
     OpKind.RENAME_LANE: ("lane_ref", "name"),
     OpKind.DECOMPOSE: ("node_ref", "sub_steps"),
+    OpKind.CHANGE_NODE_TYPE: ("node_ref", "node_type"),
+    OpKind.REMOVE_LANE: ("lane_ref",),
+    OpKind.SET_EDGE_CONDITION: ("edge_ref", "condition_text"),
 }
 
 
@@ -82,6 +88,7 @@ class SuggestionOp(BaseModel):
     near_node_ref: str | None = None
     edge_label: str | None = Field(default=None, max_length=300)
     sub_steps: list[SubStepInput] | None = None
+    condition_text: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
     def _check_required(self) -> "SuggestionOp":
@@ -108,6 +115,10 @@ class ChatSuggestion(BaseModel):
     affected_refs: list[ObjectRef] = Field(default_factory=list)
     rationale: str = Field(default="", max_length=2000)
     cited_claim_ids: list[UUID] = Field(default_factory=list)
+    # For rename-family ops (relabel_node/rename_lane/relabel_edge): the target's
+    # name/label as it was when proposed, so the card can show a stable
+    # "old -> new" transition that doesn't collapse once the change is applied.
+    before_label: str | None = Field(default=None, max_length=500)
 
 
 class ChatTurn(BaseModel):
@@ -120,6 +131,7 @@ class ChatSuggestRequest(BaseModel):
     user_message: str = Field(min_length=1, max_length=4000)
     mode: ChatMode = ChatMode.SUGGEST
     context_refs: list[ObjectRef] = Field(default_factory=list)
+    session_id: str | None = Field(default=None, max_length=100)
 
 
 class MentionSource(BaseModel):
@@ -130,7 +142,34 @@ class MentionSource(BaseModel):
     quote: str | None = None
 
 
+class ActivityStep(BaseModel):
+    tool: str
+    summary: str
+    detail: str | None = None
+
+
+class GroupSummary(BaseModel):
+    """One-line purpose of a bundle of related suggestions sharing a `group`."""
+    id: str = Field(min_length=1)
+    summary: str = Field(min_length=1, max_length=500)
+
+
+class AgentOption(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=300)
+
+
+class AgentQuestion(BaseModel):
+    prompt: str = Field(min_length=1, max_length=2000)
+    options: list[AgentOption] = Field(default_factory=list)
+
+
 class ChatSuggestResponse(BaseModel):
     message: str
     suggestions: list[ChatSuggestion] = Field(default_factory=list)
     mention_sources: list[MentionSource] = Field(default_factory=list)
+    group_summaries: list[GroupSummary] = Field(default_factory=list)
+    activity_trace: list[ActivityStep] = Field(default_factory=list)
+    run_id: UUID | None = None
+    grounded: bool = True
+    questions: list[AgentQuestion] = Field(default_factory=list)

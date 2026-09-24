@@ -49,6 +49,8 @@ class LaneCreate(BaseModel):
     order_index: int = Field(ge=0)
     height_px: int | None = Field(default=None, ge=80)
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    reason: str | None = None
+    ai_applied: bool = False
 
 
 class LaneUpdate(BaseModel):
@@ -58,6 +60,7 @@ class LaneUpdate(BaseModel):
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     collapsed: bool | None = None
     reason: str | None = Field(default=None, max_length=2000)
+    ai_applied: bool = False
 
 
 class NodeUpdate(BaseModel):
@@ -71,6 +74,7 @@ class NodeUpdate(BaseModel):
     )
     description: str | None = Field(default=None, max_length=5000)
     reason: str | None = Field(default=None, max_length=2000)
+    ai_applied: bool = False
 
 
 class NodeCreate(BaseModel):
@@ -83,6 +87,8 @@ class NodeCreate(BaseModel):
     lane_id: UUID
     x: float
     relative_y: float
+    reason: str | None = None
+    ai_applied: bool = False
 
 
 _SIDE_PATTERN = r"^(top|bottom)$"
@@ -103,18 +109,36 @@ class EdgeCreate(BaseModel):
     source_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
     target_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
     edge_kind: str = Field(default="flow", pattern=_EDGE_KIND_PATTERN)
+    reason: str | None = None
+    ai_applied: bool = False
 
 
 class EdgeUpdate(BaseModel):
     """Partial update for an edge. Empty-string labels are normalized to None
-    on the server so the persisted state matches 'no label'."""
+    on the server so the persisted state matches 'no label'. condition_text
+    gets the same empty-string-to-None treatment."""
 
     label: str | None = Field(default=None, max_length=300)
+    condition_text: str | None = None
     bend_x: float | None = None
     bend_y: float | None = None
     source_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
     target_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
     reason: str | None = Field(default=None, max_length=2000)
+    ai_applied: bool = False
+
+
+class DeleteRequest(BaseModel):
+    """Body for the node / edge / lane delete endpoints.
+
+    `reason` is required in practice — the handlers reject a missing or blank one
+    with a 422 — but it is declared optional here so that rejection carries our
+    own message instead of a pydantic validation envelope. Same trick, and same
+    motivation, as `NodeUpdate` / `EdgeUpdate` / `LaneUpdate`.
+    """
+
+    reason: str | None = Field(default=None, max_length=2000)
+    ai_applied: bool = False
 
 
 class CitationDetail(BaseModel):

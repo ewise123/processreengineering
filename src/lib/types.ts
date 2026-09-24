@@ -207,6 +207,8 @@ export interface LaneCreate {
   name: string;
   order_index: number;
   height_px?: number | null;
+  reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface LaneUpdate {
@@ -216,6 +218,7 @@ export interface LaneUpdate {
   color?: string;
   collapsed?: boolean;
   reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface NodeUpdate {
@@ -226,6 +229,7 @@ export interface NodeUpdate {
   relative_y?: number;
   description?: string;
   reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface NodeCreate {
@@ -234,6 +238,8 @@ export interface NodeCreate {
   lane_id: UUID;
   x: number;
   relative_y: number;
+  reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface EdgeCreate {
@@ -243,7 +249,17 @@ export interface EdgeCreate {
   source_side?: "top" | "bottom" | null;
   target_side?: "top" | "bottom" | null;
   edge_kind?: "flow" | "rework";
+  reason?: string;
+  ai_applied?: boolean;
 }
+
+/** Body for the node / edge / lane delete endpoints. `reason` is required —
+ * the backend 422s on a blank one — even though the schema permits null so the
+ * server can return a readable error rather than a validation envelope. */
+export type DeleteRequest = {
+  reason: string;
+  ai_applied?: boolean;
+};
 
 export interface EdgeUpdate {
   label?: string | null;
@@ -251,7 +267,9 @@ export interface EdgeUpdate {
   bend_y?: number | null;
   source_side?: "top" | "bottom" | null;
   target_side?: "top" | "bottom" | null;
+  condition_text?: string | null;
   reason?: string;
+  ai_applied?: boolean;
 }
 
 export interface CitationDetail {
@@ -350,6 +368,12 @@ export interface MentionSource {
   quote: string | null;
 }
 
+export interface ActivityStep {
+  tool: string;
+  summary: string;
+  detail?: string | null;
+}
+
 export interface ChatTurn {
   role: "user" | "assistant";
   content: string;
@@ -377,7 +401,8 @@ export interface ObjectRef {
 export type OpKind =
   | "relabel_node" | "describe_node" | "add_node" | "remove_node"
   | "add_edge" | "remove_edge" | "relabel_edge" | "reroute_edge"
-  | "move_to_lane" | "add_lane" | "rename_lane" | "decompose";
+  | "move_to_lane" | "add_lane" | "rename_lane" | "decompose"
+  | "change_node_type" | "remove_lane" | "set_edge_condition";
 
 export interface SuggestionSubStep {
   proposed_name: string;
@@ -401,6 +426,7 @@ export interface SuggestionOp {
   near_node_ref?: string | null;
   edge_label?: string | null;
   sub_steps?: SuggestionSubStep[] | null;
+  condition_text?: string | null;
 }
 
 export interface ChatSuggestion {
@@ -411,19 +437,47 @@ export interface ChatSuggestion {
   affected_refs: ObjectRef[];
   rationale: string;
   cited_claim_ids: UUID[];
+  /** For rename-family ops: the target's name/label when proposed, so the card
+   * shows a stable "old → new" that doesn't collapse once applied. */
+  before_label?: string | null;
 }
 
 export interface ChatSuggestRequest {
   history: ChatTurn[];
   user_message: string;
-  mode: ChatMode;
+  /** The backend's agent loop always investigates-and-proposes and ignores
+   * this field; kept optional for backward compatibility with older callers
+   * but no longer sent by the chat UI. */
+  mode?: ChatMode;
   context_refs: ObjectRef[];
+  session_id?: string | null;
+}
+
+export interface GroupSummary {
+  id: string;
+  summary: string;
+}
+
+export interface AgentOption {
+  label: string;
+  description?: string | null;
+}
+
+export interface AgentQuestion {
+  prompt: string;
+  options: AgentOption[];
 }
 
 export interface ChatSuggestResponse {
   message: string;
   suggestions: ChatSuggestion[];
   mention_sources: MentionSource[];
+  group_summaries: GroupSummary[];
+  activity_trace?: ActivityStep[];
+  run_id?: string | null;
+  grounded?: boolean;
+  /** Present when the agent stopped to ask one or more clarifying questions. */
+  questions?: AgentQuestion[];
 }
 
 export interface ProcessMapGenerateRequest {

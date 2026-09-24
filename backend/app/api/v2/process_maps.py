@@ -1,9 +1,10 @@
 """Phase 2.5 endpoints: generate process maps from claims, read them back."""
+import logging
 import re
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -13,6 +14,7 @@ from app.api.v2.reviews import _recompute_version_status
 from app.constants import LINEAGE_KEY
 from app.db.session import get_db
 from app.enums import (
+    AgentRunStopReason,
     ChangeActorKind,
     ChangeKind,
     ChangeSource,
@@ -50,6 +52,7 @@ from app.schemas.process_map import (
     ClaimSummary,
     ClaimWithCitations,
     ConsistencyFinding,
+    DeleteRequest,
     EdgeCreate,
     EdgeUpdate,
     LaneCreate,
@@ -104,6 +107,7 @@ from app.services.map_ai_edit import (
     propose_next_steps,
 )
 from app.services.map_chat import ChatTurn as MapChatTurn, chat as run_map_chat
+from app.services.map_chat_agent import run_chat_agent, assess_grounded
 from app.services.map_context import assemble_map_context
 from app.services.map_reconcile import compute_claim_delta, propose_reconcile
 from app.services import map_reconcile as _map_reconcile_mod
@@ -112,20 +116,27 @@ from app.services.process_generation import (
     generate_structure_from_claims,
 )
 from app.schemas.version_chat_suggest import (
-    ChatMode,
+    ActivityStep,
+    AgentOption,
+    AgentQuestion,
     ChatSuggestRequest,
     ChatSuggestResponse,
-    ChatSuggestion,
     ChatTurn as SuggestChatTurn,
+    GroupSummary,
     MentionSource,
-    ObjectRef,
     RefKind,
-    SuggestionOp,
 )
-from app.services.map_chat_suggest import run_chat_suggest
 from app.services.map_consistency import scan_map
+from app.services.suggestion_ops import (
+    _resolve_mention_refs,
+    _resolve_refs,
+)
+from app.models.agent_run import AgentRun
+from app.services.agent_tools import AgentToolCtx
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["process_maps"])
+
+logger = logging.getLogger(__name__)
 
 
 # Map BPMN task types from the AI-emitted structure → our NodeType enum
@@ -879,10 +890,11 @@ def create_node(
         model_id=version.model_id,
         version_id=version.id,
         kind=ChangeKind.CREATE.value,
-        reason="Added from the shape palette",
+        reason=(payload.reason.strip() if payload.reason and payload.reason.strip() else "Added from the shape palette"),
         after={"name": node.name, "type": node.type,
                "lane_id": str(node.lane_id) if node.lane_id else None},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
     )
     db.commit()
     db.refresh(node)
@@ -957,7 +969,8 @@ def update_node(
             reason=payload.reason.strip(),
             before={f: changed[f][0] for f in changed},
             after={f: changed[f][1] for f in changed},
-            source=ChangeSource.MANUAL.value,
+            source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+            actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
         )
     db.commit()
     db.refresh(node)
@@ -1047,11 +1060,16 @@ def create_edge(
         model_id=version.model_id,
         version_id=version.id,
         kind=ChangeKind.CONNECT.value,
-        reason="Added rework connection" if is_rework else "Connected two nodes",
+        reason=(
+            payload.reason.strip()
+            if payload.reason and payload.reason.strip()
+            else ("Added rework connection" if is_rework else "Connected two nodes")
+        ),
         after={"source_node_id": str(edge.source_node_id),
                "target_node_id": str(edge.target_node_id),
                "edge_kind": edge.edge_kind},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
     )
     db.commit()
     db.refresh(edge)
@@ -1073,6 +1091,9 @@ def update_edge(
     old_label = edge.label
     if "label" in payload.model_fields_set:
         edge.label = payload.label or None
+    old_condition = edge.condition_text
+    if "condition_text" in payload.model_fields_set:
+        edge.condition_text = payload.condition_text or None
     if "bend_x" in payload.model_fields_set:
         edge.bend_x = payload.bend_x
     if "bend_y" in payload.model_fields_set:
@@ -1097,11 +1118,48 @@ def update_edge(
             reason=payload.reason.strip(),
             before={"label": old_label},
             after={"label": edge.label},
-            source=ChangeSource.MANUAL.value,
+            source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+            actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
+        )
+
+    condition_changed = (
+        "condition_text" in payload.model_fields_set
+        and (payload.condition_text or None) != old_condition
+    )
+    if condition_changed:
+        if not (payload.reason and payload.reason.strip()):
+            db.rollback()
+            raise HTTPException(status_code=422, detail="A reason is required to change an edge condition.")
+        record_change(
+            db,
+            target_type=ChangeTargetType.EDGE.value,
+            target_id=edge.id,
+            model_id=model_id_for_version(db, edge.version_id),
+            version_id=edge.version_id,
+            kind=ChangeKind.SET_CONDITION.value,
+            reason=payload.reason.strip(),
+            before={"condition_text": old_condition},
+            after={"condition_text": edge.condition_text},
+            source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+            actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
         )
     db.commit()
     db.refresh(edge)
     return edge
+
+
+def _require_delete_reason(
+    payload: DeleteRequest | None, message: str
+) -> tuple[str, bool]:
+    """Return the trimmed delete reason and the payload's `ai_applied` flag,
+    raising 422 with `message` if the reason is missing or blank.
+
+    Call this before any session mutation — it does not roll back.
+    """
+    reason = (payload.reason or "").strip() if payload else ""
+    if not reason:
+        raise HTTPException(status_code=422, detail=message)
+    return reason, payload.ai_applied
 
 
 @router.delete("/edges/{edge_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1109,11 +1167,15 @@ def delete_edge(
     project: Annotated[Project, Depends(get_project_or_404)],
     edge_id: UUID,
     db: Annotated[Session, Depends(get_db)],
+    payload: Annotated[DeleteRequest | None, Body()] = None,
 ) -> None:
     edge = db.get(ProcessEdge, edge_id)
     if edge is None:
         raise HTTPException(status_code=404, detail="Edge not found")
     _check_edge_in_project(edge, project.id, db)
+    reason, ai_applied = _require_delete_reason(
+        payload, "A reason is required to delete a connection."
+    )
     record_change(
         db,
         target_type=ChangeTargetType.EDGE.value,
@@ -1121,13 +1183,14 @@ def delete_edge(
         model_id=model_id_for_version(db, edge.version_id),
         version_id=edge.version_id,
         kind=ChangeKind.DELETE.value,
-        reason="Deleted",
+        reason=reason,
         before={
             "source_node_id": str(edge.source_node_id),
             "target_node_id": str(edge.target_node_id),
             "label": edge.label,
         },
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if ai_applied else ChangeActorKind.USER.value,
     )
     db.delete(edge)
     db.commit()
@@ -1138,6 +1201,7 @@ def delete_node(
     project: Annotated[Project, Depends(get_project_or_404)],
     node_id: UUID,
     db: Annotated[Session, Depends(get_db)],
+    payload: Annotated[DeleteRequest | None, Body()] = None,
 ) -> None:
     """Delete a node. FK cascades drop the connected edges and node-claim
     links automatically."""
@@ -1145,6 +1209,9 @@ def delete_node(
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
     _check_node_in_project(node, project.id, db)
+    reason, ai_applied = _require_delete_reason(
+        payload, "A reason is required to delete a step."
+    )
     version_id = node.version_id
     record_change(
         db,
@@ -1153,9 +1220,10 @@ def delete_node(
         model_id=model_id_for_version(db, node.version_id),
         version_id=node.version_id,
         kind=ChangeKind.DELETE.value,
-        reason="Deleted",
+        reason=reason,
         before={"name": node.name, "type": node.type},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if ai_applied else ChangeActorKind.USER.value,
     )
     db.execute(
         delete(Review).where(
@@ -1217,7 +1285,8 @@ def update_lane(
             reason=payload.reason.strip(),
             before={"name": old_name},
             after={"name": lane.name},
-            source=ChangeSource.MANUAL.value,
+            source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+            actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
         )
     db.commit()
     db.refresh(lane)
@@ -1269,9 +1338,10 @@ def add_lane(
         model_id=version.model_id,
         version_id=version.id,
         kind=ChangeKind.CREATE.value,
-        reason="Added a new swim lane",
+        reason=(payload.reason.strip() if payload.reason and payload.reason.strip() else "Added a new swim lane"),
         after={"name": lane.name},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
     )
     db.commit()
     db.refresh(lane)
@@ -1574,6 +1644,7 @@ def delete_lane(
     project: Annotated[Project, Depends(get_project_or_404)],
     lane_id: UUID,
     db: Annotated[Session, Depends(get_db)],
+    payload: Annotated[DeleteRequest | None, Body()] = None,
 ) -> None:
     lane = db.get(ProcessLane, lane_id)
     if lane is None:
@@ -1595,6 +1666,14 @@ def delete_lane(
             status_code=422, detail="Cannot delete the last remaining lane"
         )
 
+    # Structural impossibility first, provenance second: there's no point
+    # demanding a justification for a delete that can never succeed. The gate
+    # also has to precede the bulk reassignment below, which nothing here
+    # would roll back.
+    reason, ai_applied = _require_delete_reason(
+        payload, "A reason is required to delete a lane."
+    )
+
     fallback = others[0]
     # Reassign nodes to a remaining lane so they don't end up orphaned.
     db.execute(
@@ -1609,9 +1688,10 @@ def delete_lane(
         model_id=model_id_for_version(db, lane.version_id),
         version_id=lane.version_id,
         kind=ChangeKind.DELETE.value,
-        reason="Deleted",
+        reason=reason,
         before={"name": lane.name},
-        source=ChangeSource.MANUAL.value,
+        source=ChangeSource.CHAT.value if ai_applied else ChangeSource.MANUAL.value,
+        actor_kind=ChangeActorKind.AI.value if ai_applied else ChangeActorKind.USER.value,
     )
     db.delete(lane)
     db.flush()
@@ -1770,93 +1850,6 @@ def chat_with_map(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return ChatResponse(content=content)
-
-
-def _resolve_refs(refs, claim_ref_to_id):
-    """Map the model's short claim refs to real UUIDs; drop any not present in
-    the grounding context (defeats fabricated citations)."""
-    out = []
-    for r in refs or []:
-        cid = claim_ref_to_id.get(str(r).strip().upper())
-        if cid is not None and cid not in out:
-            out.append(cid)
-    return out
-
-
-# Op field -> (resolution map attname, RefKind). Fields not listed are literals.
-_OP_REF_FIELDS: dict[str, tuple[str, RefKind]] = {
-    "node_ref": ("node_ref_to_id", RefKind.NODE),
-    "near_node_ref": ("node_ref_to_id", RefKind.NODE),
-    "edge_ref": ("edge_ref_to_id", RefKind.EDGE),
-    "lane_ref": ("lane_ref_to_id", RefKind.LANE),
-    "from_ref": ("node_ref_to_id", RefKind.NODE),
-    "to_ref": ("node_ref_to_id", RefKind.NODE),
-    "temp_id": (None, None),  # never resolved; identifies a new object
-}
-
-
-def _resolve_one_ref(value, map_attr, ctx):
-    """Short ref (N1) -> UUID string. tmp:N and unknown refs pass through unchanged."""
-    if value is None or str(value).startswith("tmp:"):
-        return value, None
-    real = getattr(ctx, map_attr).get(str(value).strip().upper())
-    if real is None:
-        return value, None  # leave unresolved; affected_refs will skip it
-    return str(real), real
-
-
-_MENTION_RE = re.compile(r"\[\[([NELC])(\d+)\]\]")
-_MENTION_KIND = {"N": ("node", "node_ref_to_id"), "E": ("edge", "edge_ref_to_id"),
-                 "L": ("lane", "lane_ref_to_id"), "C": ("claim", "claim_ref_to_id")}
-
-
-def _resolve_mention_refs(message: str, ctx) -> str:
-    """Rewrite short refs the model emitted ([[N3]]/[[E2]]/[[C1]]/[[L1]]) into
-    stable [[kind:uuid]] mentions the frontend can link. Unknown refs are
-    flattened to plain text so prose stays readable."""
-    def _sub(m):
-        letter, num = m.group(1), m.group(2)
-        short = f"{letter}{num}"
-        kind, attr = _MENTION_KIND[letter]
-        real = getattr(ctx, attr).get(short)
-        return f"[[{kind}:{real}]]" if real is not None else short
-    return _MENTION_RE.sub(_sub, message)
-
-
-def _build_suggestion(raw: dict, ctx, index: int):
-    """Resolve a raw model suggestion into a validated ChatSuggestion, or None
-    if the op is malformed. Mirrors _resolve_refs' fabricated-ref hygiene."""
-    op_kwargs = {"kind": raw.get("kind")}
-    affected: list[ObjectRef] = []
-    for field, (map_attr, ref_kind) in _OP_REF_FIELDS.items():
-        if field not in raw or raw[field] is None:
-            continue
-        if field == "temp_id":
-            op_kwargs[field] = raw[field]
-            continue
-        resolved_str, real_id = _resolve_one_ref(raw[field], map_attr, ctx)
-        op_kwargs[field] = resolved_str
-        if real_id is not None:
-            affected.append(ObjectRef(kind=ref_kind, id=real_id))
-    # literal (non-ref) fields pass straight through
-    for field in ("new_label", "description", "name", "node_type", "edge_label", "sub_steps"):
-        if raw.get(field) is not None:
-            op_kwargs[field] = raw[field]
-
-    try:
-        op = SuggestionOp(**op_kwargs)
-    except (ValueError, TypeError, KeyError):
-        return None  # malformed op -> dropped, never reaches the client
-
-    return ChatSuggestion(
-        id=f"sg-{index}-{uuid4().hex[:8]}",
-        group=raw.get("group"),
-        title=str(raw.get("title") or op.kind.value)[:300],
-        op=op,
-        affected_refs=affected,
-        rationale=str(raw.get("rationale") or "")[:2000],
-        cited_claim_ids=_resolve_refs(raw.get("cited_claim_refs"), ctx.claim_ref_to_id),
-    )
 
 
 def _resolve_node_ref(ref, node_id_by_ref):
@@ -2051,6 +2044,139 @@ def _create_proposed_step(
     return node, edge
 
 
+def _mention_sources_from_texts(texts: list[str], ctx) -> list[MentionSource]:
+    """Build mention sources from [[claim:uuid]] tokens in resolved text — the
+    same dedupe/skip-malformed logic the suggest path uses."""
+    out: list[MentionSource] = []
+    seen: set[UUID] = set()
+    for text in texts:
+        for cid_str in re.findall(r"\[\[claim:([0-9a-fA-F-]+)\]\]", text):
+            try:
+                cid = UUID(cid_str)
+            except ValueError:
+                continue
+            if cid in seen:
+                continue
+            seen.add(cid)
+            tgt = ctx.source_target_by_claim.get(cid)
+            if tgt:
+                out.append(MentionSource(claim_id=cid, **tgt))
+    return out
+
+
+def _clamp_resolved(text: str, limit: int) -> str:
+    """Truncate resolved mention text to a schema limit without leaving a dangling,
+    unclosed `[[kind:uuid` fragment from a mid-mention cut (which would render as
+    raw markup in the UI)."""
+    t = (text or "")[:limit]
+    open_at = t.rfind("[[")
+    if open_at != -1 and "]]" not in t[open_at:]:
+        t = t[:open_at].rstrip()
+    return t
+
+
+def _run_chat_agent(db, project, model_id, version, ctx, focus_refs, payload) -> ChatSuggestResponse:
+    tool_ctx = AgentToolCtx(db=db, project_id=project.id, version=version, mapctx=ctx)
+    history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
+    # Resolve each focused ref to its label so the loop can name the selected
+    # steps inline in the user's turn (reliable deictic resolution).
+    focus_items = [
+        {"ref": r, "label": ctx.node_name_by_id.get(ctx.node_ref_to_id.get(r), "")}
+        for r in focus_refs
+    ]
+
+    def _persist(answer, trace, consulted, cited, in_tok, out_tok, rounds, stop, grounded) -> AgentRun:
+        run = AgentRun(
+            project_id=project.id, model_id=model_id, version_id=version.id,
+            session_id=payload.session_id, created_by=None,
+            question=payload.user_message, answer=answer,
+            tool_calls=trace or [], cited_claim_ids=cited, consulted_claim_ids=consulted,
+            input_tokens=in_tok, output_tokens=out_tok, round_count=rounds,
+            stop_reason=stop, grounded=grounded,
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        return run
+
+    try:
+        result = run_chat_agent(
+            tool_ctx=tool_ctx, skeleton_text=ctx.skeleton_text,
+            focus_items=focus_items,
+            history=history, user_message=payload.user_message,
+        )
+    except Exception as exc:  # infra failure: graceful message, still record the run
+        logger.exception("ask-agent run failed (project=%s version=%s)", project.id, version.id)
+        run = _persist(
+            answer=None, trace=[{"tool": "error", "summary": str(exc), "detail": None}],
+            consulted=[], cited=[], in_tok=0, out_tok=0, rounds=0,
+            stop=AgentRunStopReason.ERROR.value, grounded=True,
+        )
+        return ChatSuggestResponse(
+            message="I hit an error looking that up. Please try again.",
+            suggestions=[], mention_sources=[], group_summaries=[],
+            activity_trace=[], run_id=run.id, grounded=True,
+        )
+
+    resolved = _resolve_mention_refs(result.answer, ctx)
+    suggestions = result.proposals  # validated ChatSuggestions (resolved refs) from the loop
+    questions = []
+    for rq in (result.questions or []):
+        # Resolve THEN clamp: _resolve_mention_refs expands short refs ([[N3]]) into
+        # much longer [[node:uuid]] mentions, so a prompt/label/description near the
+        # normalize caps can overflow AgentQuestion/AgentOption's max_length and raise
+        # here (outside the try/except) — a 500 that drops the whole ask turn. Clamp
+        # the RESOLVED text to the schema limits (mirrors suggestion_ops).
+        prompt = _clamp_resolved(_resolve_mention_refs(rq.get("prompt") or "", ctx), 2000)
+        if not prompt:
+            continue
+        opts = []
+        for o in rq.get("options", []):
+            if not o.get("label"):
+                continue
+            label = _clamp_resolved(_resolve_mention_refs(o["label"], ctx), 120)
+            if not label:
+                continue
+            desc = _clamp_resolved(_resolve_mention_refs(o["description"], ctx), 300) if o.get("description") else None
+            opts.append(AgentOption(label=label, description=desc or None))
+        questions.append(AgentQuestion(prompt=prompt, options=opts))
+    # Cards alone ARE the response; but when the agent asked, its prose explains why — show it.
+    message = resolved if (questions or not suggestions) else ""
+    # Mention sources come from the answer prose AND the cards' titles/rationales.
+    claim_texts = [resolved] + [s.title for s in suggestions] + [s.rationale for s in suggestions]
+    mention_sources = _mention_sources_from_texts(claim_texts, ctx)
+    cited = [str(s.claim_id) for s in mention_sources]
+    grounded = assess_grounded(resolved, cited)
+    # Group summaries: only for groups actually present on an emitted suggestion.
+    used_groups = {s.group for s in suggestions if s.group}
+    group_summaries: list[GroupSummary] = []
+    seen_groups: set[str] = set()
+    for g in result.group_summaries:
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("id") or "").strip()
+        summary = str(g.get("summary") or "").strip()
+        if not gid or not summary or gid not in used_groups or gid in seen_groups:
+            continue
+        seen_groups.add(gid)
+        try:
+            group_summaries.append(GroupSummary(id=gid, summary=summary[:500]))
+        except ValueError:
+            continue
+    run = _persist(
+        answer=resolved, trace=result.trace,
+        consulted=[str(x) for x in result.consulted_claim_ids],
+        cited=cited, in_tok=result.input_tokens, out_tok=result.output_tokens,
+        rounds=result.round_count, stop=result.stop_reason, grounded=grounded,
+    )
+    return ChatSuggestResponse(
+        message=message, suggestions=suggestions, mention_sources=mention_sources,
+        group_summaries=group_summaries,
+        activity_trace=[ActivityStep(**t) for t in result.trace],
+        run_id=run.id, grounded=grounded, questions=questions,
+    )
+
+
 @router.post(
     "/process-maps/{model_id}/versions/{version_id}/chat-suggest",
     response_model=ChatSuggestResponse,
@@ -2062,10 +2188,11 @@ def chat_suggest(
     payload: ChatSuggestRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatSuggestResponse:
-    """Word-style chat. Ask mode answers in prose; suggest mode also returns
-    structured, applyable suggested changes. Never mutates the map. Model claim
-    refs are resolved to UUIDs and fabricated ones dropped; malformed ops are
-    discarded before reaching the client."""
+    """Word-style chat. Every request runs the agent tool loop (`_run_chat_agent`),
+    which can answer in prose and/or accumulate `propose_changes` calls into
+    applyable suggestion cards. Never mutates the map. Model claim refs are
+    resolved to UUIDs and fabricated ones dropped; malformed ops are discarded
+    before they become proposals."""
     model = db.get(ProcessModel, model_id)
     if model is None or model.project_id != project.id:
         raise HTTPException(status_code=404, detail="Process model not found")
@@ -2086,50 +2213,8 @@ def chat_suggest(
         for r in payload.context_refs
         if r.kind == RefKind.NODE and r.id in ctx.node_ref_by_id
     ]
-    map_text = ctx.text
-    if focus_refs:
-        map_text += (
-            "\n\nThe user has attached these steps as the focus of the question; "
-            "address all of them: " + ", ".join(focus_refs)
-        )
 
-    history = [SuggestChatTurn(role=t.role, content=t.content) for t in payload.history]
-    try:
-        message, raw_suggestions = run_chat_suggest(
-            history=history,
-            user_message=payload.user_message,
-            map_context_text=map_text,
-            mode=payload.mode,
-        )
-    except RuntimeError as exc:  # service raises only RuntimeError; _build_suggestion swallows ValueError
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    suggestions = []
-    for i, raw in enumerate(raw_suggestions):
-        built = _build_suggestion(raw, ctx, index=i)
-        if built is not None:
-            suggestions.append(built)
-    resolved = _resolve_mention_refs(message, ctx)
-    # Guard against malformed tokens: the regex matches hex-ish strings that are
-    # not valid UUIDs (e.g. an echoed "[[claim:abc]]"), so UUID() can raise.
-    # Skip those instead of turning the endpoint into a 500. Dedupe while
-    # preserving first-seen order.
-    mention_sources = []
-    seen_claim_ids: set[UUID] = set()
-    for cid_str in re.findall(r"\[\[claim:([0-9a-fA-F-]+)\]\]", resolved):
-        try:
-            cid = UUID(cid_str)
-        except ValueError:
-            continue
-        if cid in seen_claim_ids:
-            continue
-        seen_claim_ids.add(cid)
-        tgt = ctx.source_target_by_claim.get(cid)
-        if tgt:
-            mention_sources.append(MentionSource(claim_id=cid, **tgt))
-    return ChatSuggestResponse(
-        message=resolved, suggestions=suggestions, mention_sources=mention_sources
-    )
+    return _run_chat_agent(db, project, model_id, version, ctx, focus_refs, payload)
 
 
 @router.post(

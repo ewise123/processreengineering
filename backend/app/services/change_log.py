@@ -21,6 +21,7 @@ _KIND_PRIORITY = [
     ChangeKind.RELANE,
     ChangeKind.RELABEL,
     ChangeKind.DESCRIBE,
+    ChangeKind.SET_CONDITION,
     ChangeKind.RECONNECT,
     ChangeKind.CONNECT,
     ChangeKind.UNLINK_CLAIM,

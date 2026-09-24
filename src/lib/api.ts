@@ -12,6 +12,7 @@ import type {
   ChangeLogPage,
   DecomposeRequest,
   DecomposeResult,
+  DeleteRequest,
   ChatRequest,
   ChatResponse,
   ChatSuggestRequest,
@@ -63,6 +64,7 @@ import type {
   VersionDiff,
   VersionSummary,
 } from "@/lib/types";
+import { formatErrorDetail } from "@/lib/error-detail";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -83,10 +85,12 @@ async function request<T>(
     body,
   });
   if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`;
+    const fallback = `${res.status} ${res.statusText}`;
+    let detail = fallback;
     try {
-      const data = (await res.json()) as { detail?: string };
-      if (data.detail) detail = data.detail;
+      // FastAPI 422s return `detail` as an array of validation errors; pass the
+      // whole body to the formatter so it never stringifies to "[object Object]".
+      detail = formatErrorDetail(await res.json(), fallback);
     } catch {
       // ignore non-JSON error bodies
     }
@@ -293,9 +297,10 @@ export const api = {
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/review/request`,
       { method: "POST" }
     ),
-  deleteNode: (projectId: UUID, nodeId: UUID) =>
+  deleteNode: (projectId: UUID, nodeId: UUID, body: DeleteRequest) =>
     request<void>(`/api/v2/projects/${projectId}/nodes/${nodeId}`, {
       method: "DELETE",
+      json: body,
     }),
   createEdge: (
     projectId: UUID,
@@ -312,9 +317,10 @@ export const api = {
       method: "PATCH",
       json: body,
     }),
-  deleteEdge: (projectId: UUID, edgeId: UUID) =>
+  deleteEdge: (projectId: UUID, edgeId: UUID, body: DeleteRequest) =>
     request<void>(`/api/v2/projects/${projectId}/edges/${edgeId}`, {
       method: "DELETE",
+      json: body,
     }),
   createNode: (
     projectId: UUID,
@@ -341,9 +347,10 @@ export const api = {
       `/api/v2/projects/${projectId}/process-maps/${modelId}/versions/${versionId}/lanes`,
       { method: "POST", json: body }
     ),
-  deleteLane: (projectId: UUID, laneId: UUID) =>
+  deleteLane: (projectId: UUID, laneId: UUID, body: DeleteRequest) =>
     request<void>(`/api/v2/projects/${projectId}/lanes/${laneId}`, {
       method: "DELETE",
+      json: body,
     }),
   getNodeCitations: (projectId: UUID, nodeId: UUID) =>
     request<NodeCitations>(

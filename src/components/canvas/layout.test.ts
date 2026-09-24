@@ -50,3 +50,37 @@ describe("buildCanvasState evidence_stale", () => {
     expect(nodes[0].evidenceStale).toBe(false);
   });
 });
+
+function graphWithEdge(condition_text: string | null): ProcessGraph {
+  return {
+    version: { id: "v", model_id: "m", version_number: 1, status: "draft" } as never,
+    lanes: [
+      { id: "L", name: "Ops", order_index: 0, height_px: 200, collapsed: false } as never,
+    ],
+    nodes: [
+      { id: "N1", type: "task", name: "Step 1", lane_id: "L", position: {}, properties: {} } as never,
+      { id: "N2", type: "task", name: "Step 2", lane_id: "L", position: {}, properties: {} } as never,
+    ],
+    edges: [
+      {
+        id: "E",
+        source_node_id: "N1",
+        target_node_id: "N2",
+        label: null,
+        condition_text,
+      } as never,
+    ],
+  };
+}
+
+describe("buildCanvasState condition_text", () => {
+  it("maps edge condition_text onto the edge's condition", () => {
+    const { edges } = buildCanvasState(graphWithEdge("amount > 1000"));
+    expect(edges[0].condition).toBe("amount > 1000");
+  });
+
+  it("defaults condition to null when condition_text is absent", () => {
+    const { edges } = buildCanvasState(graphWithEdge(null));
+    expect(edges[0].condition).toBeNull();
+  });
+});

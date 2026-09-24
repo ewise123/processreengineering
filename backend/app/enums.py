@@ -240,6 +240,7 @@ class ChangeKind(StrEnum):
     CREATE = "create"
     RELABEL = "relabel"
     DESCRIBE = "describe"
+    SET_CONDITION = "set_condition"
     RETYPE = "retype"
     RELANE = "relane"
     LINK_CLAIM = "link_claim"
@@ -260,3 +261,18 @@ class ChangeSource(StrEnum):
     RECONCILE = "reconcile"
     IMPORT = "import"
     MIGRATION = "migration"
+
+
+class AgentRunStopReason(StrEnum):
+    NORMAL = "normal"
+    ROUND_CAP = "round_cap"
+    TOKEN_CAP = "token_cap"
+    TIME_CAP = "time_cap"
+    # The loop stopped to ask the analyst a clarifying question (ask_user tool).
+    ASK_USER = "ask_user"
+    # The model itself stopped abnormally (distinct from our own budget caps):
+    # truncated at the per-call output limit, or refused. Recorded honestly so a
+    # truncated/refused answer isn't mislabeled "normal" in the agent_run trace.
+    MAX_TOKENS = "max_tokens"
+    REFUSAL = "refusal"
+    ERROR = "error"

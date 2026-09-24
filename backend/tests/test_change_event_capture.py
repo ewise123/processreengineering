@@ -8,7 +8,7 @@ from app.api.v2 import process_maps as pm_api
 from app.models.change_event import ChangeEvent
 from app.models.claim import Claim
 from app.models.process import ProcessLane
-from app.schemas.process_map import EdgeCreate, EdgeUpdate, LaneCreate, LaneUpdate, NodeCreate, NodeUpdate, NodeClaimLinkRequest
+from app.schemas.process_map import DeleteRequest, EdgeCreate, EdgeUpdate, LaneCreate, LaneUpdate, NodeCreate, NodeUpdate, NodeClaimLinkRequest
 from tests.test_ai_edit import _seed_version_for_endpoint
 
 
@@ -49,6 +49,53 @@ def test_update_node_multifield_logs_single_event_highest_priority(db):
     assert ev.kind == "relabel"  # relabel > describe
     assert ev.before["name"] == "Receive" and ev.after["name"] == "X"
     assert "description" in ev.after
+
+
+def test_update_node_ai_applied_records_chat_source_and_ai_actor(db):
+    # An applied chat suggestion supplies the rationale as the reason and marks
+    # ai_applied so the trail attributes it to the AI, not a manual user edit.
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    pm_api.update_node(project=project, node_id=n1.id,
+                       payload=NodeUpdate(name="Receive PO", reason="Matches source wording", ai_applied=True),
+                       db=db)
+    ev = max(_events_for(db, n1.id), key=lambda e: e.created_at)
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.reason == "Matches source wording"
+
+
+def test_update_edge_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    pm_api.update_edge(project=project, edge_id=edge.id,
+                       payload=EdgeUpdate(label="if approved", reason="branch label", ai_applied=True),
+                       db=db)
+    ev = max(_events_for(db, edge.id), key=lambda e: e.created_at)
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.reason == "branch label"
+
+
+def test_update_lane_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    lane = db.get(ProcessLane, n1.lane_id)
+    pm_api.update_lane(project=project, lane_id=lane.id,
+                       payload=LaneUpdate(name="Operations", reason="Owner is Ops", ai_applied=True),
+                       db=db)
+    ev = max(_events_for(db, lane.id), key=lambda e: e.created_at)
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.reason == "Owner is Ops"
+
+
+def test_update_node_manual_default_stays_manual_user(db):
+    # Without ai_applied the edit is a manual user edit (default attribution).
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    pm_api.update_node(project=project, node_id=n1.id,
+                       payload=NodeUpdate(name="Receive PO", reason="Per interview"), db=db)
+    ev = max(_events_for(db, n1.id), key=lambda e: e.created_at)
+    assert ev.source == "manual"
+    assert ev.actor_kind == "user"
 
 
 def test_update_node_cosmetic_only_logs_nothing_and_needs_no_reason(db):
@@ -98,6 +145,34 @@ def test_update_edge_bend_only_logs_nothing(db):
     pm_api.update_edge(project=project, edge_id=edge.id,
                        payload=EdgeUpdate(bend_x=10.0, bend_y=20.0), db=db)
     assert len(_events_for(db, edge.id)) == before
+
+
+def test_update_edge_condition_requires_reason_and_logs(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.update_edge(project=project, edge_id=edge.id,
+                           payload=EdgeUpdate(condition_text="amount > 10000"), db=db)
+    assert exc.value.status_code == 422
+    assert len(_events_for(db, edge.id)) == 0
+    pm_api.update_edge(project=project, edge_id=edge.id,
+                       payload=EdgeUpdate(condition_text="amount > 10000", reason="gateway guard"), db=db)
+    evs = _events_for(db, edge.id)
+    assert any(e.kind == "set_condition" and e.after.get("condition_text") == "amount > 10000" for e in evs)
+
+
+def test_update_edge_condition_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    pm_api.update_edge(project=project, edge_id=edge.id,
+                       payload=EdgeUpdate(condition_text="amount > 10000", reason="gateway guard", ai_applied=True),
+                       db=db)
+    ev = max(_events_for(db, edge.id), key=lambda e: e.created_at)
+    assert ev.kind == "set_condition"
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.before == {"condition_text": None}
+    assert ev.after == {"condition_text": "amount > 10000"}
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +243,30 @@ def test_create_node_logs_one_create_event(db):
     assert ev.kind == "create"
     assert ev.target_type == "node"
     assert ev.source == "manual"
+    assert ev.actor_kind == "user"
+    assert ev.reason == "Added from the shape palette"
     assert ev.after["name"] == "New Step"
     assert ev.after["type"] == "task"
+
+
+def test_create_node_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    new_node = pm_api.create_node(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=NodeCreate(type="task", name="New Step", lane_id=n1.lane_id, x=100.0, relative_y=0.0,
+                           reason="Suggested by chat", ai_applied=True),
+        db=db,
+    )
+    events = _events_for(db, new_node.id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind == "create"
+    assert ev.target_type == "node"
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.reason == "Suggested by chat"
 
 
 def test_create_edge_logs_one_connect_event(db):
@@ -195,6 +292,8 @@ def test_create_edge_logs_one_connect_event(db):
     assert ev.kind == "connect"
     assert ev.target_type == "edge"
     assert ev.source == "manual"
+    assert ev.actor_kind == "user"
+    assert ev.reason == "Connected two nodes"
     assert ev.after["source_node_id"] == str(n1.id)
     assert ev.after["target_node_id"] == str(n2.id)
 
@@ -236,6 +335,33 @@ def test_create_rework_edge_persists_sides_and_logs_rework(db):
     assert ev.after["edge_kind"] == "rework"
 
 
+def test_create_edge_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    from app.models.process import ProcessNode
+    n2 = ProcessNode(version_id=version.id, lane_id=n1.lane_id, type="task",
+                     name="Second Step", position={}, properties={})
+    db.add(n2)
+    db.flush()
+    db.commit()
+
+    new_edge = pm_api.create_edge(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=EdgeCreate(source_node_id=n1.id, target_node_id=n2.id,
+                           reason="Suggested by chat", ai_applied=True),
+        db=db,
+    )
+    events = _events_for(db, new_edge.id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind == "connect"
+    assert ev.target_type == "edge"
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.reason == "Suggested by chat"
+
+
 def test_add_lane_logs_one_create_event(db):
     project, version, n1, claim = _seed_version_for_endpoint(db)
     new_lane = pm_api.add_lane(
@@ -251,6 +377,29 @@ def test_add_lane_logs_one_create_event(db):
     assert ev.kind == "create"
     assert ev.target_type == "lane"
     assert ev.source == "manual"
+    assert ev.actor_kind == "user"
+    assert ev.reason == "Added a new swim lane"
+    assert ev.after["name"] == "New Lane"
+
+
+def test_add_lane_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    new_lane = pm_api.add_lane(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=LaneCreate(name="New Lane", order_index=1,
+                           reason="Suggested by chat", ai_applied=True),
+        db=db,
+    )
+    events = _events_for(db, new_lane.id)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind == "create"
+    assert ev.target_type == "lane"
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.reason == "Suggested by chat"
     assert ev.after["name"] == "New Lane"
 
 
@@ -266,7 +415,12 @@ def test_delete_node_logs_delete_event_and_node_is_gone(db):
     node_name = n1.name
     node_type = n1.type
 
-    pm_api.delete_node(project=project, node_id=node_id, db=db)
+    pm_api.delete_node(
+        project=project,
+        node_id=node_id,
+        db=db,
+        payload=DeleteRequest(reason="Step no longer performed"),
+    )
 
     # event survives
     events = _events_for(db, node_id)
@@ -276,6 +430,7 @@ def test_delete_node_logs_delete_event_and_node_is_gone(db):
     assert ev.target_type == "node"
     assert ev.target_id == node_id
     assert ev.source == "manual"
+    assert ev.reason == "Step no longer performed"
     assert ev.before["name"] == node_name
     assert ev.before["type"] == node_type
 
@@ -291,7 +446,12 @@ def test_delete_edge_logs_delete_event_and_edge_is_gone(db):
     src_id = edge.source_node_id
     tgt_id = edge.target_node_id
 
-    pm_api.delete_edge(project=project, edge_id=edge_id, db=db)
+    pm_api.delete_edge(
+        project=project,
+        edge_id=edge_id,
+        db=db,
+        payload=DeleteRequest(reason="No longer part of the flow"),
+    )
 
     # event survives
     events = _events_for(db, edge_id)
@@ -301,6 +461,7 @@ def test_delete_edge_logs_delete_event_and_edge_is_gone(db):
     assert ev.target_type == "edge"
     assert ev.target_id == edge_id
     assert ev.source == "manual"
+    assert ev.reason == "No longer part of the flow"
     assert ev.before["source_node_id"] == str(src_id)
     assert ev.before["target_node_id"] == str(tgt_id)
     assert "label" in ev.before
@@ -323,7 +484,12 @@ def test_delete_lane_logs_delete_event_and_lane_is_gone(db):
     lane_id = new_lane.id
     lane_name = new_lane.name
 
-    pm_api.delete_lane(project=project, lane_id=lane_id, db=db)
+    pm_api.delete_lane(
+        project=project,
+        lane_id=lane_id,
+        db=db,
+        payload=DeleteRequest(reason="Lane no longer needed"),
+    )
 
     # event survives
     events = _events_for(db, lane_id)
@@ -334,10 +500,41 @@ def test_delete_lane_logs_delete_event_and_lane_is_gone(db):
     assert ev.target_type == "lane"
     assert ev.target_id == lane_id
     assert ev.source == "manual"
+    assert ev.actor_kind == "user"
+    assert ev.reason == "Lane no longer needed"
     assert ev.before["name"] == lane_name
 
     # object is gone
     assert db.get(ProcessLane, lane_id) is None
+
+
+def test_delete_lane_ai_applied_records_chat_source_and_ai_actor(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    # add a second lane so deletion is allowed
+    new_lane = pm_api.add_lane(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=LaneCreate(name="Lane To Delete", order_index=1),
+        db=db,
+    )
+    lane_id = new_lane.id
+
+    pm_api.delete_lane(
+        project=project,
+        lane_id=lane_id,
+        db=db,
+        payload=DeleteRequest(reason="Consolidated by suggestion", ai_applied=True),
+    )
+
+    delete_events = [e for e in _events_for(db, lane_id) if e.kind == "delete"]
+    assert len(delete_events) == 1
+    ev = delete_events[0]
+    assert ev.target_type == "lane"
+    assert ev.target_id == lane_id
+    assert ev.source == "chat"
+    assert ev.actor_kind == "ai"
+    assert ev.reason == "Consolidated by suggestion"
 
 
 # ---------------------------------------------------------------------------
