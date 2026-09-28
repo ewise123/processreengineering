@@ -93,6 +93,12 @@ export function useGraphPersistence({ projectId }: { projectId: UUID }) {
     [scheduleFlush]
   );
 
+  /** Drop queued edits for a node that no longer exists, so a save queued
+   * just before a delete doesn't reach the server as a 404. */
+  const forgetNode = useCallback((id: UUID) => {
+    dirtyNodesRef.current.delete(id);
+  }, []);
+
   const markLane = useCallback(
     (id: UUID, update: LaneUpdate) => {
       const prev = dirtyLanesRef.current.get(id) ?? {};
@@ -118,5 +124,5 @@ export function useGraphPersistence({ projectId }: { projectId: UUID }) {
     return () => window.removeEventListener("beforeunload", handler);
   }, [flush]);
 
-  return { status, error, markNode, markLane, flush };
+  return { status, error, markNode, markLane, forgetNode, flush };
 }
