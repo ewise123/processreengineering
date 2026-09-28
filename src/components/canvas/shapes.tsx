@@ -37,7 +37,7 @@ export function isReworkEdge(
 }
 
 /** Gap between a node's side and its connect handle. */
-const HANDLE_OFFSET = 12;
+export const HANDLE_OFFSET = 12;
 
 export function NodeShape({
   node,
