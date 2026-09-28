@@ -19,7 +19,7 @@ import {
 import { AiEditCacheProvider } from "@/components/canvas/ai-edit-cache";
 import { BpmnCanvas, type BpmnCanvasHandle, type CanvasSelection } from "@/components/canvas/bpmn-canvas";
 import { PropertiesPanel } from "@/components/canvas/properties-panel";
-import { RightPanel } from "@/components/canvas/right-panel";
+import { RightPanel, type PanelRequest } from "@/components/canvas/right-panel";
 import type { SelectedObject } from "@/components/canvas/chat-context";
 import { buildCanvasState } from "@/components/canvas/layout";
 import { reviewByNodeMap } from "@/components/canvas/review-summary";
@@ -69,6 +69,7 @@ export default function CanvasPage() {
   // varies. Lifting it to the page so the Properties panel can shift as
   // the right panel changes width.
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [panelRequest, setPanelRequest] = useState<PanelRequest | null>(null);
   // Properties panel collapse state lifted so the page can resize the
   // wrapper to a small button when collapsed.
   const [propertiesCollapsed, setPropertiesCollapsed] = useState(true);
@@ -422,6 +423,10 @@ export default function CanvasPage() {
           onNodeDeleted={handleNodeDeleted}
           onCountsChange={handleCountsChange}
           onOpenProperties={() => setPropertiesCollapsed(false)}
+          onShowPendingReasons={() => {
+            setRightCollapsed(false);
+            setPanelRequest({ tab: "changelog", logView: "pending", nonce: Date.now() });
+          }}
           onDrillIntoNode={handleDrillIntoNode}
           // Screen pixels on the right covered by floating panels, so new
           // steps are scrolled into the part of the canvas you can see.
@@ -532,6 +537,7 @@ export default function CanvasPage() {
             onCollapsedChange={setRightCollapsed}
             onApplySuggestions={handleApplySuggestions}
             graph={data}
+            request={panelRequest}
           />
         </div>
       )}

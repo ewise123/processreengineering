@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
-import { reasonChips } from "./auto-reason";
+import { PENDING_REASON, reasonChips } from "./auto-reason";
 import { REASON_PROMPT_DESCRIPTION } from "./delete-reason";
 import type { ReasonPromptState } from "./use-reason-prompt";
 
@@ -101,6 +101,15 @@ export function ReasonPromptDialog({
           Use this reason for my next changes
         </label>
         <DialogFooter>
+          <Button
+            variant="ghost"
+            className="mr-auto text-slate-600"
+            onClick={() => submit(PENDING_REASON)}
+            title="Save the change now and give its reason later, from the Change Log"
+            data-explain-later
+          >
+            Explain later
+          </Button>
           <Button variant="outline" onClick={cancel}>
             Cancel
           </Button>

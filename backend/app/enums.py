@@ -252,6 +252,7 @@ class ChangeKind(StrEnum):
     RESTORE = "restore"
     FLAG_STALE = "flag_stale"
     RECITE = "recite"
+    EXPLAIN = "explain"
 
 
 class ChangeSource(StrEnum):

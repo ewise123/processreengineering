@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.models.change_event import ChangeEvent as ChangeEventModel
 
@@ -25,6 +25,10 @@ class ChangeEventRead(BaseModel):
     reasoning_trace: Any | None
     source: str
     version_id: UUID | None
+    # An `explain` event names the change it explains; that change carries
+    # the reason it was later given.
+    explains_id: UUID | None = None
+    explained_reason: str | None = None
 
     @computed_field  # type: ignore[misc]
     @property
@@ -50,6 +54,7 @@ class ChangeEventRead(BaseModel):
             after=ev.after,
             cited_claim_ids=cited,
             reasoning_trace=ev.reasoning_trace,
+            explains_id=ev.explains_id,
             source=ev.source,
             version_id=ev.version_id,
         )
@@ -60,3 +65,10 @@ class ChangeLogPage(BaseModel):
 
     items: list[ChangeEventRead]
     next_cursor: str | None
+
+
+class ExplainRequest(BaseModel):
+    """Give several changes that were saved as "Awaiting reason" one reason."""
+
+    event_ids: list[UUID] = Field(min_length=1, max_length=200)
+    reason: str = Field(max_length=2000)

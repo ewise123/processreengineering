@@ -621,6 +621,10 @@ export interface ChangeEvent {
   reasoning_trace: unknown;
   source: ChangeSource;
   version_id: UUID | null;
+  /** On an "explain" event: the change it gives a reason to. */
+  explains_id?: UUID | null;
+  /** On a change saved as "Awaiting reason": the reason it was later given. */
+  explained_reason?: string | null;
 }
 
 export const INPUT_TYPES = [

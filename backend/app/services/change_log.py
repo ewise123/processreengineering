@@ -14,6 +14,10 @@ NODE_SEMANTIC_FIELDS: dict[str, ChangeKind] = {
     "lane_id": ChangeKind.RELANE,
 }
 
+# The reason a change carries when the user chose to explain it later. An
+# `explain` event pointing at it supplies the real reason.
+PENDING_REASON = "Awaiting reason"
+
 _KIND_PRIORITY = [
     ChangeKind.DELETE,
     ChangeKind.CREATE,

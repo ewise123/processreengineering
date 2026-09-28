@@ -12,6 +12,7 @@ import {
   type MouseEvent,
 } from "react";
 
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
@@ -130,7 +131,7 @@ import { ReasonPromptDialog } from "./reason-prompt-dialog";
 import { useClipboard, type ClipboardSnapshot } from "./use-clipboard";
 import { useGraphPersistence, type SaveStatus } from "./use-persistence";
 import { useReasonPrompt, type ReasonPromptOptions } from "./use-reason-prompt";
-import { pickAutoReason, type ReasonTarget } from "./auto-reason";
+import { PENDING_REASON, pickAutoReason, type ReasonTarget } from "./auto-reason";
 import { ReasonSwitcher } from "./reason-switcher";
 import { useUndoStack, type UndoAction } from "./use-undo-stack";
 
@@ -358,6 +359,8 @@ interface BpmnCanvasProps {
   onCountsChange?: (counts: { lanes: number; nodes: number; edges: number }) => void;
   /** Called when the user clicks the "Properties" pill on a selected node. */
   onOpenProperties?: () => void;
+  /** Open the list of changes still waiting for a reason (Change Log). */
+  onShowPendingReasons?: () => void;
   /** Fires when a node with a child sub-process is double-clicked. The page
    * resolves the child's latest version and routes there. */
   onDrillIntoNode?: (childModelId: UUID) => void;
@@ -400,6 +403,7 @@ function BpmnCanvas({
   onNodeDeleted,
   onCountsChange,
   onOpenProperties,
+  onShowPendingReasons,
   onDrillIntoNode,
   occludedRight = 0,
 }, ref) {
@@ -457,6 +461,34 @@ function BpmnCanvas({
   });
   const reasonPrompt = useReasonPrompt();
   const { promptReason: askReason, currentWorking } = reasonPrompt;
+  // Changes saved as "Awaiting reason", shared with the Change Log's list.
+  const queryClient = useQueryClient();
+  const pendingQuery = useQuery({
+    queryKey: ["pending-reasons", projectId, modelId],
+    queryFn: () => api.getPendingChanges(projectId, modelId),
+  });
+  const pendingCount = pendingQuery.data?.length ?? 0;
+  // A deferred change is saved just after its reason is chosen; look again
+  // once it has landed (the request is usually well under a second).
+  const refreshPending = useCallback(() => {
+    for (const ms of [700, 2000]) {
+      setTimeout(() => {
+        void queryClient.invalidateQueries({ queryKey: ["pending-reasons", projectId, modelId] });
+        void queryClient.invalidateQueries({ queryKey: ["changelog", projectId, modelId] });
+      }, ms);
+    }
+  }, [queryClient, projectId, modelId]);
+  // Leaving with changes still unexplained gets the browser's "Leave site?"
+  // check. They stay listed for next time either way.
+  useEffect(() => {
+    if (pendingCount === 0) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [pendingCount]);
   // What this tab made, and when: changing it within a few minutes needs no
   // typed reason (see auto-reason.ts).
   const freshRef = useRef(new Map<string, number>());
@@ -483,9 +515,11 @@ function BpmnCanvas({
         now: Date.now(),
         rename,
       });
-      return auto ?? askReason(label, boxOptions);
+      const reason = auto ?? (await askReason(label, boxOptions));
+      if (reason === PENDING_REASON) refreshPending();
+      return reason;
     },
-    [askReason, currentWorking]
+    [askReason, currentWorking, refreshPending]
   );
 
   const selectOnly = useCallback((id: string) => setSelectedIds(new Set([id])), []);
@@ -4191,14 +4225,14 @@ function BpmnCanvas({
       )}
 
       <ReasonPromptDialog {...reasonPrompt} />
-      {reasonPrompt.working && (
-        <ReasonSwitcher
-          working={reasonPrompt.working}
-          recent={reasonPrompt.recentReasons}
-          onSwitch={reasonPrompt.setWorking}
-          onStop={reasonPrompt.stopWorking}
-        />
-      )}
+      <ReasonSwitcher
+        working={reasonPrompt.working}
+        recent={reasonPrompt.recentReasons}
+        pendingCount={pendingCount}
+        onSwitch={reasonPrompt.setWorking}
+        onStop={reasonPrompt.stopWorking}
+        onShowPending={() => onShowPendingReasons?.()}
+      />
     </div>
   );
 });
