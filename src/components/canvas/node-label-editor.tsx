@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { THEME } from "./canvas-theme";
 import type { DraftTrigger } from "./draft-step";
@@ -43,13 +43,31 @@ export function NodeLabelEditor({
     el.select();
   }, []);
 
+  const isTask = kind !== "start" && kind !== "end" && kind !== "intermediate" && kind !== "gateway";
+
+  // Keep the name vertically centred in a task's box however many lines it
+  // wraps to: measure the text with no top padding, then split what's left.
+  // A fixed padding only centres one line; a second line pushed it low.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || !isTask) return;
+    const boxH = el.clientHeight;
+    // scrollHeight never reports less than the box, so collapse it to read
+    // the text's own height, then restore.
+    const height = el.style.height;
+    el.style.paddingTop = "0px";
+    el.style.height = "0px";
+    const text = el.scrollHeight;
+    el.style.height = height;
+    el.style.paddingTop = `${Math.max(0, Math.floor((boxH - text) / 2))}px`;
+  }, [value, isTask]);
+
   const settle = (fn: () => void) => {
     if (settled.current) return;
     settled.current = true;
     fn();
   };
 
-  const isTask = kind !== "start" && kind !== "end" && kind !== "intermediate" && kind !== "gateway";
   const box = isTask
     ? { x: rect.x + 4, y: rect.y + 4, w: rect.w - 8, h: rect.h - 8 }
     : kind === "gateway"
@@ -98,8 +116,9 @@ export function NodeLabelEditor({
           borderRadius: isTask ? 7 : 6,
           outline: "none",
           boxShadow: `0 0 0 3px ${THEME.selectionHalo}`,
-          // Vertically centre a one-line name in the task box.
-          paddingTop: isTask ? Math.max(0, (rect.h - 8) / 2 - 10) : undefined,
+          // Task boxes: top padding is set from the text's height (above).
+          paddingBottom: 0,
+          boxSizing: "border-box",
           overflow: "hidden",
         }}
       />
