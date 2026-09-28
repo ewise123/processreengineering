@@ -5,10 +5,11 @@
  * `measureLaneLabel`, which asks the browser how wide the text renders.
  */
 
-/** Top of the strip kept for the expand arrow (4 px inset + 16 px button + 4). */
-export const COLLAPSED_TOGGLE_ZONE = 24;
-/** Room left under the end of the name. */
-export const COLLAPSED_END_PAD = 10;
+/** Where the visible expand arrow ends, from the top of the strip: a 12 px
+ * chevron centred in a 16 px button 4 px down, drawn in its middle half. */
+export const COLLAPSED_ARROW_BOTTOM = 15;
+/** The same gap between the arrow and the name as after the name. */
+export const COLLAPSED_GAP = 8;
 /** A very long name stops growing the strip here and ends in "…". */
 export const COLLAPSED_LANE_MAX = 260;
 
@@ -19,7 +20,7 @@ const LABEL_WEIGHT = 600;
 /** Collapsed height (world units, measured at 100% zoom) for a name
  * `labelWidth` pixels long. */
 export function collapsedLaneHeight(labelWidth: number): number {
-  const need = Math.ceil(labelWidth) + COLLAPSED_TOGGLE_ZONE + COLLAPSED_END_PAD;
+  const need = Math.ceil(labelWidth) + COLLAPSED_ARROW_BOTTOM + COLLAPSED_GAP * 2;
   return Math.min(COLLAPSED_LANE_MAX, need);
 }
 
