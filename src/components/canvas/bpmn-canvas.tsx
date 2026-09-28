@@ -32,6 +32,17 @@ import { sizeForNodeType } from "./node-type";
 import { isEdgeProposed, placeProposedStep } from "./ai-edit";
 import { laneAccent, MARKER, NODE_SHADOW_FILTER, THEME } from "./canvas-theme";
 import { computeEdgeRoutes } from "./edge-routes";
+import { resolveShortcut, type ShortcutAction } from "./keymap";
+import {
+  boundsOf,
+  contentBounds,
+  fitRect,
+  interpretWheel,
+  scaleAt,
+  zoomAt,
+  type WheelMode,
+} from "./viewport-math";
+import { browserWheelModeStore } from "./wheel-mode";
 import { roundedPath } from "./rounded-path";
 import { edgeFocusCenter } from "./edge-focus";
 import { normalizeMarquee, nodesInMarquee, edgesInMarquee } from "./selection";
@@ -74,8 +85,6 @@ const COLLAPSED_LANE_HEIGHT = 28;
 
 const PASTE_OFFSET = 24;
 
-const MIN_SCALE = 0.2;
-const MAX_SCALE = 2.5;
 const ZOOM_STEP = 1.2;
 
 type Drag =
@@ -268,6 +277,22 @@ function BpmnCanvas({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [drag, setDrag] = useState<Drag | null>(null);
   const [tool, setTool] = useState<CanvasTool>("select");
+  // Mouse/Trackpad scroll setting. Starts at the default and is read from
+  // storage after mount, so server and first client render agree.
+  const [wheelMode, setWheelMode] = useState<WheelMode>("trackpad");
+  const wheelModeRef = useRef<WheelMode>("trackpad");
+  wheelModeRef.current = wheelMode;
+  const wheelModeStore = useMemo(() => browserWheelModeStore(), []);
+  useEffect(() => {
+    setWheelMode(wheelModeStore.load());
+  }, [wheelModeStore]);
+  const changeWheelMode = useCallback(
+    (next: WheelMode) => {
+      setWheelMode(next);
+      wheelModeStore.save(next);
+    },
+    [wheelModeStore]
+  );
   const [showIssues, setShowIssues] = useState(true);
   const [reviewMode, setReviewMode] = useState(false);
   const [editingEdgeId, setEditingEdgeId] = useState<UUID | null>(null);
@@ -1177,9 +1202,13 @@ function BpmnCanvas({
   // and moveSelectionToLaneImpl, so those callbacks can be listed in its
   // dependency array without a temporal-dead-zone reference.
 
-  // Keyboard shortcuts: Delete/Backspace to delete; Cmd/Ctrl+Z and
-  // Cmd/Ctrl+Shift+Z (or Cmd/Ctrl+Y) for undo/redo. All of them no-op
-  // when the user is typing in an input/textarea/contenteditable.
+  // Keyboard shortcuts. `resolveShortcut` (./keymap) maps a key to an action;
+  // this handler owns the context: nothing fires while typing in a field, and
+  // Space-to-pan only claims the key while the pointer is over the canvas.
+  // Actions are read through `shortcutActionsRef` (filled in once every
+  // callback exists, further down) so this listener is registered once and
+  // never goes stale.
+  const shortcutActionsRef = useRef<Partial<Record<ShortcutAction, () => void>>>({});
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -1187,6 +1216,7 @@ function BpmnCanvas({
         !!target &&
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
           target.isContentEditable);
       if (inEditable) return;
 
@@ -1199,52 +1229,19 @@ function BpmnCanvas({
         return;
       }
 
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && (e.key === "z" || e.key === "Z")) {
-        e.preventDefault();
-        if (e.shiftKey) {
-          void redo();
-        } else {
-          void undo();
-        }
+      const action = resolveShortcut(e);
+      if (!action) return;
+      if (action === "delete" && selectedIdsRef.current.size === 0) return;
+      if (action === "escape" && contextMenuRef.current) {
+        setContextMenu(null);
         return;
       }
-      if (mod && (e.key === "y" || e.key === "Y")) {
-        e.preventDefault();
-        void redo();
-        return;
-      }
-      if (mod && (e.key === "c" || e.key === "C")) {
-        e.preventDefault();
-        copySelectionImpl();
-        return;
-      }
-      if (mod && (e.key === "v" || e.key === "V")) {
-        e.preventDefault();
-        void pasteClipboardImpl();
-        return;
-      }
-
-      if (!mod) {
-        if (e.key === "v" || e.key === "V") { setTool("select"); return; }
-        if (e.key === "h" || e.key === "H") { setTool("pan"); return; }
-        if (e.key === "c" || e.key === "C") { setTool("connect"); return; }
-        if (e.key === "Escape") {
-          if (contextMenuRef.current) {
-            setContextMenu(null);
-            return;
-          }
-          setTool("select");
-          clearSelection();
-          return;
-        }
-      }
-
-      if (e.key === "Delete" || e.key === "Backspace") {
-        if (selectedIdsRef.current.size === 0) return;
-        e.preventDefault();
-        void deleteSelectionImpl();
-      }
+      const run = shortcutActionsRef.current[action];
+      if (!run) return;
+      // Claim the key so the browser doesn't also act on it (page zoom on
+      // Mod+=, select-all text on Mod+A, back-navigation on Backspace).
+      e.preventDefault();
+      run();
     };
     const upHandler = (e: KeyboardEvent) => {
       if (e.code === "Space") spaceHeld.current = false;
@@ -1255,7 +1252,7 @@ function BpmnCanvas({
       document.removeEventListener("keydown", handler);
       document.removeEventListener("keyup", upHandler);
     };
-  }, [deleteSelectionImpl, undo, redo, clearSelection]);
+  }, []);
 
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
@@ -1426,28 +1423,23 @@ function BpmnCanvas({
     [viewport]
   );
 
-  // Native wheel handler with passive:false so Cmd/Ctrl+wheel zooms the canvas.
+  // Native wheel handler with passive:false so the page never scrolls or
+  // zooms under the canvas. What the wheel does depends on the user's
+  // Mouse/Trackpad setting (see interpretWheel).
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
     const handler = (e: WheelEvent) => {
       e.preventDefault();
       const rect = svg.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
       const v = viewportRef.current;
-      if (e.ctrlKey || e.metaKey) {
-        const delta = -e.deltaY * 0.002;
-        const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale * (1 + delta)));
-        const wx = (mx - v.tx) / v.scale;
-        const wy = (my - v.ty) / v.scale;
-        setViewport({
-          scale: newScale,
-          tx: mx - wx * newScale,
-          ty: my - wy * newScale,
-        });
+      const action = interpretWheel(e, wheelModeRef.current, rect.height);
+      if (action.kind === "zoom") {
+        setViewport(
+          zoomAt(v, action.factor, { x: e.clientX - rect.left, y: e.clientY - rect.top })
+        );
       } else {
-        setViewport({ ...v, tx: v.tx - e.deltaX, ty: v.ty - e.deltaY });
+        setViewport({ ...v, tx: v.tx - action.dx, ty: v.ty - action.dy });
       }
     };
     svg.addEventListener("wheel", handler, { passive: false });
@@ -1972,24 +1964,36 @@ function BpmnCanvas({
     }
   };
 
-  const fitToWorld = useCallback(() => {
+  // Fit frames the map's actual content (lane headers to the right-most
+  // step), not the fixed minimum world width, so a small map fills the screen.
+  const fitContent = useCallback(() => {
     const svg = svgRef.current;
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
-    const padding = 40;
-    const usableW = Math.max(1, rect.width - padding * 2);
-    const usableH = Math.max(1, rect.height - padding * 2);
-    const scale = Math.max(
-      MIN_SCALE,
-      Math.min(MAX_SCALE, Math.min(usableW / worldWidth, usableH / worldHeight))
-    );
-    setViewport({
-      scale,
-      tx: (rect.width - worldWidth * scale) / 2,
-      ty: (rect.height - worldHeight * scale) / 2,
-    });
+    const box =
+      contentBounds(renderNodesRef.current, displayLanesRef.current) ??
+      { x: 0, y: 0, w: worldWidth, h: worldHeight };
+    setViewport(fitRect(box, { w: rect.width, h: rect.height }, 48, 1));
   }, [worldWidth, worldHeight]);
+
+  const zoomToSelection = useCallback(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const picked = renderNodesRef.current.filter((n) => selectedIdsRef.current.has(n.id));
+    const box = boundsOf(picked);
+    if (!box) return;
+    setViewport(fitRect(box, { w: rect.width, h: rect.height }, 96, 1.5));
+  }, []);
+
+  const zoomReset = useCallback(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    setViewport(scaleAt(viewportRef.current, 1, { x: rect.width / 2, y: rect.height / 2 }));
+  }, []);
 
   // Zoom toward the viewport center, mirroring the wheel handler's anchor math
   // so the +/- buttons keep content centered instead of drifting to the origin.
@@ -1998,13 +2002,7 @@ function BpmnCanvas({
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
-    const v = viewportRef.current;
-    const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale * factor));
-    const cx = rect.width / 2;
-    const cy = rect.height / 2;
-    const wx = (cx - v.tx) / v.scale;
-    const wy = (cy - v.ty) / v.scale;
-    setViewport({ scale: newScale, tx: cx - wx * newScale, ty: cy - wy * newScale });
+    setViewport(zoomAt(viewportRef.current, factor, { x: rect.width / 2, y: rect.height / 2 }));
   }, []);
 
   // Low-level mutator used by undo/redo callbacks for node moves. Bypasses
@@ -2312,12 +2310,35 @@ function BpmnCanvas({
             onSelect: () =>
               setSelectedIds(new Set(renderNodesRef.current.map((n) => n.id))),
           },
-          { label: "Fit to screen", onSelect: fitToWorld },
+          { label: "Fit to screen", onSelect: fitContent },
         ],
       });
     },
-    [clipboard, pasteClipboardImpl, fitToWorld]
+    [clipboard, pasteClipboardImpl, fitContent]
   );
+
+  // Everything the keyboard can trigger, refreshed each render so the
+  // once-registered key listener always calls current callbacks.
+  shortcutActionsRef.current = {
+    undo: () => void undo(),
+    redo: () => void redo(),
+    copy: copySelectionImpl,
+    paste: () => void pasteClipboardImpl(),
+    "select-all": () => setSelectedIds(new Set(renderNodesRef.current.map((n) => n.id))),
+    "tool-select": () => setTool("select"),
+    "tool-pan": () => setTool("pan"),
+    "tool-connect": () => setTool("connect"),
+    escape: () => {
+      setTool("select");
+      clearSelection();
+    },
+    delete: () => void deleteSelectionImpl(),
+    "zoom-in": () => zoomByStep(ZOOM_STEP),
+    "zoom-out": () => zoomByStep(1 / ZOOM_STEP),
+    "zoom-reset": zoomReset,
+    fit: fitContent,
+    "zoom-selection": zoomToSelection,
+  };
 
   const moveLaneLocal = useCallback(
     (laneId: string, targetIdx: number) => {
@@ -2384,18 +2405,18 @@ function BpmnCanvas({
     [markLane]
   );
 
-  const resizeLane = useCallback(
-    (laneId: string, newH: number) => {
-      const old = lanesRef.current.find((l) => l.id === laneId);
-      if (!old) return;
-      const oldH = old.h;
-      const clamped = Math.max(MIN_LANE_HEIGHT, Math.round(newH));
-      if (clamped === oldH) return;
-      resizeLaneLocal(laneId, clamped);
+  // The lane rail previews heights through `resizeLaneLocal` while dragging
+  // and calls this once on release, so a whole drag is one undo step.
+  const commitLaneResize = useCallback(
+    (laneId: string, fromH: number, toH: number) => {
+      const from = Math.max(MIN_LANE_HEIGHT, Math.round(fromH));
+      const to = Math.max(MIN_LANE_HEIGHT, Math.round(toH));
+      resizeLaneLocal(laneId, to);
+      if (to === from) return;
       record({
         description: "Resize lane",
-        do: () => resizeLaneLocal(laneId, clamped),
-        undo: () => resizeLaneLocal(laneId, oldH),
+        do: () => resizeLaneLocal(laneId, to),
+        undo: () => resizeLaneLocal(laneId, from),
       });
     },
     [resizeLaneLocal, record]
@@ -2833,7 +2854,8 @@ function BpmnCanvas({
         lanes={displayLanes}
         viewport={viewport}
         onMoveLane={moveLane}
-        onResizeLane={resizeLane}
+        onResizeLanePreview={resizeLaneLocal}
+        onResizeLane={commitLaneResize}
         onRenameLane={renameLane}
         onAddLaneAt={addLaneAt}
         onDeleteLane={deleteLane}
@@ -2851,7 +2873,9 @@ function BpmnCanvas({
         viewport={viewport}
         onZoomIn={() => zoomByStep(ZOOM_STEP)}
         onZoomOut={() => zoomByStep(1 / ZOOM_STEP)}
-        onFit={fitToWorld}
+        onFit={fitContent}
+        wheelMode={wheelMode}
+        onWheelModeChange={changeWheelMode}
         showIssues={showIssues}
         onShowIssuesChange={setShowIssues}
         reviewMode={reviewMode}

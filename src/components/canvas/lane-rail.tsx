@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
+import { laneAccent, THEME } from "./canvas-theme";
 import { LANE_PALETTE } from "./layout";
 import type { CanvasLane, Viewport } from "./types";
 
@@ -25,6 +26,7 @@ export function LaneRail({
   viewport,
   onMoveLane,
   onResizeLane,
+  onResizeLanePreview,
   onRenameLane,
   onAddLaneAt,
   onDeleteLane,
@@ -35,7 +37,10 @@ export function LaneRail({
   lanes: CanvasLane[];
   viewport: Viewport;
   onMoveLane: (laneId: string, targetIndex: number) => void;
-  onResizeLane: (laneId: string, newH: number) => void;
+  /** Live height while dragging the resize handle; not an undo step. */
+  onResizeLanePreview: (laneId: string, newH: number) => void;
+  /** Drag finished: record one undo step from `fromH` to `toH`. */
+  onResizeLane: (laneId: string, fromH: number, toH: number) => void;
   onRenameLane: (laneId: string, newName: string) => void;
   onAddLaneAt: (index: number) => void;
   onDeleteLane: (laneId: string) => void;
@@ -49,6 +54,7 @@ export function LaneRail({
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [resizeState, setResizeState] = useState<ResizeState | null>(null);
+  const resizeLastH = useRef(0);
 
   const railTop = () => railRef.current?.getBoundingClientRect().top ?? 0;
 
@@ -101,20 +107,31 @@ export function LaneRail({
   // Resize drag
   useEffect(() => {
     if (!resizeState) return;
+    // Preview on every move; commit once on release, so one drag is one undo
+    // step instead of one per mousemove. The latest height lives in a ref:
+    // each preview re-renders the canvas, which can re-run this effect, and a
+    // local variable would reset to the start height and undo the drag.
     const onMove = (e: MouseEvent) => {
       const dy = (e.clientY - resizeState.startY) / viewport.scale;
-      onResizeLane(resizeState.laneId, resizeState.startH + dy);
+      resizeLastH.current = resizeState.startH + dy;
+      onResizeLanePreview(resizeState.laneId, resizeLastH.current);
     };
-    const onUp = () => setResizeState(null);
+    const onUp = () => {
+      onResizeLane(resizeState.laneId, resizeState.startH, resizeLastH.current);
+      setResizeState(null);
+    };
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
     return () => {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
     };
-  }, [resizeState, viewport, onResizeLane]);
+  }, [resizeState, viewport, onResizeLane, onResizeLanePreview]);
 
-  const railLeft = viewport.tx;
+  // Headers stay pinned to the left edge when the map is panned right, so you
+  // never lose track of which lane you're in.
+  const railLeft = Math.max(0, viewport.tx);
+  const railStuck = viewport.tx < 0;
   const headerW = HEADER_PX * viewport.scale;
 
   return (
@@ -158,7 +175,9 @@ export function LaneRail({
                     : "Add lane here"
               }
               className="opacity-0 group-hover:opacity-100 transition absolute top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-indigo-500 hover:bg-indigo-600 text-white shadow flex items-center justify-center"
-              style={{ zIndex: 2, left: `${headerW / 2 - 10}px` }}
+              // Just right of the header, at the start of the insert line —
+              // not on the header, where it used to cover the lane-resize handle.
+              style={{ zIndex: 2, left: `${headerW + 4}px` }}
             >
               <svg
                 width="10"
@@ -173,7 +192,7 @@ export function LaneRail({
             </button>
             <div
               className="opacity-0 group-hover:opacity-100 transition absolute top-1/2 h-[2px] -translate-y-1/2 bg-indigo-300"
-              style={{ left: `${headerW}px`, right: 0 }}
+              style={{ left: `${headerW + 26}px`, right: 0 }}
             />
           </div>
         );
@@ -205,8 +224,20 @@ export function LaneRail({
               zIndex: isDragging ? 5 : 1,
               boxShadow: isDragging
                 ? "0 8px 24px -6px rgba(15,23,42,0.25)"
-                : "none",
-              background: isDragging ? lane.color : "transparent",
+                : railStuck
+                  ? "2px 0 6px -2px rgba(15,23,42,0.18)"
+                  : "none",
+              // Pinned over panned content: paint an opaque strip (the canvas
+              // strip underneath has scrolled away) so steps don't show through.
+              background: isDragging
+                ? lane.color
+                : railStuck
+                  ? `color-mix(in srgb, ${lane.color} 60%, white)`
+                  : "transparent",
+              borderLeft: railStuck && !isDragging
+                ? `${THEME.laneAccentWidth}px solid ${laneAccent(lane.color)}`
+                : undefined,
+              boxSizing: "border-box",
               borderRadius: isDragging ? 4 : 0,
             }}
           >
@@ -584,6 +615,7 @@ export function LaneRail({
                 onMouseDown={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
+                  resizeLastH.current = lane.h;
                   setResizeState({
                     laneId: lane.id,
                     startY: e.clientY,
@@ -594,8 +626,10 @@ export function LaneRail({
                   position: "absolute",
                   left: 0,
                   right: 0,
-                  bottom: -3,
-                  height: 6,
+                  // Entirely inside this lane's header: straddling the
+                  // boundary put its lower half under the next lane's header.
+                  bottom: 0,
+                  height: 7,
                   cursor: "ns-resize",
                   zIndex: 3,
                 }}

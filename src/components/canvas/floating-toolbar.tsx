@@ -4,6 +4,7 @@ import { Hand } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type { Viewport } from "./types";
+import type { WheelMode } from "./viewport-math";
 
 export type CanvasTool = "select" | "pan" | "connect";
 
@@ -14,6 +15,8 @@ export function FloatingToolbar({
   onZoomIn,
   onZoomOut,
   onFit,
+  wheelMode,
+  onWheelModeChange,
   showIssues,
   onShowIssuesChange,
   reviewMode,
@@ -30,6 +33,9 @@ export function FloatingToolbar({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
+  /** What a plain scroll wheel does: pan (trackpad) or zoom (mouse). */
+  wheelMode: WheelMode;
+  onWheelModeChange: (next: WheelMode) => void;
   showIssues: boolean;
   onShowIssuesChange: (next: boolean) => void;
   reviewMode: boolean;
@@ -97,7 +103,7 @@ export function FloatingToolbar({
             <path d="M9 14l-4-4 4-4M5 10h9a5 5 0 015 5v1" />
           </svg>
         </ToolButton>
-        <ToolButton onClick={onRedo} disabled={!canRedo} title="Redo">
+        <ToolButton onClick={onRedo} disabled={!canRedo} title="Redo (⌘⇧Z)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
             <path d="M15 14l4-4-4-4M19 10h-9a5 5 0 00-5 5v1" />
           </svg>
@@ -105,7 +111,7 @@ export function FloatingToolbar({
       </Group>
 
       <Group rightDivider>
-        <PlainButton onClick={onZoomOut} title="Zoom out">
+        <PlainButton onClick={onZoomOut} title="Zoom out (⌘−)">
           −
         </PlainButton>
         <div
@@ -120,15 +126,37 @@ export function FloatingToolbar({
         >
           {zoomPct}%
         </div>
-        <PlainButton onClick={onZoomIn} title="Zoom in">
+        <PlainButton onClick={onZoomIn} title="Zoom in (⌘=)">
           +
         </PlainButton>
         <PlainButton
           onClick={onFit}
-          title="Fit swimlanes to view"
+          title="Fit the map on screen (Shift+1)"
           style={{ fontSize: 11, padding: "0 8px" }}
         >
           Fit
+        </PlainButton>
+        <PlainButton
+          onClick={() => onWheelModeChange(wheelMode === "mouse" ? "trackpad" : "mouse")}
+          title={
+            wheelMode === "mouse"
+              ? "Scroll wheel zooms (Shift+scroll pans). Click to switch to trackpad scrolling."
+              : "Scrolling pans, pinch zooms. Click to switch to mouse-wheel zoom."
+          }
+          ariaLabel={`Scroll mode: ${wheelMode}`}
+          style={{ fontSize: 11, padding: "0 8px", gap: 5 }}
+        >
+          {wheelMode === "mouse" ? (
+            <svg width="12" height="14" viewBox="0 0 12 16" fill="none" stroke="currentColor" strokeWidth={1.6}>
+              <rect x="1" y="1" width="10" height="14" rx="5" />
+              <path d="M6 4v3" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="15" height="12" viewBox="0 0 18 14" fill="none" stroke="currentColor" strokeWidth={1.6}>
+              <rect x="1" y="1" width="16" height="12" rx="2.5" />
+            </svg>
+          )}
+          {wheelMode === "mouse" ? "Mouse" : "Trackpad"}
         </PlainButton>
       </Group>
 
@@ -267,11 +295,13 @@ function ToolButton({
 function PlainButton({
   onClick,
   title,
+  ariaLabel,
   children,
   style,
 }: {
   onClick?: () => void;
   title?: string;
+  ariaLabel?: string;
   children: ReactNode;
   style?: React.CSSProperties;
 }) {
@@ -279,6 +309,7 @@ function PlainButton({
     <button
       onClick={onClick}
       title={title}
+      aria-label={ariaLabel}
       style={{
         height: 32,
         minWidth: 28,
