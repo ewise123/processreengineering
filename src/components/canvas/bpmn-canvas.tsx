@@ -84,6 +84,7 @@ import { computeSnap, guidesFor, type Box } from "./snap";
 import { alignItems, type AlignCommand } from "./align";
 import { routesToReset, type RouteReset } from "./routes";
 import { anchorToolbar } from "./toolbar-anchor";
+import { collapsedLaneHeight, measureLaneLabel } from "./lane-label";
 import { SelectionToolbar } from "./selection-toolbar";
 import { ShortcutsPanel } from "./shortcuts-panel";
 import { MinimapView } from "./minimap-view";
@@ -125,7 +126,6 @@ import { useUndoStack, type UndoAction } from "./use-undo-stack";
 const WORLD_WIDTH_MIN = 1700;
 const WORLD_RIGHT_PADDING = 240;
 const MIN_LANE_HEIGHT = 90;
-const COLLAPSED_LANE_HEIGHT = 28;
 
 const PASTE_OFFSET = 24;
 
@@ -1490,13 +1490,14 @@ function BpmnCanvas({
     return Math.max(WORLD_WIDTH_MIN, maxX + WORLD_RIGHT_PADDING);
   }, [nodes]);
 
-  // Lane geometry as shown on screen: collapsed lanes shrink to a thin strip.
+  // Lane geometry as shown on screen: collapsed lanes shrink to a strip just
+  // tall enough for their name (lane-label.ts).
   // The real `lanes` (true heights) are kept for persistence; only display
   // geometry changes, so expanding restores the stored height.
   const displayLanes = useMemo(() => {
     let y = 0;
     return lanes.map((l) => {
-      const h = collapsedLaneIds.has(l.id) ? COLLAPSED_LANE_HEIGHT : l.h;
+      const h = collapsedLaneIds.has(l.id) ? collapsedLaneHeight(measureLaneLabel(l.label)) : l.h;
       const out = { ...l, y, h };
       y += h;
       return out;
@@ -1869,12 +1870,11 @@ function BpmnCanvas({
               (n.laneId
                 ? currLanes.find((l) => l.id === n.laneId)
                 : currLanes[0]);
-            // Never re-lane into a collapsed (hidden) lane: maxRel would be 0,
-            // stranding the node in the 28px strip and clobbering its real
-            // relativeY. (Real lanes are >= MIN_LANE_HEIGHT (90); only a
-            // collapsed display-lane has h === COLLAPSED_LANE_HEIGHT.) Keep the
-            // node's current lane/relativeY; only x changes.
-            if (!targetLane || targetLane.h === COLLAPSED_LANE_HEIGHT) {
+            // Never re-lane into a collapsed (hidden) lane: its strip is only
+            // as tall as its name, which would strand the node there and
+            // clobber its real relativeY. Keep the node's current
+            // lane/relativeY; only x changes.
+            if (!targetLane || collapsedLaneIdsRef.current.has(targetLane.id)) {
               return { ...n, x: newX };
             }
             const maxRel = Math.max(0, targetLane.h - n.h);
@@ -3183,7 +3183,7 @@ function BpmnCanvas({
     const selected = nodesRef.current.filter(
       (n) =>
         selectedIdsRef.current.has(n.id) &&
-        !(n.laneId && lanesById.get(n.laneId)?.h === COLLAPSED_LANE_HEIGHT)
+        !(n.laneId && collapsedLaneIdsRef.current.has(n.laneId))
     );
     // Nothing to move: leave the arrows to scroll the page.
     if (selected.length === 0) return false;

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { laneAccent, THEME } from "./canvas-theme";
 import { LANE_PALETTE } from "./layout";
+import { COLLAPSED_END_PAD, COLLAPSED_TOGGLE_ZONE } from "./lane-label";
 import type { CanvasLane, Viewport } from "./types";
 
 const HEADER_PX = 44;
@@ -202,6 +203,7 @@ export function LaneRail({
       {lanes.map((lane, i) => {
         const top = viewport.ty + lane.y * viewport.scale;
         const height = lane.h * viewport.scale;
+        const collapsed = collapsedLaneIds.has(lane.id);
         const isHover = hoverId === lane.id;
         const isEditing = editingId === lane.id;
         const isMenu = menuFor === lane.id;
@@ -289,6 +291,9 @@ export function LaneRail({
               style={{
                 position: "absolute",
                 inset: 0,
+                // Collapsed: the name starts below the expand arrow instead of
+                // centring over it (the strip is sized to fit — lane-label.ts).
+                top: collapsed ? COLLAPSED_TOGGLE_ZONE : 0,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -347,7 +352,9 @@ export function LaneRail({
                     // lane axis, so this guarantees it never bleeds into
                     // adjacent lanes regardless of zoom. Resize the lane
                     // taller for longer labels.
-                    maxWidth: `${Math.max(40, height - 16)}px`,
+                    maxWidth: collapsed
+                      ? `${Math.max(16, height - COLLAPSED_TOGGLE_ZONE - COLLAPSED_END_PAD)}px`
+                      : `${Math.max(40, height - 16)}px`,
                     cursor: "text",
                     userSelect: "none",
                   }}
