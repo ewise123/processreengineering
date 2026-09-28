@@ -24,7 +24,8 @@ export type ShortcutAction =
   | "fit"
   | "zoom-selection"
   | "next-step"
-  | "rename";
+  | "rename"
+  | "nudge";
 
 export interface KeyInput {
   key: string;
@@ -55,6 +56,7 @@ export const SHORTCUTS: Shortcut[] = [
   { action: "escape", keys: "Esc", label: "Back to Select, clear selection", group: "Tools" },
   { action: "next-step", keys: "Tab", label: "Add the next step after the selected one", group: "Edit" },
   { action: "rename", keys: "Enter", label: "Rename the selected step or connector (also F2)", group: "Edit" },
+  { action: "nudge", keys: "Arrows", label: "Nudge the selection (Shift: one grid cell)", group: "Edit" },
   { action: "undo", keys: "Mod+Z", label: "Undo", group: "Edit" },
   { action: "redo", keys: "Mod+Shift+Z", label: "Redo", group: "Edit" },
   { action: "copy", keys: "Mod+C", label: "Copy", group: "Edit" },
@@ -95,5 +97,7 @@ export function resolveShortcut(ev: KeyInput): ShortcutAction | null {
   if (k === "Tab" && !ev.shiftKey) return "next-step";
   if ((k === "Enter" && !ev.shiftKey) || k === "F2") return "rename";
   if (k === "Delete" || k === "Backspace") return "delete";
+  // Shift only changes the distance; the caller reads it from the event.
+  if (k === "ArrowLeft" || k === "ArrowRight" || k === "ArrowUp" || k === "ArrowDown") return "nudge";
   return null;
 }

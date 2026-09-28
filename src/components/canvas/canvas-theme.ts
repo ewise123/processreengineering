@@ -25,6 +25,8 @@ export const THEME = {
 
   selection: "#2563eb",
   selectionHalo: "rgba(37, 99, 235, 0.16)",
+  /** Alignment guides while dragging: distinct from selection blue. */
+  guide: "#db2777",
 
   edge: "#64748b",
   edgeWidth: 1.75,

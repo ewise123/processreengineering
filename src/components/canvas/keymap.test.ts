@@ -68,6 +68,14 @@ describe("resolveShortcut — fast creation keys", () => {
   });
 });
 
+describe("resolveShortcut — nudging", () => {
+  it("arrows nudge, with or without Shift, but not with Ctrl/Cmd", () => {
+    expect(resolveShortcut(press("ArrowLeft"))).toBe("nudge");
+    expect(resolveShortcut(press("ArrowDown", { shiftKey: true }))).toBe("nudge");
+    expect(resolveShortcut(press("ArrowRight", { metaKey: true }))).toBeNull();
+  });
+});
+
 describe("resolveShortcut — leaves other keys alone", () => {
   it("ignores Alt/Option combinations (text input on a Mac)", () => {
     expect(resolveShortcut(press("z", { metaKey: true, altKey: true }))).toBeNull();
