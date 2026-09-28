@@ -28,10 +28,13 @@ export const THEME = {
   /** Alignment guides while dragging: distinct from selection blue. */
   guide: "#db2777",
 
-  edge: "#64748b",
-  edgeWidth: 1.75,
+  edge: "#0f172a",
+  edgeWidth: 2.25,
   edgeHover: "rgba(100, 116, 139, 0.22)",
-  edgeSelectedWidth: 2.25,
+  edgeSelectedWidth: 2.75,
+  /** Glow around a selected connector; the line itself keeps its colour. */
+  edgeSelectedHalo: "rgba(37, 99, 235, 0.3)",
+  edgeSelectedHaloWidth: 9,
   rework: "#d97706",
   reworkDash: "6 4",
   proposed: "#7c3aed",
@@ -59,6 +62,47 @@ export const MARKER = {
 } as const;
 
 export const NODE_SHADOW_FILTER = "poet-node-shadow";
+
+/** Connector ink colours. Darker than the pastel lane colours so a line
+ * reads at every zoom. Black is the default: a connector with no colour
+ * stored draws black, and picking Black stores "no colour". */
+export const CONNECTOR_PALETTE = [
+  { name: "Black", color: "#0f172a" },
+  { name: "Slate", color: "#64748b" },
+  { name: "Blue", color: "#1d4ed8" },
+  { name: "Green", color: "#15803d" },
+  { name: "Red", color: "#b91c1c" },
+  { name: "Orange", color: "#c2410c" },
+  { name: "Purple", color: "#7e22ce" },
+  { name: "Teal", color: "#0f766e" },
+] as const;
+
+export const DEFAULT_CONNECTOR = CONNECTOR_PALETTE[0].color;
+
+/** What to store for a picked colour: null for the default (Black). */
+export function storedConnectorColor(picked: string): string | null {
+  return picked.toLowerCase() === DEFAULT_CONNECTOR ? null : picked.toLowerCase();
+}
+
+/**
+ * A connector's line colour. An AI-proposed connector is always purple until
+ * it's accepted; otherwise its own colour wins; a rework loop with none is
+ * amber; everything else is black.
+ */
+export function edgeStroke(
+  edge: { color?: string | null; kind?: "flow" | "rework" },
+  opts: { proposed?: boolean } = {}
+): string {
+  if (opts.proposed) return THEME.proposed;
+  if (edge.color) return edge.color.toLowerCase();
+  if (edge.kind === "rework") return THEME.rework;
+  return DEFAULT_CONNECTOR;
+}
+
+/** The arrowhead marker drawn in `color` (defined in the canvas <defs>). */
+export function markerIdFor(color: string): string {
+  return `poet-arrow-c${color.replace("#", "").toLowerCase()}`;
+}
 
 function hexToRgb(hex: string): [number, number, number] | null {
   const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());

@@ -4,7 +4,7 @@ import { useState, type MouseEvent } from "react";
 
 import type { IssueSeverity, UUID } from "@/lib/types";
 
-import { MARKER, NODE_SHADOW_FILTER, THEME } from "./canvas-theme";
+import { edgeStroke, markerIdFor, NODE_SHADOW_FILTER, THEME } from "./canvas-theme";
 import type { ConnectSide, EdgeOrientation } from "./edge-path";
 import type { EdgeRoute } from "./edge-routes";
 import { roundedPath } from "./rounded-path";
@@ -421,7 +421,9 @@ export function EdgeArrow({
   /** True when either end is an AI-proposed step. */
   proposed: boolean;
   selected: boolean;
-  onClick: (id: string) => void;
+  /** `shift` is true for Shift+click, which adds to (or removes from) the
+   * selection instead of replacing it — the same as for steps. */
+  onClick: (id: string, shift: boolean) => void;
   onDoubleClick?: (id: string) => void;
   onContextMenu?: (e: MouseEvent, id: string) => void;
   /** Fires when the user grabs the middle segment of a selected edge. */
@@ -436,21 +438,11 @@ export function EdgeArrow({
   const { orientation, midSegment, labelAt } = route;
   const d = roundedPath(route.points);
 
-  const stroke = selected
-    ? THEME.selection
-    : isRework
-      ? THEME.rework
-      : proposed
-        ? THEME.proposed
-        : THEME.edge;
-  const marker = selected
-    ? MARKER.selected
-    : isRework
-      ? MARKER.rework
-      : proposed
-        ? MARKER.proposed
-        : MARKER.default;
-  const dash = isRework ? THEME.reworkDash : !selected && proposed ? THEME.proposedDash : undefined;
+  // Selection doesn't recolour the line: it thickens and gets a blue glow,
+  // so a picked colour stays visible while the connector is selected.
+  const stroke = edgeStroke(edge, { proposed });
+  const marker = markerIdFor(stroke);
+  const dash = isRework ? THEME.reworkDash : proposed ? THEME.proposedDash : undefined;
 
   const labelW = edge.label ? pillWidth(edge.label) : 0;
   const conditionText = edge.condition ? `[${edge.condition}]` : null;
@@ -459,7 +451,7 @@ export function EdgeArrow({
     <g
       onClick={(e) => {
         e.stopPropagation();
-        onClick(edge.id);
+        onClick(edge.id, e.shiftKey);
       }}
       onDoubleClick={(e) => {
         if (!onDoubleClick) return;
@@ -476,8 +468,8 @@ export function EdgeArrow({
         <path
           d={d}
           fill="none"
-          stroke={selected ? THEME.selectionHalo : THEME.edgeHover}
-          strokeWidth={7}
+          stroke={selected ? THEME.edgeSelectedHalo : THEME.edgeHover}
+          strokeWidth={selected ? THEME.edgeSelectedHaloWidth : 7}
           strokeLinecap="round"
           strokeLinejoin="round"
           pointerEvents="none"

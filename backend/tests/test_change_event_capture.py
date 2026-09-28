@@ -636,3 +636,50 @@ def test_detach_linked_claim_logs_unlink_claim_event(db):
     assert ev.source == "manual"
     assert ev.before == {"claim_id": str(claim.id)}
     assert str(claim.id) in [str(c) for c in ev.cited_claim_ids]
+
+
+# ── Connector colour: cosmetic, like lane colour ─────────────────────────
+
+def test_update_edge_color_sets_and_clears_and_logs_nothing(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    before = len(_events_for(db, edge.id))
+    updated = pm_api.update_edge(project=project, edge_id=edge.id,
+                                 payload=EdgeUpdate(color="#15803d"), db=db)
+    assert updated.color == "#15803d"
+    # An explicit null clears it back to the default.
+    cleared = pm_api.update_edge(project=project, edge_id=edge.id,
+                                 payload=EdgeUpdate(color=None), db=db)
+    assert cleared.color is None
+    assert len(_events_for(db, edge.id)) == before
+
+
+def test_update_edge_without_color_leaves_it_alone(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    pm_api.update_edge(project=project, edge_id=edge.id, payload=EdgeUpdate(color="#b91c1c"), db=db)
+    after = pm_api.update_edge(project=project, edge_id=edge.id, payload=EdgeUpdate(bend_x=40.0), db=db)
+    assert after.color == "#b91c1c"
+
+
+@pytest.mark.parametrize("bad", ["green", "#12345", "#1234567", "15803d", "#GGGGGG"])
+def test_edge_color_must_be_a_six_digit_hex(bad):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        EdgeUpdate(color=bad)
+    with pytest.raises(ValidationError):
+        EdgeCreate(source_node_id=uuid4(), target_node_id=uuid4(), color=bad)
+
+
+def test_create_edge_keeps_its_color(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    from app.models.process import ProcessNode
+    n2 = ProcessNode(version_id=version.id, lane_id=n1.lane_id, type="task",
+                     name="Pasted copy", position={}, properties={})
+    db.add(n2); db.flush(); db.commit()
+    new_edge = pm_api.create_edge(
+        project=project, model_id=version.model_id, version_id=version.id,
+        payload=EdgeCreate(source_node_id=n1.id, target_node_id=n2.id, color="#0f766e"),
+        db=db,
+    )
+    assert new_edge.color == "#0f766e"

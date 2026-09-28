@@ -19,6 +19,7 @@ export interface ClipboardEdge {
   fromOldId: UUID;
   toOldId: UUID;
   label: string | null;
+  color?: string | null;
 }
 
 export interface ClipboardSnapshot {

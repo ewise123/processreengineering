@@ -2,10 +2,19 @@
 
 import { useEffect, useRef } from "react";
 
+export interface ContextMenuSwatch {
+  name: string;
+  color: string;
+  selected: boolean;
+  onSelect: () => void;
+}
+
 export interface ContextMenuItem {
   label: string;
-  onSelect: () => void;
+  onSelect?: () => void;
   disabled?: boolean;
+  /** Render a labelled row of colour swatches instead of a plain item. */
+  swatches?: ContextMenuSwatch[];
 }
 
 export function CanvasContextMenu({
@@ -59,12 +68,44 @@ export function CanvasContextMenu({
         fontSize: 13,
       }}
     >
-      {items.map((item, i) => (
+      {items.map((item, i) =>
+        item.swatches ? (
+          <div key={i} role="group" aria-label={item.label} style={{ padding: "6px 10px 8px" }}>
+            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>{item.label}</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {item.swatches.map((sw) => (
+                <button
+                  key={sw.color}
+                  type="button"
+                  title={sw.name}
+                  aria-label={`${item.label}: ${sw.name}`}
+                  aria-pressed={sw.selected}
+                  onClick={() => {
+                    sw.onSelect();
+                    onClose();
+                  }}
+                  style={{
+                    width: 18,
+                    height: 18,
+                    borderRadius: 999,
+                    background: sw.color,
+                    border: "2px solid #fff",
+                    boxShadow: sw.selected
+                      ? `0 0 0 2px ${sw.color}`
+                      : "0 0 0 1px rgba(15,23,42,0.15)",
+                    cursor: "pointer",
+                    padding: 0,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
         <button
           key={i}
           disabled={item.disabled}
           onClick={() => {
-            item.onSelect();
+            item.onSelect?.();
             onClose();
           }}
           style={{
@@ -88,7 +129,8 @@ export function CanvasContextMenu({
         >
           {item.label}
         </button>
-      ))}
+        )
+      )}
     </div>
   );
 }

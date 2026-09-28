@@ -119,6 +119,24 @@ def test_copy_creates_new_version_snapshot(client, db):
     assert new_edges[0].target_node_id in new_node_ids
 
 
+def test_copy_keeps_rework_loops_and_connector_colours(client, db):
+    """A new version must not flatten a backtrack loop into a plain arrow or
+    drop connector colours: kind, pinned sides and colour all carry over."""
+    proj, model, version, lanes, nodes = _seed(db)
+    edge = db.scalars(select(ProcessEdge).where(ProcessEdge.version_id == version.id)).one()
+    edge.edge_kind = "rework"
+    edge.source_side = "top"
+    edge.target_side = "bottom"
+    edge.color = "#7e22ce"
+    db.commit()
+    r = client.post(_copy_url(proj, model, version), json={})
+    assert r.status_code == 200, r.text
+    copied = db.scalars(select(ProcessEdge).where(ProcessEdge.version_id == r.json()["id"])).one()
+    assert (copied.edge_kind, copied.source_side, copied.target_side, copied.color) == (
+        "rework", "top", "bottom", "#7e22ce"
+    )
+
+
 def test_copy_preserves_claim_links(client, db):
     from app.models.claim import Claim
 

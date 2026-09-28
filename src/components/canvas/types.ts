@@ -67,6 +67,8 @@ export interface CanvasEdge {
   /** "rework" for manually drawn backtrack loops (rendered amber/dashed);
    * undefined/"flow" for ordinary forward edges. */
   kind?: "flow" | "rework";
+  /** Line colour, "#rrggbb"; null/undefined draws the default (black). */
+  color?: string | null;
   /** Optional gateway-branch condition text (properties.condition_text on the
    * API edge). Populated at load so an applied set_edge_condition op can be
    * undone back to the prior value. */

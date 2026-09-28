@@ -1,6 +1,14 @@
 "use client";
 
-import { useSyncExternalStore, type CSSProperties, type DragEvent, type MouseEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type DragEvent,
+  type MouseEvent,
+} from "react";
 
 import type { CanvasNodeKind } from "./types";
 
@@ -57,8 +65,7 @@ const COLLAPSED_KEY = "canvas.paletteCollapsed";
 function readCollapsed(): boolean {
   if (memoryCollapsed !== null) return memoryCollapsed;
   try {
-    // Collapsed unless the user has opened it before: the full card sits over
-    // the first lane header.
+    // Collapsed unless the user has opened it before.
     return window.localStorage.getItem(COLLAPSED_KEY) !== "false";
   } catch {
     return true;
@@ -98,10 +105,52 @@ const panelStyle: CSSProperties = {
     "0 8px 28px -8px rgba(15, 23, 42, 0.18), 0 2px 6px -1px rgba(15, 23, 42, 0.08)",
 };
 
+/** How long the palette takes to open and close. */
+const OPEN_MS = 180;
+const CLOSE_MS = 140;
+
+// Keyframes for the open/close animation. The card is anchored at the
+// bottom, so revealing it from the bottom edge up reads as "growing upward".
+const PALETTE_CSS = `
+@keyframes poet-palette-open {
+  from { clip-path: inset(100% 0 0 0 round 10px); }
+  to { clip-path: inset(0 0 0 0 round 10px); }
+}
+@keyframes poet-palette-close {
+  from { clip-path: inset(0 0 0 0 round 10px); }
+  to { clip-path: inset(100% 0 0 0 round 10px); }
+}
+@keyframes poet-palette-row {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes poet-palette-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.poet-palette-opening { animation: poet-palette-open ${OPEN_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.poet-palette-closing { animation: poet-palette-close ${CLOSE_MS}ms cubic-bezier(0.4, 0, 1, 1) both; }
+.poet-palette-opening .poet-palette-row { animation: poet-palette-row 160ms ease-out both; }
+.poet-palette-row-in { animation: poet-palette-fade 120ms ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .poet-palette-opening, .poet-palette-closing,
+  .poet-palette-opening .poet-palette-row, .poet-palette-row-in { animation: none; }
+}
+`;
+
+function prefersReducedMotion(): boolean {
+  try {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Shapes to drag onto the map. Expanded, it's a labelled card at the top
- * left. Collapsed, it's a compact icon row at the bottom left, clear of the
- * lane headers (which stay pinned to the left edge while panning).
+ * Shapes to drag onto the map. It always lives at the bottom left, clear of
+ * the lane headers (which stay pinned to the left edge while panning).
+ * Collapsed, it's a row of icons; expanded, the same card grows upward into
+ * a labelled column, keeping its bottom edge where it was.
  */
 export function ShapePalette({
   onAddShape,
@@ -112,7 +161,32 @@ export function ShapePalette({
   // Server render and hydration use the default (collapsed); the stored
   // choice takes over on the client without a mismatch.
   const collapsed = useSyncExternalStore(subscribe, readCollapsed, () => true);
-  const toggle = (next: boolean) => writeCollapsed(next);
+  // "opening" plays once when expanding; "closing" plays before the card
+  // switches back to the icon row. Null once settled (a reload shows the
+  // stored state without animating).
+  const [motion, setMotion] = useState<"opening" | "closing" | "row-in" | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+  }, []);
+
+  const expand = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    setMotion("opening");
+    writeCollapsed(false);
+  };
+  const collapse = () => {
+    if (prefersReducedMotion()) {
+      setMotion(null);
+      writeCollapsed(true);
+      return;
+    }
+    setMotion("closing");
+    closeTimer.current = setTimeout(() => {
+      setMotion("row-in");
+      writeCollapsed(true);
+    }, CLOSE_MS);
+  };
 
   const onDragStart = (e: DragEvent, shape: PaletteShape) => {
     e.dataTransfer.setData(PALETTE_DRAG_MIME, shape.kind);
@@ -128,104 +202,126 @@ export function ShapePalette({
     },
   };
 
+  const shapeProps = (s: PaletteShape) => ({
+    draggable: true,
+    onDragStart: (e: DragEvent) => onDragStart(e, s),
+    onClick: () => onAddShape?.(s),
+    title: `Click to add, or drag onto the map — ${s.label}`,
+    ...hover,
+  });
+
+  const cardStyle: CSSProperties = { ...panelStyle, left: 64, bottom: 16 };
+
   if (collapsed) {
     return (
-      <div
-        role="toolbar"
-        aria-label="Shapes"
-        style={{
-          ...panelStyle,
-          left: 64,
-          bottom: 16,
-          display: "flex",
-          alignItems: "center",
-          gap: 2,
-          padding: 4,
-        }}
-      >
-        {PALETTE_SHAPES.map((s) => (
-          <div
-            key={s.kind}
-            draggable
-            onDragStart={(e) => onDragStart(e, s)}
-            onClick={() => onAddShape?.(s)}
-            title={`Click to add, or drag onto the map — ${s.label}`}
-            aria-label={s.label}
-            style={{ ...paletteRowStyle, padding: 6 }}
+      <>
+        <style>{PALETTE_CSS}</style>
+        <div
+          role="toolbar"
+          aria-label="Shapes"
+          className={motion === "row-in" ? "poet-palette-row-in" : undefined}
+          onAnimationEnd={() => setMotion(null)}
+          style={{ ...cardStyle, display: "flex", alignItems: "center", gap: 2, padding: 4 }}
+        >
+          {PALETTE_SHAPES.map((s) => (
+            <div
+              key={s.kind}
+              {...shapeProps(s)}
+              aria-label={s.label}
+              style={{ ...paletteRowStyle, padding: 6 }}
+            >
+              <ShapeIcon kind={s.kind} />
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={expand}
+            onMouseDown={(e) => e.preventDefault()}
+            title="Show shape names"
+            aria-label="Expand shapes"
+            aria-expanded={false}
+            style={toggleStyle}
             {...hover}
           >
-            <ShapeIcon kind={s.kind} />
-          </div>
-        ))}
-        <button
-          type="button"
-          onClick={() => toggle(false)}
-          title="Show shape names"
-          aria-label="Expand shapes"
-          style={toggleStyle}
-          {...hover}
-        >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth={1.6}>
-            <path d="M3 7.5L6 4.5l3 3" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
-      </div>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth={1.6}>
+              <path d="M3 7.5L6 4.5l3 3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </div>
+      </>
     );
   }
 
   return (
-    <div style={{ ...panelStyle, left: 12, top: 60, width: 148 }}>
+    <>
+      <style>{PALETTE_CSS}</style>
       <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "4px 4px 0 10px",
+        role="toolbar"
+        aria-label="Shapes"
+        aria-orientation="vertical"
+        className={
+          motion === "opening"
+            ? "poet-palette-opening"
+            : motion === "closing"
+              ? "poet-palette-closing"
+              : undefined
+        }
+        onAnimationEnd={(e) => {
+          if (e.target === e.currentTarget && motion === "opening") setMotion(null);
         }}
+        style={{ ...cardStyle, width: 148 }}
       >
-        <span
+        <div
           style={{
-            fontSize: 10,
-            fontWeight: 700,
-            textTransform: "uppercase",
-            letterSpacing: "0.05em",
-            color: "#94a3b8",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "4px 4px 0 10px",
           }}
         >
-          Shapes
-        </span>
-        <button
-          type="button"
-          onClick={() => toggle(true)}
-          title="Collapse to icons"
-          aria-label="Collapse shapes"
-          style={toggleStyle}
-          {...hover}
-        >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth={1.6}>
-            <path d="M3 4.5L6 7.5l3-3" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "0 4px 8px" }}>
-        {PALETTE_SHAPES.map((s) => (
-          <div
-            key={s.kind}
-            draggable
-            onDragStart={(e) => onDragStart(e, s)}
-            onClick={() => onAddShape?.(s)}
-            title={`Click to add, or drag onto the map — ${s.label}`}
-            style={paletteRowStyle}
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              color: "#94a3b8",
+            }}
+          >
+            Shapes
+          </span>
+          <button
+            type="button"
+            onClick={collapse}
+            onMouseDown={(e) => e.preventDefault()}
+            title="Collapse to icons"
+            aria-label="Collapse shapes"
+            aria-expanded
+            style={toggleStyle}
             {...hover}
           >
-            <ShapeIcon kind={s.kind} />
-            <span style={{ fontSize: 11, fontWeight: 500, color: "#334155" }}>
-              {s.label}
-            </span>
-          </div>
-        ))}
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth={1.6}>
+              <path d="M3 4.5L6 7.5l3-3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "0 4px 6px" }}>
+          {PALETTE_SHAPES.map((s, i) => (
+            <div
+              key={s.kind}
+              {...shapeProps(s)}
+              aria-label={s.label}
+              className="poet-palette-row"
+              // Rows arrive bottom-first, following the card as it grows up.
+              style={{ ...paletteRowStyle, animationDelay: `${(PALETTE_SHAPES.length - 1 - i) * 25}ms` }}
+            >
+              <ShapeIcon kind={s.kind} />
+              <span style={{ fontSize: 12, fontWeight: 500, color: "#334155" }}>{s.label}</span>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 

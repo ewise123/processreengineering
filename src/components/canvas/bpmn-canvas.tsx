@@ -30,7 +30,16 @@ import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType } from "./layout";
 import { sizeForNodeType } from "./node-type";
 import { isEdgeProposed, placeProposedStep } from "./ai-edit";
-import { laneAccent, MARKER, NODE_SHADOW_FILTER, THEME } from "./canvas-theme";
+import {
+  CONNECTOR_PALETTE,
+  edgeStroke,
+  laneAccent,
+  MARKER,
+  markerIdFor,
+  NODE_SHADOW_FILTER,
+  storedConnectorColor,
+  THEME,
+} from "./canvas-theme";
 import { computeEdgeRoutes } from "./edge-routes";
 import { resolveShortcut, type ShortcutAction } from "./keymap";
 import {
@@ -1479,6 +1488,18 @@ function BpmnCanvas({
   const renderNodesRef = useRef(renderNodes);
   renderNodesRef.current = renderNodes;
 
+  // One arrowhead per connector colour in play: the palette, the rework and
+  // proposed defaults, and any other colour already stored on a connector.
+  const connectorMarkerColors = useMemo(() => {
+    const set = new Set<string>([
+      ...CONNECTOR_PALETTE.map((p) => p.color),
+      THEME.rework,
+      THEME.proposed,
+    ]);
+    for (const e of edges) if (e.color) set.add(e.color.toLowerCase());
+    return [...set];
+  }, [edges]);
+
   // Guides for what the dragged steps line up with, read from where they
   // actually are (after the lane clamp), so a guide never claims an
   // alignment that didn't happen.
@@ -2198,7 +2219,7 @@ function BpmnCanvas({
       }));
     const edges = edgesRef.current
       .filter((e) => ids.has(e.from) && ids.has(e.to))
-      .map((e) => ({ fromOldId: e.from, toOldId: e.to, label: e.label }));
+      .map((e) => ({ fromOldId: e.from, toOldId: e.to, label: e.label, color: e.color ?? null }));
     return { nodes, edges };
   }, []);
 
@@ -2323,12 +2344,13 @@ function BpmnCanvas({
           source_node_id: from,
           target_node_id: to,
           label: es.label ?? undefined,
+          color: es.color ?? undefined,
           reason,
         });
         createdEdgeIds.push(created.id);
         setEdges((curr) => [
           ...curr,
-          { id: created.id, from, to, label: created.label ?? null },
+          { id: created.id, from, to, label: created.label ?? null, color: created.color ?? null },
         ]);
       }
       currentNodeIds = createdNodes.map((n) => n.id);
@@ -2416,21 +2438,72 @@ function BpmnCanvas({
     [selectOnly, copySelectionImpl, pasteClipboardImpl, deleteSelectionImpl, onOpenProperties, onDrillIntoNode]
   );
 
+  // Connector colour is cosmetic, like a lane's: saved straight away with no
+  // reason and no change-log row, one undo entry per change.
+  const applyEdgeColorsLocal = useCallback(
+    (colors: { id: UUID; color: string | null }[]) => {
+      const byId = new Map(colors.map((c) => [c.id, c.color]));
+      setEdges((curr) =>
+        curr.map((e) => (byId.has(e.id) ? { ...e, color: byId.get(e.id) ?? null } : e))
+      );
+      return Promise.all(
+        colors.map((c) => api.updateEdge(projectId, c.id, { color: c.color }))
+      ).then(
+        () => undefined,
+        (err) => {
+          console.error("Failed to save connector colour", err);
+          toast.error("Couldn't save the connector colour.");
+        }
+      );
+    },
+    [projectId]
+  );
+
+  /** Colour these connectors `picked` (Black clears to the default). */
+  const setConnectorColor = useCallback(
+    (ids: UUID[], picked: string) => {
+      const color = storedConnectorColor(picked);
+      const before = ids.flatMap((id) => {
+        const e = edgesRef.current.find((ed) => ed.id === id);
+        return e ? [{ id, color: e.color ?? null }] : [];
+      });
+      if (before.every((b) => b.color === color)) return;
+      const after = before.map((b) => ({ id: b.id, color }));
+      void applyEdgeColorsLocal(after);
+      record({
+        description: after.length > 1 ? `Colour ${after.length} connectors` : "Colour connector",
+        do: () => applyEdgeColorsLocal(after),
+        undo: () => applyEdgeColorsLocal(before),
+      });
+    },
+    [applyEdgeColorsLocal, record]
+  );
+
   const openEdgeMenu = useCallback(
     (e: MouseEvent, edgeId: UUID) => {
       e.preventDefault();
       e.stopPropagation();
       selectOnly(edgeId);
+      const current = edgesRef.current.find((ed) => ed.id === edgeId)?.color ?? null;
       setContextMenu({
         x: e.clientX,
         y: e.clientY,
         items: [
+          {
+            label: "Colour",
+            swatches: CONNECTOR_PALETTE.map((p) => ({
+              name: p.name,
+              color: p.color,
+              selected: storedConnectorColor(p.color) === (current?.toLowerCase() ?? null),
+              onSelect: () => setConnectorColor([edgeId], p.color),
+            })),
+          },
           { label: "Edit label", onSelect: () => setEditingEdgeId(edgeId) },
           { label: "Delete", onSelect: () => void requestDeleteEdge(edgeId) },
         ],
       });
     },
-    [selectOnly, requestDeleteEdge]
+    [selectOnly, requestDeleteEdge, setConnectorColor]
   );
 
   const openCanvasMenu = useCallback(
@@ -2866,15 +2939,19 @@ function BpmnCanvas({
   };
 
   const selectionToolbar = (() => {
-    if (selectedIds.size < 2 || drag || editing || contextMenu || canvasSize.w === 0) return null;
-    // The selection's on-screen box: its steps, or a selected connector's
-    // end steps when only connectors are selected.
+    const selectedEdges = edges.filter((e) => selectedIds.has(e.id));
+    // Shown for two or more things, or for a single connector (a single step
+    // has the Properties panel instead).
+    const singleConnector = selectedIds.size === 1 && selectedEdges.length === 1;
+    if (selectedIds.size < 2 && !singleConnector) return null;
+    if (drag || editing || editingEdgeId || contextMenu || canvasSize.w === 0) return null;
+    // The selection's on-screen box: its steps, or — with only connectors
+    // selected — the connectors' own routes.
     let boxes: Box[] = selectedRenderNodes;
     if (boxes.length === 0) {
-      const ends = new Set(
-        edges.filter((e) => selectedIds.has(e.id)).flatMap((e) => [e.from, e.to])
+      boxes = selectedEdges.flatMap((e) =>
+        (edgeRoutes.get(e.id)?.points ?? []).map((p) => ({ x: p.x, y: p.y, w: 0, h: 0 }))
       );
-      boxes = renderNodes.filter((n) => ends.has(n.id));
     }
     const bounds = boundsOf(boxes);
     if (!bounds) return null;
@@ -2888,16 +2965,35 @@ function BpmnCanvas({
       { width: canvasSize.w, height: canvasSize.h, occludedRight, top: 56 }
     );
     const laneIds = new Set(selectedRenderNodes.map((n) => n.laneId));
+    const colours = selectedEdges.map((e) => ({
+      display: edgeStroke(e, {
+        proposed: isEdgeProposed(renderNodeById.get(e.from), renderNodeById.get(e.to)),
+      }),
+      stored: e.color?.toLowerCase() ?? null,
+    }));
+    const connectorColor =
+      colours.length === 0
+        ? null
+        : colours.every((c) => c.display === colours[0].display && c.stored === colours[0].stored)
+          ? colours[0]
+          : ("mixed" as const);
+    const edgeIds = selectedEdges.map((e) => e.id);
     return (
       <SelectionToolbar
+        key={[...selectedIds].sort().join(",")}
         left={pos.left}
         top={pos.top}
         count={selectedIds.size}
         nodeCount={selectedRenderNodes.length}
         spansLanes={laneIds.size > 1}
         resetCount={bendsToReset.length}
+        connectorCount={selectedEdges.length}
+        connectorColor={connectorColor}
+        placement={pos.placement}
         lanes={lanes.map((l) => ({ id: l.id, name: l.label }))}
         onSize={onToolbarSize}
+        onSetColor={(c) => setConnectorColor(edgeIds, c)}
+        onEditLabel={singleConnector ? () => setEditingEdgeId(edgeIds[0]) : undefined}
         onAlign={alignSelection}
         onResetRoutes={resetRoutes}
         onMoveToLane={(laneId) => void moveSelectionToLaneImpl(laneId as UUID)}
@@ -3263,6 +3359,7 @@ function BpmnCanvas({
               [MARKER.rework, THEME.rework],
               [MARKER.proposed, THEME.proposed],
               ["poet-arrow-ink", THEME.ink],
+              ...connectorMarkerColors.map((c) => [markerIdFor(c), c] as const),
             ] as const
           ).map(([id, color]) => (
             <marker
@@ -3272,8 +3369,8 @@ function BpmnCanvas({
               viewBox="0 0 10 10"
               refX="9"
               refY="5"
-              markerWidth="10"
-              markerHeight="10"
+              markerWidth="11"
+              markerHeight="11"
               orient="auto"
             >
               <path d="M 1 1 L 9 5 L 1 9 L 3 5 z" fill={color} />
@@ -3355,7 +3452,7 @@ function BpmnCanvas({
                 route={route}
                 proposed={!!f && !!t && isEdgeProposed(f, t)}
                 selected={selectedIds.has(edge.id)}
-                onClick={(id) => selectOnly(id)}
+                onClick={(id, shift) => (shift ? toggleSelection(id) : selectOnly(id))}
                 onDoubleClick={(id) => {
                   selectOnly(id);
                   setEditingEdgeId(id);
