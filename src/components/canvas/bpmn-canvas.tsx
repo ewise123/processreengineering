@@ -29,7 +29,10 @@ import { FloatingToolbar, type CanvasTool } from "./floating-toolbar";
 import { LaneRail } from "./lane-rail";
 import { LANE_HEIGHT, LANE_PALETTE, nodeKindFromType } from "./layout";
 import { sizeForNodeType } from "./node-type";
-import { placeProposedStep } from "./ai-edit";
+import { isEdgeProposed, placeProposedStep } from "./ai-edit";
+import { laneAccent, MARKER, NODE_SHADOW_FILTER, THEME } from "./canvas-theme";
+import { computeEdgeRoutes } from "./edge-routes";
+import { roundedPath } from "./rounded-path";
 import { edgeFocusCenter } from "./edge-focus";
 import { normalizeMarquee, nodesInMarquee, edgesInMarquee } from "./selection";
 import {
@@ -1400,6 +1403,17 @@ function BpmnCanvas({
   const renderNodesRef = useRef(renderNodes);
   renderNodesRef.current = renderNodes;
 
+  const renderNodeById = useMemo(
+    () => new Map(renderNodes.map((n) => [n.id, n])),
+    [renderNodes]
+  );
+  // Every connector is placed with its neighbours in view (shared sides,
+  // gateway corners), so routes are computed for the whole map at once.
+  const edgeRoutes = useMemo(
+    () => computeEdgeRoutes(edges, renderNodes),
+    [edges, renderNodes]
+  );
+
   const toWorld = useCallback(
     (sx: number, sy: number) => {
       if (!svgRef.current) return { x: 0, y: 0 };
@@ -2550,28 +2564,35 @@ function BpmnCanvas({
         }}
       >
         <defs>
-          <marker
-            id="poet-arrow"
-            viewBox="0 0 10 10"
-            refX="9"
-            refY="5"
-            markerWidth="8"
-            markerHeight="8"
-            orient="auto"
-          >
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
-          </marker>
-          <marker
-            id="poet-arrow-rework"
-            viewBox="0 0 10 10"
-            refX="9"
-            refY="5"
-            markerWidth="8"
-            markerHeight="8"
-            orient="auto"
-          >
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706" />
-          </marker>
+          {/* Arrowheads are sized in world units (not stroke units) so a
+            selected, thicker line keeps the same head; one per colour so the
+            head always matches its line. */}
+          {(
+            [
+              [MARKER.default, THEME.edge],
+              [MARKER.selected, THEME.selection],
+              [MARKER.rework, THEME.rework],
+              [MARKER.proposed, THEME.proposed],
+              ["poet-arrow-ink", THEME.ink],
+            ] as const
+          ).map(([id, color]) => (
+            <marker
+              key={id}
+              id={id}
+              markerUnits="userSpaceOnUse"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="10"
+              markerHeight="10"
+              orient="auto"
+            >
+              <path d="M 1 1 L 9 5 L 1 9 L 3 5 z" fill={color} />
+            </marker>
+          ))}
+          <filter id={NODE_SHADOW_FILTER} x="-10%" y="-20%" width="120%" height="150%">
+            <feDropShadow dx="0" dy="1" stdDeviation="1.4" floodColor="#0f172a" floodOpacity="0.1" />
+          </filter>
           <pattern
             id="poet-grid"
             width="24"
@@ -2597,6 +2618,8 @@ function BpmnCanvas({
           />
           {displayLanes.map((lane) => (
             <g key={lane.id}>
+              {/* Lane colour is an accent (header strip + a thin edge), not a
+                fill, so steps stand out from a near-white body. */}
               <rect
                 data-bg="1"
                 x={0}
@@ -2604,7 +2627,7 @@ function BpmnCanvas({
                 width={worldWidth}
                 height={lane.h}
                 fill={lane.color}
-                opacity={0.35}
+                opacity={THEME.laneBodyOpacity}
               />
               <rect
                 x={0}
@@ -2612,31 +2635,36 @@ function BpmnCanvas({
                 width={44}
                 height={lane.h}
                 fill={lane.color}
-                opacity={0.7}
+                opacity={THEME.laneHeaderOpacity}
+              />
+              <rect
+                x={0}
+                y={lane.y}
+                width={THEME.laneAccentWidth}
+                height={lane.h}
+                fill={laneAccent(lane.color)}
               />
               <line
                 x1={0}
                 y1={lane.y + lane.h}
                 x2={worldWidth}
                 y2={lane.y + lane.h}
-                stroke="#e2e8f0"
-                strokeDasharray="4 4"
+                stroke={THEME.laneDivider}
               />
             </g>
           ))}
-          {edges
-            .filter((edge) => {
-              const f = nodes.find((n) => n.id === edge.from);
-              const t = nodes.find((n) => n.id === edge.to);
-              const hidden = (n?: CanvasNode) =>
-                !!n?.laneId && collapsedLaneIds.has(n.laneId);
-              return !hidden(f) && !hidden(t);
-            })
-            .map((edge) => (
+          {edges.map((edge) => {
+            // Edges into collapsed lanes have no route: their end isn't drawn.
+            const route = edgeRoutes.get(edge.id);
+            if (!route) return null;
+            const f = renderNodeById.get(edge.from);
+            const t = renderNodeById.get(edge.to);
+            return (
               <EdgeArrow
                 key={edge.id}
                 edge={edge}
-                nodes={renderNodes}
+                route={route}
+                proposed={!!f && !!t && isEdgeProposed(f, t)}
                 selected={selectedIds.has(edge.id)}
                 onClick={(id) => selectOnly(id)}
                 onDoubleClick={(id) => {
@@ -2646,7 +2674,8 @@ function BpmnCanvas({
                 onContextMenu={openEdgeMenu}
                 onStartBendDrag={onStartBendDrag}
               />
-            ))}
+            );
+          })}
           {renderNodes.map((node) => (
             <NodeShape
               key={node.id}
@@ -2690,10 +2719,9 @@ function BpmnCanvas({
             // edge gives the same visual confirmation a node does.
             const fe = edges.find((e) => e.id === flashId);
             if (fe) {
-              const from = renderNodes.find((n) => n.id === fe.from);
-              const to = renderNodes.find((n) => n.id === fe.to);
-              if (!from || !to) return null;
-              const { midX, midY } = buildEdgePath(from, to);
+              const route = edgeRoutes.get(fe.id);
+              if (!route) return null;
+              const { x: midX, y: midY } = route.labelAt;
               return (
                 <rect
                   x={midX - 22}
@@ -2716,10 +2744,11 @@ function BpmnCanvas({
             (() => {
               const edge = edges.find((e) => e.id === editingEdgeId);
               if (!edge) return null;
-              const from = renderNodes.find((n) => n.id === edge.from);
-              const to = renderNodes.find((n) => n.id === edge.to);
-              if (!from || !to) return null;
-              const { midX, midY } = buildEdgePath(from, to);
+              // Open where the label is actually drawn — including on bent and
+              // rework edges, which plain routing would place elsewhere.
+              const route = edgeRoutes.get(edge.id);
+              if (!route) return null;
+              const { x: midX, y: midY } = route.labelAt;
               return (
                 <EdgeLabelEditor
                   x={midX}
@@ -2753,9 +2782,9 @@ function BpmnCanvas({
                   drag.currY,
                   target
                 );
-                d = buildEdgePath(source, target, { sourceSide, targetSide }).d;
+                d = roundedPath(buildEdgePath(source, target, { sourceSide, targetSide }).points);
               } else if (target) {
-                d = buildEdgePath(source, target).d;
+                d = roundedPath(buildEdgePath(source, target).points);
               } else {
                 d = buildPreviewToCursor(
                   source,
@@ -2768,11 +2797,13 @@ function BpmnCanvas({
                 <path
                   d={d}
                   fill="none"
-                  stroke={backtrack ? "#d97706" : "#0f172a"}
-                  strokeWidth={1.5}
+                  stroke={backtrack ? THEME.rework : THEME.ink}
+                  strokeWidth={THEME.edgeWidth}
                   strokeDasharray="4 4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
                   markerEnd={
-                    backtrack ? "url(#poet-arrow-rework)" : "url(#poet-arrow)"
+                    backtrack ? `url(#${MARKER.rework})` : "url(#poet-arrow-ink)"
                   }
                   pointerEvents="none"
                 />
