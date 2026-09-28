@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
+import { QUICK_REASONS } from "./auto-reason";
 import { REASON_PROMPT_DESCRIPTION } from "./delete-reason";
 import type { ReasonPromptState } from "./use-reason-prompt";
 
@@ -33,7 +34,16 @@ export function ReasonPromptDialog({
   setValue,
   submit,
   cancel,
+  keep,
+  setKeep,
+  lastReason,
 }: ReasonPromptState) {
+  // One click logs one of these. The last reason typed comes first, so the
+  // same reason for a run of changes is a single click each time.
+  const chips = [
+    ...(lastReason && !(QUICK_REASONS as readonly string[]).includes(lastReason) ? [lastReason] : []),
+    ...QUICK_REASONS,
+  ];
   return (
     <Dialog
       open={open}
@@ -52,6 +62,20 @@ export function ReasonPromptDialog({
             {description ?? REASON_PROMPT_DESCRIPTION}
           </DialogDescription>
         </DialogHeader>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Quick reasons">
+          {chips.map((chip) => (
+            <button
+              key={chip}
+              type="button"
+              data-reason-chip
+              onClick={() => submit(chip)}
+              title={chip}
+              className="max-w-full truncate rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-700 hover:border-slate-300 hover:bg-slate-100"
+            >
+              {chip}
+            </button>
+          ))}
+        </div>
         <Textarea
           autoFocus
           value={value}
@@ -69,6 +93,16 @@ export function ReasonPromptDialog({
             }
           }}
         />
+        <label className="flex items-center gap-2 text-sm text-slate-600">
+          <input
+            type="checkbox"
+            checked={keep}
+            onChange={(e) => setKeep(e.target.checked)}
+            className="size-4 accent-slate-900"
+            data-keep-reason
+          />
+          Use this reason for my next changes
+        </label>
         <DialogFooter>
           <Button variant="outline" onClick={cancel}>
             Cancel

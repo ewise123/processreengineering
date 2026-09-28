@@ -129,7 +129,9 @@ import type {
 import { ReasonPromptDialog } from "./reason-prompt-dialog";
 import { useClipboard, type ClipboardSnapshot } from "./use-clipboard";
 import { useGraphPersistence, type SaveStatus } from "./use-persistence";
-import { useReasonPrompt } from "./use-reason-prompt";
+import { useReasonPrompt, type ReasonPromptOptions } from "./use-reason-prompt";
+import { pickAutoReason, type ReasonTarget } from "./auto-reason";
+import { WorkingReasonPill } from "./working-reason-pill";
 import { useUndoStack, type UndoAction } from "./use-undo-stack";
 
 const WORLD_WIDTH_MIN = 1700;
@@ -450,8 +452,41 @@ function BpmnCanvas({
 
   const { record, undo, redo, isLatest, canUndo, canRedo } = useUndoStack();
   const clipboard = useClipboard();
+  const { status, error, markNode, markLane, forgetNode, flush } = useGraphPersistence({
+    projectId,
+  });
   const reasonPrompt = useReasonPrompt();
-  const { promptReason } = reasonPrompt;
+  const { promptReason: askReason, currentWorking } = reasonPrompt;
+  // What this tab made, and when: changing it within a few minutes needs no
+  // typed reason (see auto-reason.ts).
+  const freshRef = useRef(new Map<string, number>());
+  const markFresh = useCallback((...ids: string[]) => {
+    const now = Date.now();
+    for (const id of ids) freshRef.current.set(id, now);
+  }, []);
+  /** The reason for a change: logged without asking when auto-reason.ts
+   * allows it, otherwise typed in the box. Null means the user cancelled. */
+  const promptReason = useCallback(
+    async (
+      label: string,
+      opts: ReasonPromptOptions & {
+        targets?: ReasonTarget[];
+        rename?: { before: string; after: string };
+      } = {}
+    ): Promise<string | null> => {
+      const { targets = [], rename, ...boxOptions } = opts;
+      const auto = pickAutoReason({
+        working: currentWorking(),
+        action: boxOptions.destructive ? "delete" : "edit",
+        targets,
+        createdAt: freshRef.current,
+        now: Date.now(),
+        rename,
+      });
+      return auto ?? askReason(label, boxOptions);
+    },
+    [askReason, currentWorking]
+  );
 
   const selectOnly = useCallback((id: string) => setSelectedIds(new Set([id])), []);
   const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
@@ -482,12 +517,13 @@ function BpmnCanvas({
   const deleteNodeImpl = useCallback(
     async (id: UUID, body: DeleteRequest) => {
       await api.deleteNode(projectId, id, body);
+      forgetNode(id);
       setNodes((curr) => curr.filter((n) => n.id !== id));
       setEdges((curr) => curr.filter((e) => e.from !== id && e.to !== id));
       deselect(id);
       onNodeDeleted?.(id);
     },
-    [projectId, onNodeDeleted, deselect]
+    [projectId, onNodeDeleted, deselect, forgetNode]
   );
 
   const applyNodeEditLocal = useCallback(
@@ -546,7 +582,7 @@ function BpmnCanvas({
       if (patch.type !== undefined && patch.type !== old.type) {
         const newType = patch.type;
         const oldType = old.type;
-        const reason = await promptReason("Change step type");
+        const reason = await promptReason("Change step type", { targets: [{ id, kind: "step" }] });
         if (reason === null) return;
         await applyNodeTypeLocal(id, newType, reason);
         const description = "Change node type";
@@ -565,7 +601,7 @@ function BpmnCanvas({
         const oldDescription = old.description;
         const newDescription = patch.description;
         const base = { name: old.label, laneId: old.laneId, relativeY: old.relativeY };
-        const reason = await promptReason("Edit step description");
+        const reason = await promptReason("Edit step description", { targets: [{ id, kind: "step" }] });
         if (reason === null) return;
         await applyNodeEditLocal(id, { ...base, description: newDescription }, reason);
         const description = "Edit description";
@@ -599,7 +635,10 @@ function BpmnCanvas({
         laneId: oldLaneId,
         relativeY: oldRelativeY,
       };
-      const reason = await promptReason(laneChanged ? "Move step to lane" : "Rename step");
+      const reason = await promptReason(laneChanged ? "Move step to lane" : "Rename step", {
+        targets: [{ id, kind: "step" }],
+        ...(laneChanged ? {} : { rename: { before: oldName, after: newName } }),
+      });
       if (reason === null) return;
       await applyNodeEditLocal(id, next, reason);
       const description = laneChanged ? "Move node to lane" : "Rename node";
@@ -803,6 +842,10 @@ function BpmnCanvas({
     const reason = await promptReason(deleteActionLabel(counts), {
       destructive: true,
       description: deleteActionDescription(counts),
+      targets: [
+        ...nodeIds.map((nid) => ({ id: nid, kind: "step" as const })),
+        ...edgeIds.map((eid) => ({ id: eid, kind: "connection" as const })),
+      ],
     });
     if (reason === null) return;
     // Nodes first: deleteNodeImpl also strips their touching edges locally.
@@ -824,6 +867,7 @@ function BpmnCanvas({
       const reason = await promptReason(deleteActionLabel(counts), {
         destructive: true,
         description: deleteActionDescription(counts),
+        targets: [{ id, kind: "step" }],
       });
       if (reason === null) return;
       await deleteNodeImpl(id, { reason });
@@ -838,6 +882,7 @@ function BpmnCanvas({
       const reason = await promptReason(deleteActionLabel(counts), {
         destructive: true,
         description: deleteActionDescription(counts),
+        targets: [{ id, kind: "connection" }],
       });
       if (reason === null) return;
       await deleteEdgeImpl(id, reason);
@@ -865,7 +910,9 @@ function BpmnCanvas({
       if (!existing) return;
       const oldLabel = existing.label;
       if (oldLabel === newLabel) return;
-      const reason = await promptReason("Edit connection label");
+      const reason = await promptReason("Edit connection label", {
+        targets: [{ id, kind: "connection" }],
+      });
       if (reason === null) return;
       await updateEdgeLabelLocal(id, newLabel, reason);
       const description = "Edit edge label";
@@ -898,6 +945,7 @@ function BpmnCanvas({
           ...(opts?.kind ? { edge_kind: opts.kind } : {}),
         });
         currentId = created.id;
+        markFresh(currentId);
         setEdges((curr) => [
           ...curr,
           {
@@ -924,7 +972,7 @@ function BpmnCanvas({
         },
       });
     },
-    [projectId, modelId, versionId, record, deselect]
+    [projectId, modelId, versionId, record, deselect, markFresh]
   );
 
   // Per-step executor for applySuggestionBatch. Declared before
@@ -1442,9 +1490,6 @@ function BpmnCanvas({
   const snapOthersRef = useRef<Box[]>([]);
   const [snapping, setSnapping] = useState(false);
 
-  const { status, error, markNode, markLane, flush } = useGraphPersistence({
-    projectId,
-  });
 
   // Lane collapse is view state, seeded from each lane's persisted `collapsed`
   // flag and persisted back via markLane on toggle. Kept out of the undo stack.
@@ -2194,7 +2239,8 @@ function BpmnCanvas({
           // back and persist nothing.
           void (async () => {
             const reason = await promptReason(
-              finals.length > 1 ? `Move ${finals.length} steps to lane` : "Move step to lane"
+              finals.length > 1 ? `Move ${finals.length} steps to lane` : "Move step to lane",
+              { targets: finals.map((f) => ({ id: f.id, kind: "step" as const })) }
             );
             if (reason === null) {
               applyGroupPositionsLocal(oldPositions);
@@ -2208,15 +2254,16 @@ function BpmnCanvas({
             });
           })();
         } else {
-          // Cosmetic move: persist position only, no prompt, no reason.
-          for (const f of finals) {
-            markNode(f.id, {
-              x: f.x,
-              relative_y: f.relativeY,
-              lane_id: f.laneId ?? undefined,
-            });
-          }
+          // Cosmetic move: persist position only, no prompt, no reason. A
+          // plain click moves nothing, so it saves nothing.
           if (moved) {
+            for (const f of finals) {
+              markNode(f.id, {
+                x: f.x,
+                relative_y: f.relativeY,
+                lane_id: f.laneId ?? undefined,
+              });
+            }
             record({
               description,
               do: () => applyGroupPositionsLocal(newPositions),
@@ -2410,7 +2457,8 @@ function BpmnCanvas({
       // No-op if every selected node already lives in the target lane.
       if (oldPositions.every((p) => p.laneId === laneId)) return;
       const reason = await promptReason(
-        ids.length > 1 ? `Move ${ids.length} steps to lane` : "Move step to lane"
+        ids.length > 1 ? `Move ${ids.length} steps to lane` : "Move step to lane",
+        { targets: ids.map((nid) => ({ id: nid, kind: "step" as const })) }
       );
       if (reason === null) return;
       const newPositions = oldPositions.map((p) => ({ ...p, relativeY: 0, laneId }));
@@ -2585,6 +2633,7 @@ function BpmnCanvas({
       }
       currentNodeIds = createdNodes.map((n) => n.id);
       currentEdgeIds = createdEdgeIds;
+      markFresh(...currentNodeIds, ...currentEdgeIds);
       setSelectedIds(new Set(currentNodeIds));
     };
 
@@ -2615,7 +2664,7 @@ function BpmnCanvas({
       console.error(`Failed to ${verb.toLowerCase()}`, err);
       toast.error(`Couldn't ${verb.toLowerCase()} — please try again.`);
     }
-  }, [projectId, modelId, versionId, record]);
+  }, [projectId, modelId, versionId, record, markFresh]);
 
   const pasteClipboardImpl = useCallback(
     () => materializeSnapshot(clipboard.get(), "Pasted from selection", "Paste"),
@@ -2881,6 +2930,7 @@ function BpmnCanvas({
           h: draft.h,
         };
         setNodes((curr) => [...curr, node]);
+        markFresh(created.id);
         const connect = async (from: UUID, to: UUID, reason: string) => {
           const e = await api.createEdge(projectId, modelId, versionId, {
             source_node_id: from,
@@ -2888,6 +2938,7 @@ function BpmnCanvas({
             reason,
           });
           setEdges((curr) => [...curr, { id: e.id, from, to, label: e.label ?? null }]);
+          markFresh(e.id);
         };
         // "before" (the + on a step's left): the new step leads into it.
         const link = (a: UUID, b: UUID, reason: string) =>
@@ -2909,6 +2960,7 @@ function BpmnCanvas({
             liveIdsRef.current.set(liveNodeId, again.id);
             liveNodeId = again.id;
             setNodes((curr) => [...curr, { ...node, id: again.id }]);
+            markFresh(again.id);
             if (sourceId) await link(liveId(sourceId), again.id, "Redo of Add step");
             selectOnly(again.id);
           },
@@ -2929,7 +2981,7 @@ function BpmnCanvas({
       creationQueueRef.current = p;
       return p;
     },
-    [projectId, modelId, versionId, record, deleteNodeImpl, selectOnly, liveId, applyPreMoves]
+    [projectId, modelId, versionId, record, deleteNodeImpl, selectOnly, liveId, applyPreMoves, markFresh]
   );
 
   /** Open a draft for the step after `from`, in the same lane. */
@@ -3525,7 +3577,10 @@ function BpmnCanvas({
       const old = lanesRef.current.find((l) => l.id === laneId);
       if (!old || old.label === newName) return;
       const oldName = old.label;
-      const reason = await promptReason("Rename lane");
+      const reason = await promptReason("Rename lane", {
+        targets: [{ id: laneId, kind: "lane" }],
+        rename: { before: oldName, after: newName },
+      });
       if (reason === null) return;
       renameLaneLocal(laneId, newName, reason);
       const description = "Rename lane";
@@ -3574,6 +3629,7 @@ function BpmnCanvas({
           order_index: atIndex,
           height_px: LANE_HEIGHT,
         });
+        markFresh(created.id);
         const newLane: CanvasLane = {
           id: created.id,
           label: created.name,
@@ -3598,7 +3654,7 @@ function BpmnCanvas({
         toast.error("Couldn't add the lane — please try again.");
       }
     },
-    [projectId, modelId, versionId, flush]
+    [projectId, modelId, versionId, flush, markFresh]
   );
 
   const deleteLane = useCallback(
@@ -3607,6 +3663,12 @@ function BpmnCanvas({
       const reason = await promptReason(DELETE_LANE_LABEL, {
         destructive: true,
         description: DELETE_LANE_DESCRIPTION,
+        targets: [
+          { id: laneId, kind: "lane" },
+          ...nodesRef.current
+            .filter((n) => n.laneId === laneId)
+            .map((n) => ({ id: n.id, kind: "step" as const })),
+        ],
       });
       if (reason === null) return;
       // Flush pending PATCHes so we don't fire a 404 against a deleted lane.
@@ -4129,6 +4191,9 @@ function BpmnCanvas({
       )}
 
       <ReasonPromptDialog {...reasonPrompt} />
+      {reasonPrompt.working && (
+        <WorkingReasonPill reason={reasonPrompt.working} onStop={reasonPrompt.stopWorking} />
+      )}
     </div>
   );
 });

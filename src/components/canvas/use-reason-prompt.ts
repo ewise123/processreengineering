@@ -44,6 +44,17 @@ export interface ReasonPromptState {
   submit: (reason: string) => void;
   /** Dismiss without a reason; aborts the pending edit. */
   cancel: () => void;
+  /** "Use this reason for my next changes" is ticked. */
+  keep: boolean;
+  setKeep: (next: boolean) => void;
+  /** The last reason entered this session, offered as a one-click chip. */
+  lastReason: string | null;
+  /** A reason the user chose to keep: later changes use it without asking,
+   * until `stopWorking` or a reload. */
+  working: string | null;
+  stopWorking: () => void;
+  /** Read the working reason from inside callbacks (never stale). */
+  currentWorking: () => string | null;
   /** Open the prompt and await the result. */
   promptReason: (
     actionLabel: string,
@@ -57,6 +68,10 @@ export function useReasonPrompt(): ReasonPromptState {
   const [destructive, setDestructive] = useState(false);
   const [description, setDescription] = useState<string | null>(null);
   const [value, setValue] = useState("");
+  const [keep, setKeep] = useState(false);
+  const [lastReason, setLastReason] = useState<string | null>(null);
+  const [working, setWorking] = useState<string | null>(null);
+  const workingRef = useRef<string | null>(null);
   // Holds the resolver for the in-flight promptReason() promise so submit /
   // cancel can settle it. Only one prompt is ever open at a time.
   const resolverRef = useRef<((value: string | null) => void) | null>(null);
@@ -71,11 +86,24 @@ export function useReasonPrompt(): ReasonPromptState {
   const submit = useCallback(
     (reason: string) => {
       const trimmed = reason.trim();
+      if (trimmed !== "") {
+        setLastReason(trimmed);
+        if (keep) {
+          workingRef.current = trimmed;
+          setWorking(trimmed);
+        }
+      }
       // An empty reason can't satisfy the 422 rule, so treat it as a cancel.
       settle(trimmed === "" ? null : trimmed);
     },
-    [settle]
+    [settle, keep]
   );
+
+  const stopWorking = useCallback(() => {
+    workingRef.current = null;
+    setWorking(null);
+  }, []);
+  const currentWorking = useCallback(() => workingRef.current, []);
 
   const cancel = useCallback(() => settle(null), [settle]);
 
@@ -96,6 +124,7 @@ export function useReasonPrompt(): ReasonPromptState {
       // prompt whose Delete button would submit a reason meant for some other
       // action.
       setValue("");
+      setKeep(false);
       setOpen(true);
       return new Promise<string | null>((resolve) => {
         resolverRef.current = resolve;
@@ -113,6 +142,12 @@ export function useReasonPrompt(): ReasonPromptState {
     setValue,
     submit,
     cancel,
+    keep,
+    setKeep,
+    lastReason,
+    working,
+    stopWorking,
+    currentWorking,
     promptReason,
   };
 }
