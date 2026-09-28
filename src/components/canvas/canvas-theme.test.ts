@@ -40,9 +40,13 @@ describe("connector colours", () => {
     expect(edgeStroke({ color: "#15803D" })).toBe("#15803d");
   });
 
-  it("starts a rework loop amber, but lets a picked colour win", () => {
-    expect(edgeStroke({ kind: "rework" })).toBe(THEME.rework);
+  it("draws a rework loop black by default, and lets a picked colour win", () => {
+    expect(edgeStroke({ kind: "rework" })).toBe(DEFAULT_CONNECTOR);
     expect(edgeStroke({ kind: "rework", color: "#1d4ed8" })).toBe("#1d4ed8");
+  });
+
+  it("offers the old loop amber as the palette's orange", () => {
+    expect(CONNECTOR_PALETTE.find((p) => p.name === "Orange")?.color).toBe(THEME.rework);
   });
 
   it("keeps an AI-proposed connector purple whatever its colour", () => {

@@ -3810,14 +3810,12 @@ function BpmnCanvas({
                 <path
                   d={d}
                   fill="none"
-                  stroke={backtrack ? THEME.rework : THEME.ink}
+                  stroke={THEME.ink}
                   strokeWidth={THEME.edgeWidth}
                   strokeDasharray="4 4"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  markerEnd={
-                    backtrack ? `url(#${MARKER.rework})` : "url(#poet-arrow-ink)"
-                  }
+                  markerEnd="url(#poet-arrow-ink)"
                   pointerEvents="none"
                 />
               );

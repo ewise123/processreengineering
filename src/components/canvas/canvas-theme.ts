@@ -72,7 +72,8 @@ export const CONNECTOR_PALETTE = [
   { name: "Blue", color: "#1d4ed8" },
   { name: "Green", color: "#15803d" },
   { name: "Red", color: "#b91c1c" },
-  { name: "Orange", color: "#c2410c" },
+  // The amber backtrack loops used to be drawn in by default.
+  { name: "Orange", color: "#d97706" },
   { name: "Purple", color: "#7e22ce" },
   { name: "Teal", color: "#0f766e" },
 ] as const;
@@ -86,8 +87,8 @@ export function storedConnectorColor(picked: string): string | null {
 
 /**
  * A connector's line colour. An AI-proposed connector is always purple until
- * it's accepted; otherwise its own colour wins; a rework loop with none is
- * amber; everything else is black.
+ * it's accepted; otherwise its own colour, or black. A rework loop is black
+ * too unless coloured — its dashes are what mark it as a loop.
  */
 export function edgeStroke(
   edge: { color?: string | null; kind?: "flow" | "rework" },
@@ -95,7 +96,6 @@ export function edgeStroke(
 ): string {
   if (opts.proposed) return THEME.proposed;
   if (edge.color) return edge.color.toLowerCase();
-  if (edge.kind === "rework") return THEME.rework;
   return DEFAULT_CONNECTOR;
 }
 
