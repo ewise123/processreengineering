@@ -38,5 +38,8 @@ describe("keysFor", () => {
     expect(keysFor("redo", true)).toBe("⌘⇧Z");
     expect(keysFor("fit", false)).toBe("Shift+1");
     expect(keysFor("delete", true)).toBe("Delete");
+    expect(keysFor("zoom-in", true)).toBe("⌘+");
+    expect(keysFor("zoom-in", false)).toBe("Ctrl++");
+    expect(keysFor("zoom-out", true)).toBe("⌘−");
   });
 });
