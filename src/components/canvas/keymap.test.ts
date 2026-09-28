@@ -54,6 +54,20 @@ describe("resolveShortcut — new navigation keys", () => {
   });
 });
 
+describe("resolveShortcut — fast creation keys", () => {
+  it("Tab adds the next step; Shift+Tab is left for the browser", () => {
+    expect(resolveShortcut(press("Tab"))).toBe("next-step");
+    expect(resolveShortcut(press("Tab", { shiftKey: true }))).toBeNull();
+    expect(resolveShortcut(press("Tab", { ctrlKey: true }))).toBeNull();
+  });
+
+  it("Enter and F2 rename", () => {
+    expect(resolveShortcut(press("Enter"))).toBe("rename");
+    expect(resolveShortcut(press("F2"))).toBe("rename");
+    expect(resolveShortcut(press("Enter", { shiftKey: true }))).toBeNull();
+  });
+});
+
 describe("resolveShortcut — leaves other keys alone", () => {
   it("ignores Alt/Option combinations (text input on a Mac)", () => {
     expect(resolveShortcut(press("z", { metaKey: true, altKey: true }))).toBeNull();

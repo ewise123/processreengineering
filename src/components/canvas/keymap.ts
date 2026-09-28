@@ -22,7 +22,9 @@ export type ShortcutAction =
   | "zoom-out"
   | "zoom-reset"
   | "fit"
-  | "zoom-selection";
+  | "zoom-selection"
+  | "next-step"
+  | "rename";
 
 export interface KeyInput {
   key: string;
@@ -51,6 +53,8 @@ export const SHORTCUTS: Shortcut[] = [
   { action: "tool-pan", keys: "H", label: "Pan tool (or hold Space)", group: "Tools" },
   { action: "tool-connect", keys: "C", label: "Connect tool", group: "Tools" },
   { action: "escape", keys: "Esc", label: "Back to Select, clear selection", group: "Tools" },
+  { action: "next-step", keys: "Tab", label: "Add the next step after the selected one", group: "Edit" },
+  { action: "rename", keys: "Enter", label: "Rename the selected step or connector (also F2)", group: "Edit" },
   { action: "undo", keys: "Mod+Z", label: "Undo", group: "Edit" },
   { action: "redo", keys: "Mod+Shift+Z", label: "Redo", group: "Edit" },
   { action: "copy", keys: "Mod+C", label: "Copy", group: "Edit" },
@@ -88,6 +92,8 @@ export function resolveShortcut(ev: KeyInput): ShortcutAction | null {
   if (k === "h") return "tool-pan";
   if (k === "c") return "tool-connect";
   if (k === "Escape") return "escape";
+  if (k === "Tab" && !ev.shiftKey) return "next-step";
+  if ((k === "Enter" && !ev.shiftKey) || k === "F2") return "rename";
   if (k === "Delete" || k === "Backspace") return "delete";
   return null;
 }

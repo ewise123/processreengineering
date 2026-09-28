@@ -103,7 +103,12 @@ const panelStyle: CSSProperties = {
  * left. Collapsed, it's a compact icon row at the bottom left, clear of the
  * lane headers (which stay pinned to the left edge while panning).
  */
-export function ShapePalette() {
+export function ShapePalette({
+  onAddShape,
+}: {
+  /** Click (rather than drag) a shape: add it at the centre of the view. */
+  onAddShape?: (shape: PaletteShape) => void;
+} = {}) {
   // Server render and hydration use the default (collapsed); the stored
   // choice takes over on the client without a mismatch.
   const collapsed = useSyncExternalStore(subscribe, readCollapsed, () => true);
@@ -143,7 +148,8 @@ export function ShapePalette() {
             key={s.kind}
             draggable
             onDragStart={(e) => onDragStart(e, s)}
-            title={`Drag onto the map — ${s.label}`}
+            onClick={() => onAddShape?.(s)}
+            title={`Click to add, or drag onto the map — ${s.label}`}
             aria-label={s.label}
             style={{ ...paletteRowStyle, padding: 6 }}
             {...hover}
@@ -207,7 +213,8 @@ export function ShapePalette() {
             key={s.kind}
             draggable
             onDragStart={(e) => onDragStart(e, s)}
-            title={`Drag to canvas — ${s.label}`}
+            onClick={() => onAddShape?.(s)}
+            title={`Click to add, or drag onto the map — ${s.label}`}
             style={paletteRowStyle}
             {...hover}
           >
