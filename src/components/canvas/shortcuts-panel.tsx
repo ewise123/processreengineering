@@ -3,6 +3,7 @@
 import { X } from "lucide-react";
 import { useEffect, useRef } from "react";
 
+import { formatKeys, useIsMac } from "./key-labels";
 import { SHORTCUTS, type Shortcut } from "./keymap";
 
 /** Things the mouse does that no key table can show. */
@@ -18,21 +19,12 @@ const GESTURES: { keys: string; label: string }[] = [
 
 const GROUPS: Shortcut["group"][] = ["Edit", "Navigate", "Tools", "Help"];
 
-/** "Mod+Shift+Z" → "⌘⇧Z" on a Mac, "Ctrl+Shift+Z" elsewhere. */
-export function formatKeys(keys: string, mac: boolean): string {
-  if (!mac) return keys.replace(/Mod/g, "Ctrl");
-  return keys
-    .replace(/Mod\+?/g, "⌘")
-    .replace(/Shift\+?/g, "⇧")
-    .replace(/Alt\+?/g, "⌥");
-}
-
 /**
  * The `?` panel: every canvas shortcut, read from the same table the key
  * handler uses, so the list can't drift from what the keys do.
  */
 export function ShortcutsPanel({ onClose }: { onClose: () => void }) {
-  const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+  const mac = useIsMac();
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {

@@ -16,6 +16,7 @@ import {
 import { useCallback, useRef, type ReactNode } from "react";
 
 import { minItemsFor, type AlignCommand } from "./align";
+import { keysFor, useIsMac } from "./key-labels";
 
 /**
  * The toolbar that floats over a multi-step selection: align, distribute,
@@ -56,6 +57,7 @@ export function SelectionToolbar({
   onCopy: () => void;
   onDelete: () => void;
 }) {
+  const mac = useIsMac();
   const observer = useRef<ResizeObserver | null>(null);
   const measure = useCallback(
     (el: HTMLDivElement | null) => {
@@ -180,10 +182,10 @@ export function SelectionToolbar({
         ))}
       </select>
       <Divider />
-      <BarButton label="Copy (⌘C)" onClick={onCopy}>
+      <BarButton label={`Copy (${keysFor("copy", mac)})`} onClick={onCopy}>
         <Copy size={15} />
       </BarButton>
-      <BarButton label="Delete (Del)" onClick={onDelete} danger>
+      <BarButton label={`Delete (${keysFor("delete", mac)})`} onClick={onDelete} danger>
         <Trash2 size={15} />
       </BarButton>
     </div>
