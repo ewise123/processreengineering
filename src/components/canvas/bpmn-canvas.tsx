@@ -131,7 +131,7 @@ import { useClipboard, type ClipboardSnapshot } from "./use-clipboard";
 import { useGraphPersistence, type SaveStatus } from "./use-persistence";
 import { useReasonPrompt, type ReasonPromptOptions } from "./use-reason-prompt";
 import { pickAutoReason, type ReasonTarget } from "./auto-reason";
-import { WorkingReasonPill } from "./working-reason-pill";
+import { ReasonSwitcher } from "./reason-switcher";
 import { useUndoStack, type UndoAction } from "./use-undo-stack";
 
 const WORLD_WIDTH_MIN = 1700;
@@ -4192,7 +4192,12 @@ function BpmnCanvas({
 
       <ReasonPromptDialog {...reasonPrompt} />
       {reasonPrompt.working && (
-        <WorkingReasonPill reason={reasonPrompt.working} onStop={reasonPrompt.stopWorking} />
+        <ReasonSwitcher
+          working={reasonPrompt.working}
+          recent={reasonPrompt.recentReasons}
+          onSwitch={reasonPrompt.setWorking}
+          onStop={reasonPrompt.stopWorking}
+        />
       )}
     </div>
   );

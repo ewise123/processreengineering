@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 
-import { QUICK_REASONS } from "./auto-reason";
+import { reasonChips } from "./auto-reason";
 import { REASON_PROMPT_DESCRIPTION } from "./delete-reason";
 import type { ReasonPromptState } from "./use-reason-prompt";
 
@@ -36,14 +36,11 @@ export function ReasonPromptDialog({
   cancel,
   keep,
   setKeep,
-  lastReason,
+  recentReasons,
 }: ReasonPromptState) {
-  // One click logs one of these. The last reason typed comes first, so the
+  // One click logs one of these. This session's reasons come first, so the
   // same reason for a run of changes is a single click each time.
-  const chips = [
-    ...(lastReason && !(QUICK_REASONS as readonly string[]).includes(lastReason) ? [lastReason] : []),
-    ...QUICK_REASONS,
-  ];
+  const chips = reasonChips(recentReasons);
   return (
     <Dialog
       open={open}
