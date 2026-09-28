@@ -260,6 +260,9 @@ function ToolButton({
   return (
     <button
       onClick={onClick}
+      // Don't take keyboard focus: Tab/Enter should keep acting on the canvas
+      // after a toolbar click, not on the button.
+      onMouseDown={(e) => e.preventDefault()}
       title={title}
       disabled={disabled}
       style={{
@@ -308,6 +311,9 @@ function PlainButton({
   return (
     <button
       onClick={onClick}
+      // Don't take keyboard focus: Tab/Enter should keep acting on the canvas
+      // after a toolbar click, not on the button.
+      onMouseDown={(e) => e.preventDefault()}
       title={title}
       aria-label={ariaLabel}
       style={{

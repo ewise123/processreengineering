@@ -49,6 +49,8 @@ export function NodeShape({
   onContextMenu,
   onStartConnect,
   onDoubleClick,
+  onOpenSubprocess,
+  hideLabel,
 }: {
   node: ResolvedNode;
   selected: boolean;
@@ -61,6 +63,10 @@ export function NodeShape({
   onContextMenu?: (e: MouseEvent, id: string) => void;
   onStartConnect?: (e: MouseEvent, sourceId: UUID, side: ConnectSide) => void;
   onDoubleClick?: (id: string) => void;
+  /** Drill into this step's sub-process (the "+" badge). */
+  onOpenSubprocess?: (childModelId: UUID) => void;
+  /** Hide the name while the on-canvas name box covers it. */
+  hideLabel?: boolean;
 }) {
   const { kind, x, y, w, h, label, id } = node;
   const isEvent = kind === "start" || kind === "end" || kind === "intermediate";
@@ -170,13 +176,25 @@ export function NodeShape({
             </text>
           )}
           {node.childModelId && (
-            <g transform={`translate(${w / 2 - 7}, ${h - 15})`} aria-label="Has sub-process" style={{ pointerEvents: "none" }}>
+            <g
+              transform={`translate(${w / 2 - 7}, ${h - 15})`}
+              aria-label="Open sub-process"
+              role="button"
+              style={{ cursor: "pointer" }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (node.childModelId) onOpenSubprocess?.(node.childModelId);
+              }}
+            >
+              <title>Open sub-process</title>
               <rect width={14} height={12} rx={3} fill="#fff" stroke={THEME.subtleText} strokeWidth={1} />
               <line x1={7} y1={3} x2={7} y2={9} stroke={THEME.subtleText} strokeWidth={1.25} strokeLinecap="round" />
               <line x1={4} y1={6} x2={10} y2={6} stroke={THEME.subtleText} strokeWidth={1.25} strokeLinecap="round" />
             </g>
           )}
-          <foreignObject x={8} y={6} width={w - 16} height={h - (node.childModelId ? 20 : 12)}>
+          {!hideLabel && <foreignObject x={8} y={6} width={w - 16} height={h - (node.childModelId ? 20 : 12)}>
             <div
               style={{
                 fontSize: THEME.nodeFontSize,
@@ -204,10 +222,10 @@ export function NodeShape({
                 {label}
               </span>
             </div>
-          </foreignObject>
+          </foreignObject>}
         </>
       )}
-      {isEvent && (
+      {isEvent && !hideLabel && (
         <foreignObject x={-50} y={h + 4} width={w + 100} height={40}>
           <div
             style={{
@@ -223,7 +241,7 @@ export function NodeShape({
           </div>
         </foreignObject>
       )}
-      {isGateway && (
+      {isGateway && !hideLabel && (
         // Beside the upper-right edge of the diamond, clear of the branches
         // that leave from its corners.
         <foreignObject x={w * 0.75 + 4} y={-26} width={160} height={30}>

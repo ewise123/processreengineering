@@ -423,6 +423,12 @@ export default function CanvasPage() {
           onCountsChange={handleCountsChange}
           onOpenProperties={() => setPropertiesCollapsed(false)}
           onDrillIntoNode={handleDrillIntoNode}
+          // Screen pixels on the right covered by floating panels, so new
+          // steps are scrolled into the part of the canvas you can see.
+          occludedRight={
+            (rightCollapsed ? 64 : 384) +
+            (selectedNode && !propertiesCollapsed ? 270 + 12 : 0)
+          }
         />
       )}
 

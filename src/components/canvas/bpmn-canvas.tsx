@@ -36,6 +36,7 @@ import { resolveShortcut, type ShortcutAction } from "./keymap";
 import {
   boundsOf,
   contentBounds,
+  ensureVisible,
   fitRect,
   interpretWheel,
   scaleAt,
@@ -50,7 +51,17 @@ import {
   PALETTE_DRAG_MIME,
   PALETTE_SHAPES,
   ShapePalette,
+  type PaletteShape,
 } from "./shape-palette";
+import {
+  creationReason,
+  EDGE_REASON_TAB,
+  resolveDraftCommit,
+  type DraftTrigger,
+  type DraftVia,
+} from "./draft-step";
+import { NodeLabelEditor } from "./node-label-editor";
+import { nextStepSlot, pointToLaneSlot, type LaneBox } from "./step-placement";
 import {
   buildEdgePath,
   EdgeArrow,
@@ -84,6 +95,31 @@ const MIN_LANE_HEIGHT = 90;
 const COLLAPSED_LANE_HEIGHT = 28;
 
 const PASTE_OFFSET = 24;
+
+/** A step being named before it exists (double-click, Tab, palette). It is
+ * only created when the name is committed; see ./draft-step. */
+type DraftStep = {
+  key: number;
+  laneId: UUID;
+  x: number;
+  relativeY: number;
+  type: string;
+  kind: CanvasNodeKind;
+  w: number;
+  h: number;
+  via: DraftVia;
+  defaultName: string;
+  /** The step this one follows (Tab). A promise because the source may be a
+   * draft still being saved when the user Tabs on from it. */
+  source: Promise<UUID | null> | null;
+  /** Where the source sits, in world units, for the preview connector. */
+  sourceRect?: { x: number; y: number; w: number; h: number };
+};
+
+type Editing =
+  | { kind: "rename"; nodeId: UUID }
+  | { kind: "draft"; draft: DraftStep }
+  | null;
 
 const ZOOM_STEP = 1.2;
 
@@ -227,6 +263,9 @@ interface BpmnCanvasProps {
   /** Fires when a node with a child sub-process is double-clicked. The page
    * resolves the child's latest version and routes there. */
   onDrillIntoNode?: (childModelId: UUID) => void;
+  /** Screen pixels on the right hidden behind floating panels (chat,
+   * properties). Scroll-into-view treats that strip as off-screen. */
+  occludedRight?: number;
 }
 
 /** Change-log reasons for applied-suggestion semantic edits. `planBundle` fills
@@ -264,6 +303,7 @@ function BpmnCanvas({
   onCountsChange,
   onOpenProperties,
   onDrillIntoNode,
+  occludedRight = 0,
 }, ref) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [nodes, setNodes] = useState(initialNodes);
@@ -277,6 +317,8 @@ function BpmnCanvas({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [drag, setDrag] = useState<Drag | null>(null);
   const [tool, setTool] = useState<CanvasTool>("select");
+  const occludedRightRef = useRef(occludedRight);
+  occludedRightRef.current = occludedRight;
   // Mouse/Trackpad scroll setting. Starts at the default and is read from
   // storage after mount, so server and first client render agree.
   const [wheelMode, setWheelMode] = useState<WheelMode>("trackpad");
@@ -1208,7 +1250,7 @@ function BpmnCanvas({
   // Actions are read through `shortcutActionsRef` (filled in once every
   // callback exists, further down) so this listener is registered once and
   // never goes stale.
-  const shortcutActionsRef = useRef<Partial<Record<ShortcutAction, () => void>>>({});
+  const shortcutActionsRef = useRef<Partial<Record<ShortcutAction, () => void | boolean>>>({});
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -1236,12 +1278,23 @@ function BpmnCanvas({
         setContextMenu(null);
         return;
       }
+      if (action === "next-step" || action === "rename") {
+        // Tab/Enter only belong to the canvas when focus is on it (or on
+        // nothing). Anywhere else — a panel button, a link — they keep their
+        // normal meaning.
+        const active = document.activeElement;
+        const root = svgRef.current?.parentElement;
+        const onCanvas = !active || active === document.body || (!!root && root.contains(active));
+        if (!onCanvas) return;
+      }
       const run = shortcutActionsRef.current[action];
       if (!run) return;
+      // An action can decline (e.g. Tab with nothing selected); then the key
+      // keeps its browser meaning.
+      if (run() === false) return;
       // Claim the key so the browser doesn't also act on it (page zoom on
       // Mod+=, select-all text on Mod+A, back-navigation on Backspace).
       e.preventDefault();
-      run();
     };
     const upHandler = (e: KeyboardEvent) => {
       if (e.code === "Space") spaceHeld.current = false;
@@ -1937,31 +1990,17 @@ function BpmnCanvas({
       0,
       Math.min(maxRel, dropCenterY - targetLane.y)
     );
-    try {
-      const created = await api.createNode(projectId, modelId, versionId, {
-        type: shape.backendType,
-        name: shape.defaultName,
-        lane_id: targetLane.id,
-        x: dropCenterX,
-        relative_y: rel,
-      });
-      const newNode: CanvasNode = {
-        id: created.id,
-        type: shape.backendType,
-        kind: shape.kind,
-        label: created.name,
-        laneId: targetLane.id,
-        x: dropCenterX,
-        relativeY: rel,
-        w: shape.w,
-        h: shape.h,
-      };
-      setNodes((curr) => [...curr, newNode]);
-      selectOnly(newNode.id);
-    } catch (err) {
-      console.error("Failed to create node from palette", err);
-      toast.error("Couldn't add that shape — please try again.");
-    }
+    // Name it first; the step is created when the name is committed (a
+    // blank name keeps the shape's default, since the drop was deliberate).
+    openDraft({
+      laneId: targetLane.id,
+      x: dropCenterX,
+      relativeY: rel,
+      type: shape.backendType,
+      via: "palette-drop",
+      defaultName: shape.defaultName,
+      source: null,
+    });
   };
 
   // Fit frames the map's actual content (lane headers to the right-most
@@ -1974,7 +2013,9 @@ function BpmnCanvas({
     const box =
       contentBounds(renderNodesRef.current, displayLanesRef.current) ??
       { x: 0, y: 0, w: worldWidth, h: worldHeight };
-    setViewport(fitRect(box, { w: rect.width, h: rect.height }, 48, 1));
+    // Frame the map in the part of the canvas not covered by side panels.
+    const visibleW = Math.max(200, rect.width - occludedRightRef.current);
+    setViewport(fitRect(box, { w: visibleW, h: rect.height }, 48, 1));
   }, [worldWidth, worldHeight]);
 
   const zoomToSelection = useCallback(() => {
@@ -1985,7 +2026,8 @@ function BpmnCanvas({
     const picked = renderNodesRef.current.filter((n) => selectedIdsRef.current.has(n.id));
     const box = boundsOf(picked);
     if (!box) return;
-    setViewport(fitRect(box, { w: rect.width, h: rect.height }, 96, 1.5));
+    const visibleW = Math.max(200, rect.width - occludedRightRef.current);
+    setViewport(fitRect(box, { w: visibleW, h: rect.height }, 96, 1.5));
   }, []);
 
   const zoomReset = useCallback(() => {
@@ -2180,6 +2222,7 @@ function BpmnCanvas({
           lane_id: ns.laneId,
           x: ns.x,
           relative_y: ns.relativeY,
+          reason: "Pasted from selection",
         });
         idMap.set(ns.oldId, created.id);
         createdNodes.push({
@@ -2261,6 +2304,12 @@ function BpmnCanvas({
           ...(count <= 1 && onOpenProperties
             ? [{ label: "Properties", onSelect: () => onOpenProperties() }]
             : []),
+          ...(() => {
+            const child = count <= 1 ? nodesRef.current.find((n) => n.id === nodeId)?.childModelId : null;
+            return child && onDrillIntoNode
+              ? [{ label: "Open sub-process", onSelect: () => onDrillIntoNode(child) }]
+              : [];
+          })(),
           { label: `Copy${suffix}`, onSelect: copySelectionImpl },
           {
             label: "Duplicate",
@@ -2273,7 +2322,7 @@ function BpmnCanvas({
         ],
       });
     },
-    [selectOnly, copySelectionImpl, pasteClipboardImpl, deleteSelectionImpl, onOpenProperties]
+    [selectOnly, copySelectionImpl, pasteClipboardImpl, deleteSelectionImpl, onOpenProperties, onDrillIntoNode]
   );
 
   const openEdgeMenu = useCallback(
@@ -2317,6 +2366,309 @@ function BpmnCanvas({
     [clipboard, pasteClipboardImpl, fitContent]
   );
 
+  // ── Fast creation and naming on the canvas (#97) ──────────────────────
+  // Double-click empty lane space, Tab from a step, or a palette click opens a
+  // draft with a name box; the step is created on commit. Renames happen in
+  // the same box over the step (double-click, Enter, F2).
+  const [editing, setEditing] = useState<Editing>(null);
+  const draftKeyRef = useRef(0);
+  // Creations run one at a time, so a fast Tab chain connects each step to
+  // the one before it even while that one is still being saved.
+  const creationQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  // Redo re-creates a step with a new id. Map old ids to their replacement
+  // so a later redo in the same chain connects to the live step.
+  const liveIdsRef = useRef(new Map<UUID, UUID>());
+  const liveId = useCallback((id: UUID): UUID => {
+    let cur = id;
+    const seen = new Set<UUID>();
+    while (liveIdsRef.current.has(cur) && !seen.has(cur)) {
+      seen.add(cur);
+      cur = liveIdsRef.current.get(cur)!;
+    }
+    return cur;
+  }, []);
+
+  const laneBoxes = useCallback(
+    (): LaneBox[] =>
+      displayLanesRef.current.map((l) => ({
+        id: l.id,
+        y: l.y,
+        h: l.h,
+        collapsed: collapsedLaneIds.has(l.id),
+      })),
+    [collapsedLaneIds]
+  );
+
+  /** Bring a world rect on screen (and zoom to 100% if the view is too far
+   * out to read what you're typing). */
+  const revealWorldRect = useCallback((r: { x: number; y: number; w: number; h: number }) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const box = { width: Math.max(200, rect.width - occludedRightRef.current), height: rect.height };
+    let v = viewportRef.current;
+    if (v.scale < 0.5) {
+      v = scaleAt(v, 1, {
+        x: (r.x + r.w / 2) * v.scale + v.tx,
+        y: (r.y + r.h / 2) * v.scale + v.ty,
+      });
+    }
+    v = ensureVisible(v, r, { w: box.width, h: box.height });
+    if (v !== viewportRef.current) setViewport(v);
+  }, []);
+
+  const openDraft = useCallback(
+    (args: {
+      laneId: UUID;
+      x: number;
+      relativeY: number;
+      type: string;
+      via: DraftVia;
+      defaultName: string;
+      source: Promise<UUID | null> | null;
+      sourceRect?: { x: number; y: number; w: number; h: number };
+    }) => {
+      const size = sizeForNodeType(args.type);
+      const draft: DraftStep = {
+        ...args,
+        key: ++draftKeyRef.current,
+        kind: nodeKindFromType(args.type),
+        w: size.w,
+        h: size.h,
+      };
+      setContextMenu(null);
+      setEditing({ kind: "draft", draft });
+      const lane = displayLanesRef.current.find((l) => l.id === args.laneId);
+      if (lane) revealWorldRect({ x: args.x, y: lane.y + args.relativeY, w: size.w, h: size.h });
+    },
+    [revealWorldRect]
+  );
+
+  /** Save a named draft as a real step (plus its connector, for Tab), as one
+   * undo step. Resolves to the new step's id, or null if it failed. */
+  const commitDraft = useCallback(
+    (draft: DraftStep, name: string): Promise<UUID | null> => {
+      const run = async (): Promise<UUID | null> => {
+        const sourceId = draft.source ? await draft.source : null;
+        if (draft.source && !sourceId) return null; // the step before it failed
+        const body = {
+          type: draft.type,
+          name,
+          lane_id: draft.laneId,
+          x: draft.x,
+          relative_y: draft.relativeY,
+        };
+        const created = await api.createNode(projectId, modelId, versionId, {
+          ...body,
+          reason: creationReason(draft.via),
+        });
+        const node: CanvasNode = {
+          id: created.id,
+          type: draft.type,
+          kind: draft.kind,
+          label: created.name,
+          laneId: draft.laneId,
+          x: draft.x,
+          relativeY: draft.relativeY,
+          w: draft.w,
+          h: draft.h,
+        };
+        setNodes((curr) => [...curr, node]);
+        const connect = async (from: UUID, to: UUID, reason: string) => {
+          const e = await api.createEdge(projectId, modelId, versionId, {
+            source_node_id: from,
+            target_node_id: to,
+            reason,
+          });
+          setEdges((curr) => [...curr, { id: e.id, from, to, label: e.label ?? null }]);
+        };
+        if (sourceId) await connect(liveId(sourceId), created.id, EDGE_REASON_TAB);
+        selectOnly(created.id);
+
+        let liveNodeId: UUID = created.id;
+        record({
+          description: "Add step",
+          do: async () => {
+            const again = await api.createNode(projectId, modelId, versionId, {
+              ...body,
+              reason: "Redo of Add step",
+            });
+            liveIdsRef.current.set(liveNodeId, again.id);
+            liveNodeId = again.id;
+            setNodes((curr) => [...curr, { ...node, id: again.id }]);
+            if (sourceId) await connect(liveId(sourceId), again.id, "Redo of Add step");
+            selectOnly(again.id);
+          },
+          undo: () => deleteNodeImpl(liveNodeId, { reason: "Undo of Add step" }),
+        });
+        return created.id;
+      };
+      const p = creationQueueRef.current
+        .then(run)
+        .catch((err) => {
+          console.error("Failed to add step", err);
+          toast.error("Couldn't add that step — please try again.");
+          return null;
+        });
+      creationQueueRef.current = p;
+      return p;
+    },
+    [projectId, modelId, versionId, record, deleteNodeImpl, selectOnly, liveId]
+  );
+
+  /** Open a draft for the step after `from`, in the same lane. */
+  const openNextDraft = useCallback(
+    (from: {
+      x: number;
+      relativeY: number;
+      w: number;
+      h: number;
+      laneId: UUID | null;
+      source: Promise<UUID | null>;
+    }) => {
+      const lane = from.laneId ? displayLanesRef.current.find((l) => l.id === from.laneId) : undefined;
+      if (!lane) {
+        toast.error("Can't place a step from a node with no lane.");
+        return;
+      }
+      if (collapsedLaneIds.has(lane.id)) return;
+      const size = sizeForNodeType("task");
+      const laneNodes = nodesRef.current
+        .filter((n) => n.laneId === lane.id)
+        .map((n) => ({ x: n.x, relativeY: n.relativeY, w: n.w, h: n.h }));
+      laneNodes.push({ x: from.x, relativeY: from.relativeY, w: from.w, h: from.h });
+      const slot = nextStepSlot(from, size, laneNodes, lane.h);
+      openDraft({
+        laneId: lane.id,
+        ...slot,
+        type: "task",
+        via: "tab",
+        defaultName: "New task",
+        source: from.source,
+        sourceRect: { x: from.x, y: lane.y + from.relativeY, w: from.w, h: from.h },
+      });
+    },
+    [collapsedLaneIds, openDraft]
+  );
+
+  const onDraftCommit = useCallback(
+    (draft: DraftStep, text: string, trigger: DraftTrigger) => {
+      setEditing(null);
+      const outcome = resolveDraftCommit({
+        text,
+        via: draft.via,
+        trigger,
+        defaultName: draft.defaultName,
+      });
+      if (outcome.kind === "discard") return;
+      const pending = commitDraft(draft, outcome.name);
+      if (trigger === "tab") {
+        openNextDraft({
+          x: draft.x,
+          relativeY: draft.relativeY,
+          w: draft.w,
+          h: draft.h,
+          laneId: draft.laneId,
+          source: pending,
+        });
+      }
+    },
+    [commitDraft, openNextDraft]
+  );
+
+  const startRename = useCallback(
+    (nodeId: UUID) => {
+      const n = renderNodesRef.current.find((x) => x.id === nodeId);
+      if (!n) return;
+      setContextMenu(null);
+      selectOnly(nodeId);
+      setEditing({ kind: "rename", nodeId });
+      revealWorldRect(n);
+    },
+    [selectOnly, revealWorldRect]
+  );
+
+  const onRenameCommit = useCallback(
+    async (nodeId: UUID, text: string, trigger: DraftTrigger) => {
+      setEditing(null);
+      const n = nodesRef.current.find((x) => x.id === nodeId);
+      if (!n) return;
+      const name = text.trim();
+      // Renaming an existing step still records a reason (it asks, or uses
+      // the session note when one is set).
+      if (trigger !== "escape" && name && name !== n.label) await updateNodeImpl(nodeId, { name });
+      if (trigger === "tab") {
+        const now = nodesRef.current.find((x) => x.id === nodeId) ?? n;
+        openNextDraft({ ...now, source: Promise.resolve(nodeId) });
+      }
+    },
+    [updateNodeImpl, openNextDraft]
+  );
+
+  const nextStepFromSelection = useCallback((): boolean => {
+    const ids = [...selectedIdsRef.current];
+    if (ids.length !== 1) return false;
+    const n = nodesRef.current.find((x) => x.id === ids[0]);
+    if (!n) return false;
+    openNextDraft({ ...n, source: Promise.resolve(n.id) });
+    return true;
+  }, [openNextDraft]);
+
+  const renameSelection = useCallback((): boolean => {
+    const ids = [...selectedIdsRef.current];
+    if (ids.length !== 1) return false;
+    if (nodesRef.current.some((n) => n.id === ids[0])) {
+      startRename(ids[0]);
+      return true;
+    }
+    if (edgesRef.current.some((e) => e.id === ids[0])) {
+      setEditingEdgeId(ids[0]);
+      return true;
+    }
+    return false;
+  }, [startRename]);
+
+  const addShapeAtCenter = useCallback(
+    (shape: PaletteShape) => {
+      const svg = svgRef.current;
+      if (!svg) return;
+      const r = svg.getBoundingClientRect();
+      const centre = toWorld(r.left + r.width / 2, r.top + r.height / 2);
+      const lanes = laneBoxes();
+      let slot = pointToLaneSlot(centre, lanes, shape);
+      if (!slot) {
+        const first = lanes.find((l) => !l.collapsed);
+        if (!first) return;
+        slot = {
+          laneId: first.id,
+          x: Math.max(52, centre.x - shape.w / 2),
+          relativeY: Math.max(0, (first.h - shape.h) / 2),
+        };
+      }
+      openDraft({
+        ...slot,
+        type: shape.backendType,
+        via: "palette-click",
+        defaultName: shape.defaultName,
+        source: null,
+      });
+    },
+    [toWorld, laneBoxes, openDraft]
+  );
+
+  const onSvgDoubleClick = (e: MouseEvent<SVGSVGElement>) => {
+    if (tool !== "select") return;
+    const target = e.target as SVGElement;
+    const isBg =
+      target === svgRef.current ||
+      (target.tagName === "rect" && target.getAttribute("data-bg") === "1");
+    if (!isBg) return;
+    const size = sizeForNodeType("task");
+    const slot = pointToLaneSlot(toWorld(e.clientX, e.clientY), laneBoxes(), size);
+    if (!slot) return;
+    openDraft({ ...slot, type: "task", via: "dblclick", defaultName: "New task", source: null });
+  };
+
   // Everything the keyboard can trigger, refreshed each render so the
   // once-registered key listener always calls current callbacks.
   shortcutActionsRef.current = {
@@ -2338,6 +2690,8 @@ function BpmnCanvas({
     "zoom-reset": zoomReset,
     fit: fitContent,
     "zoom-selection": zoomToSelection,
+    "next-step": nextStepFromSelection,
+    rename: renameSelection,
   };
 
   const moveLaneLocal = useCallback(
@@ -2562,6 +2916,7 @@ function BpmnCanvas({
       <svg
         ref={svgRef}
         onMouseDown={onSvgMouseDown}
+        onDoubleClick={onSvgDoubleClick}
         onContextMenu={openCanvasMenu}
         onDragOver={onCanvasDragOver}
         onDrop={onCanvasDrop}
@@ -2708,12 +3063,73 @@ function BpmnCanvas({
               onMouseDown={onNodeMouseDown}
               onContextMenu={openNodeMenu}
               onStartConnect={onStartConnect}
-              onDoubleClick={(id) => {
-                const n = nodesRef.current.find((x) => x.id === id);
-                if (n?.childModelId) onDrillIntoNode?.(n.childModelId);
-              }}
+              onDoubleClick={startRename}
+              onOpenSubprocess={onDrillIntoNode}
+              hideLabel={editing?.kind === "rename" && editing.nodeId === node.id}
             />
           ))}
+          {editing?.kind === "rename" &&
+            (() => {
+              const n = renderNodeById.get(editing.nodeId);
+              if (!n) return null;
+              return (
+                <NodeLabelEditor
+                  key={`rename-${n.id}`}
+                  rect={n}
+                  kind={n.kind}
+                  initial={n.label}
+                  onCommit={(text, trigger) => void onRenameCommit(n.id, text, trigger)}
+                  onCancel={() => setEditing(null)}
+                />
+              );
+            })()}
+          {editing?.kind === "draft" &&
+            (() => {
+              const d = editing.draft;
+              const lane = displayLanes.find((l) => l.id === d.laneId);
+              if (!lane) return null;
+              const rect = { x: d.x, y: lane.y + d.relativeY, w: d.w, h: d.h };
+              const ghost = {
+                fill: "#fff",
+                stroke: THEME.selection,
+                strokeWidth: 1.5,
+                strokeDasharray: "5 4",
+                pointerEvents: "none" as const,
+              };
+              return (
+                <g key={`draft-${d.key}`}>
+                  {d.sourceRect && (
+                    <path
+                      d={roundedPath(buildEdgePath(d.sourceRect, rect).points)}
+                      fill="none"
+                      stroke={THEME.selection}
+                      strokeWidth={THEME.edgeWidth}
+                      strokeDasharray="5 4"
+                      markerEnd={`url(#${MARKER.selected})`}
+                      pointerEvents="none"
+                    />
+                  )}
+                  {d.kind === "gateway" ? (
+                    <polygon
+                      points={`${rect.x + rect.w / 2},${rect.y} ${rect.x + rect.w},${rect.y + rect.h / 2} ${rect.x + rect.w / 2},${rect.y + rect.h} ${rect.x},${rect.y + rect.h / 2}`}
+                      {...ghost}
+                    />
+                  ) : d.kind === "start" || d.kind === "end" || d.kind === "intermediate" ? (
+                    <circle cx={rect.x + rect.w / 2} cy={rect.y + rect.h / 2} r={rect.w / 2} {...ghost} />
+                  ) : (
+                    <rect x={rect.x} y={rect.y} width={rect.w} height={rect.h} rx={THEME.nodeRadius} {...ghost} />
+                  )}
+                  <NodeLabelEditor
+                    rect={rect}
+                    kind={d.kind}
+                    initial=""
+                    placeholder={d.via === "palette-drop" ? d.defaultName : "Name this step"}
+                    onCommit={(text, trigger) => onDraftCommit(d, text, trigger)}
+                    onCancel={() => onDraftCommit(d, "", "escape")}
+                  />
+                </g>
+              );
+            })()}
           {flashId && (() => {
             const pulse = (
               <animate attributeName="opacity" values="1;0.2;1" dur="0.7s" repeatCount="2" />
@@ -2864,7 +3280,7 @@ function BpmnCanvas({
         onToggleCollapse={toggleLaneCollapse}
       />
 
-      <ShapePalette />
+      <ShapePalette onAddShape={addShapeAtCenter} />
 
       {/* end SVG */}
       <FloatingToolbar

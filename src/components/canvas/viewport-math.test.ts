@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   boundsOf,
   contentBounds,
+  ensureVisible,
   fitRect,
   interpretWheel,
   MAX_SCALE,
@@ -118,5 +119,19 @@ describe("interpretWheel", () => {
   it("converts line- and page-based deltas to pixels", () => {
     expect(interpretWheel(wheel({ deltaY: 3, deltaMode: 1 }), "trackpad")).toEqual({ kind: "pan", dx: 0, dy: 48 });
     expect(interpretWheel(wheel({ deltaY: 1, deltaMode: 2 }), "trackpad", 700)).toEqual({ kind: "pan", dx: 0, dy: 700 });
+  });
+});
+
+describe("ensureVisible", () => {
+  const size = { w: 1000, h: 800 };
+  it("leaves the view alone when the rect is on screen", () => {
+    const v = { tx: 0, ty: 0, scale: 1 };
+    expect(ensureVisible(v, { x: 100, y: 100, w: 170, h: 64 }, size)).toBe(v);
+  });
+  it("pans just enough to bring an off-screen step into view", () => {
+    const v = { tx: 0, ty: 0, scale: 1 };
+    const next = ensureVisible(v, { x: 950, y: 100, w: 170, h: 64 }, size);
+    expect(next.tx).toBe(1000 - 48 - 1120);
+    expect(next.ty).toBe(0);
   });
 });

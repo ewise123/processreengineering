@@ -228,6 +228,20 @@ def test_update_lane_noop_name_logs_nothing(db):
 # Create tests
 # ---------------------------------------------------------------------------
 
+def test_create_node_keeps_the_reason_the_caller_gives(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    new_node = pm_api.create_node(
+        project=project,
+        model_id=version.model_id,
+        version_id=version.id,
+        payload=NodeCreate(type="task", name="Validate", lane_id=n1.lane_id, x=300.0,
+                           relative_y=0.0, reason="Added as next step (Tab)"),
+        db=db,
+    )
+    ev = _events_for(db, new_node.id)[0]
+    assert ev.reason == "Added as next step (Tab)"
+
+
 def test_create_node_logs_one_create_event(db):
     project, version, n1, claim = _seed_version_for_endpoint(db)
     new_node = pm_api.create_node(
@@ -244,7 +258,7 @@ def test_create_node_logs_one_create_event(db):
     assert ev.target_type == "node"
     assert ev.source == "manual"
     assert ev.actor_kind == "user"
-    assert ev.reason == "Added from the shape palette"
+    assert ev.reason == "Added a step"
     assert ev.after["name"] == "New Step"
     assert ev.after["type"] == "task"
 

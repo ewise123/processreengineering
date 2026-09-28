@@ -890,7 +890,10 @@ def create_node(
         model_id=version.model_id,
         version_id=version.id,
         kind=ChangeKind.CREATE.value,
-        reason=(payload.reason.strip() if payload.reason and payload.reason.strip() else "Added from the shape palette"),
+        # Callers say how the step was made ("Added via double-click",
+        # "Pasted from selection", ...). The fallback stays neutral: a caller
+        # that forgets must not claim the palette (issue #90).
+        reason=(payload.reason.strip() if payload.reason and payload.reason.strip() else "Added a step"),
         after={"name": node.name, "type": node.type,
                "lane_id": str(node.lane_id) if node.lane_id else None},
         source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,

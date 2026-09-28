@@ -147,3 +147,28 @@ export function interpretWheel(e: WheelInput, mode: WheelMode, pagePx = 800): Wh
   }
   return { kind: "pan", dx, dy };
 }
+
+/**
+ * The smallest pan that brings `rect` fully on screen with `margin` pixels
+ * to spare. Leaves the viewport alone when the rect is already visible, so
+ * a Tab chain only scrolls when the next step would land off-screen.
+ */
+export function ensureVisible(
+  v: Viewport,
+  rect: WorldRect,
+  size: { w: number; h: number },
+  margin = 48
+): Viewport {
+  const left = rect.x * v.scale + v.tx;
+  const right = (rect.x + rect.w) * v.scale + v.tx;
+  const top = rect.y * v.scale + v.ty;
+  const bottom = (rect.y + rect.h) * v.scale + v.ty;
+  let dx = 0;
+  let dy = 0;
+  if (right > size.w - margin) dx = size.w - margin - right;
+  if (left + dx < margin) dx = margin - left;
+  if (bottom > size.h - margin) dy = size.h - margin - bottom;
+  if (top + dy < margin) dy = margin - top;
+  if (dx === 0 && dy === 0) return v;
+  return { ...v, tx: v.tx + dx, ty: v.ty + dy };
+}
