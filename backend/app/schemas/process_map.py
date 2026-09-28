@@ -91,12 +91,24 @@ class NodeCreate(BaseModel):
     ai_applied: bool = False
 
 
+_SIDE_PATTERN = r"^(top|bottom)$"
+_EDGE_KIND_PATTERN = r"^(flow|rework)$"
+
+
 class EdgeCreate(BaseModel):
-    """Body for the connect-tool flow: drag from source node to target."""
+    """Body for the connect-tool flow: drag from source node to target.
+
+    The Rework tool additionally pins ``source_side``/``target_side`` (top or
+    bottom) and sets ``edge_kind='rework'`` so the connection renders as a
+    distinct backtrack loop. Omitting all three reproduces the plain forward
+    connect."""
 
     source_node_id: UUID
     target_node_id: UUID
     label: str | None = Field(default=None, max_length=300)
+    source_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
+    target_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
+    edge_kind: str = Field(default="flow", pattern=_EDGE_KIND_PATTERN)
     reason: str | None = None
     ai_applied: bool = False
 
@@ -110,6 +122,8 @@ class EdgeUpdate(BaseModel):
     condition_text: str | None = None
     bend_x: float | None = None
     bend_y: float | None = None
+    source_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
+    target_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
     reason: str | None = Field(default=None, max_length=2000)
     ai_applied: bool = False
 
@@ -237,6 +251,9 @@ class ProcessEdgeRead(BaseModel):
     condition_text: str | None
     bend_x: float | None = None
     bend_y: float | None = None
+    source_side: str | None = None
+    target_side: str | None = None
+    edge_kind: str = "flow"
 
 
 class AiProposedStepResult(BaseModel):

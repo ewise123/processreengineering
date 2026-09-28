@@ -59,6 +59,14 @@ export interface CanvasEdge {
   bendX?: number | null;
   /** Y-coordinate of the horizontal mid-segment for vertical-routed edges. */
   bendY?: number | null;
+  /** Pinned exit/entry faces for a manual backtrack edge (top/bottom). When
+   * both are set, routing follows the orthogonal loop instead of geometric
+   * auto-routing. NULL/undefined → auto-routed (the default). */
+  sourceSide?: "top" | "bottom" | null;
+  targetSide?: "top" | "bottom" | null;
+  /** "rework" for manually drawn backtrack loops (rendered amber/dashed);
+   * undefined/"flow" for ordinary forward edges. */
+  kind?: "flow" | "rework";
   /** Optional gateway-branch condition text (properties.condition_text on the
    * API edge). Populated at load so an applied set_edge_condition op can be
    * undone back to the prior value. */

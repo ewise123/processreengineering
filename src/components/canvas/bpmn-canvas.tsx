@@ -45,6 +45,11 @@ import {
   type ConnectSide,
   type EdgeOrientation,
 } from "./shapes";
+import { pickDropTarget, type Rect } from "./drop-target";
+
+/** World units a connect drop may land outside a node and still target it. */
+const DROP_TOLERANCE = 20;
+import { isBacktrack, deriveLoopSides } from "./backtrack";
 import type {
   CanvasEdge,
   CanvasLane,
@@ -128,6 +133,7 @@ function buildPreviewToCursor(
   const midY = (start.y + cy) / 2;
   return `M ${start.x} ${start.y} L ${start.x} ${midY} L ${cx} ${midY} L ${cx} ${cy}`;
 }
+
 
 function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
   if (lanes.length === 0) return undefined;
@@ -703,12 +709,23 @@ function BpmnCanvas({
   );
 
   const createEdgeImpl = useCallback(
-    async (sourceId: UUID, targetId: UUID) => {
+    async (
+      sourceId: UUID,
+      targetId: UUID,
+      opts?: {
+        sourceSide?: "top" | "bottom";
+        targetSide?: "top" | "bottom";
+        kind?: "rework";
+      }
+    ) => {
       let currentId: UUID;
       const create = async () => {
         const created = await api.createEdge(projectId, modelId, versionId, {
           source_node_id: sourceId,
           target_node_id: targetId,
+          ...(opts?.sourceSide ? { source_side: opts.sourceSide } : {}),
+          ...(opts?.targetSide ? { target_side: opts.targetSide } : {}),
+          ...(opts?.kind ? { edge_kind: opts.kind } : {}),
         });
         currentId = created.id;
         setEdges((curr) => [
@@ -718,12 +735,15 @@ function BpmnCanvas({
             from: sourceId,
             to: targetId,
             label: created.label ?? null,
+            sourceSide: created.source_side ?? opts?.sourceSide ?? null,
+            targetSide: created.target_side ?? opts?.targetSide ?? null,
+            kind: created.edge_kind === "rework" ? "rework" : "flow",
           },
         ]);
       };
       await create();
       record({
-        description: "Create edge",
+        description: opts?.kind === "rework" ? "Create rework edge" : "Create edge",
         do: create,
         undo: async () => {
           await api.deleteEdge(projectId, currentId, {
@@ -1462,8 +1482,9 @@ function BpmnCanvas({
     if (!resolved || !stored) return;
     const { x, y } = toWorld(e.clientX, e.clientY);
     if (tool === "connect") {
-      // Body-drag in connect mode picks the source side from where the user
-      // grabbed: closest of top/right/bottom/left to the click point.
+      // Body-drag picks the source side from where the user grabbed: the closest
+      // of top/right/bottom/left to the click point. Backtrack vs forward is
+      // decided on drop, not here.
       const cx = resolved.x + resolved.w / 2;
       const cy = resolved.y + resolved.h / 2;
       const dx = x - cx;
@@ -1714,27 +1735,43 @@ function BpmnCanvas({
       }
       if (drag.type === "connect") {
         const { x, y } = screenToWorld(e.clientX, e.clientY);
-        const target = nodesRef.current.find((n) => {
-          // Resolve node Y the same way renderNodes does.
-          const lane = n.laneId
-            ? displayLanesRef.current.find((l) => l.id === n.laneId)
-            : undefined;
-          const ny = lane ? lane.y + n.relativeY : n.relativeY;
-          return (
-            n.id !== drag.sourceId &&
-            x >= n.x &&
-            x <= n.x + n.w &&
-            y >= ny &&
-            y <= ny + n.h
-          );
-        });
-        if (target) {
+        // Build resolved candidate rects (exclude the source) and pick the
+        // nearest within tolerance, so a drop just outside a node still lands.
+        const candidates: Rect[] = nodesRef.current
+          .filter((n) => n.id !== drag.sourceId)
+          .map((n) => {
+            const lane = n.laneId
+              ? displayLanesRef.current.find((l) => l.id === n.laneId)
+              : undefined;
+            const ny = lane ? lane.y + n.relativeY : n.relativeY;
+            return { id: n.id, x: n.x, y: ny, width: n.w, height: n.h };
+          });
+        const targetId = pickDropTarget({ x, y }, candidates, DROP_TOLERANCE);
+        const picked = candidates.find((c) => c.id === targetId);
+        const targetRect = picked
+          ? { x: picked.x, y: picked.y, w: picked.width, h: picked.height }
+          : undefined;
+        if (targetId && targetRect) {
           const sourceId = drag.sourceId;
-          const targetId = target.id;
+          const source = nodesRef.current.find((n) => n.id === sourceId);
           const exists = edgesRef.current.some(
             (e2) => e2.from === sourceId && e2.to === targetId
           );
-          if (!exists) {
+          if (!exists && source && isBacktrack(source, targetRect)) {
+            const { sourceSide, targetSide } = deriveLoopSides(
+              drag.sourceSide,
+              y,
+              targetRect
+            );
+            void createEdgeImpl(sourceId, targetId, {
+              sourceSide,
+              targetSide,
+              kind: "rework",
+            }).catch((err) => {
+              console.error("Failed to create rework edge", err);
+              toast.error("Couldn't add that backtrack arrow — please try again.");
+            });
+          } else if (!exists) {
             void createEdgeImpl(sourceId, targetId).catch((err) => {
               console.error("Failed to create edge", err);
               toast.error("Couldn't connect those steps — please try again.");
@@ -2524,6 +2561,17 @@ function BpmnCanvas({
           >
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
           </marker>
+          <marker
+            id="poet-arrow-rework"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="8"
+            markerHeight="8"
+            orient="auto"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706" />
+          </marker>
           <pattern
             id="poet-grid"
             width="24"
@@ -2689,28 +2737,43 @@ function BpmnCanvas({
             (() => {
               const source = renderNodes.find((n) => n.id === drag.sourceId);
               if (!source) return null;
-              // If the cursor is over a target node, preview the final
-              // edge using node-to-node routing so the user can see exactly
-              // what they'll get. Otherwise fall back to source-side → cursor.
-              const target = renderNodes.find(
-                (n) =>
-                  n.id !== drag.sourceId &&
-                  drag.currX >= n.x &&
-                  drag.currX <= n.x + n.w &&
-                  drag.currY >= n.y &&
-                  drag.currY <= n.y + n.h
-              );
-              const d = target
-                ? buildEdgePath(source, target).d
-                : buildPreviewToCursor(source, drag.sourceSide, drag.currX, drag.currY);
+              // Use the same picker as the drop so the preview matches the result.
+              const candidates: Rect[] = renderNodes
+                .filter((n) => n.id !== drag.sourceId)
+                .map((n) => ({ id: n.id, x: n.x, y: n.y, width: n.w, height: n.h }));
+              const targetId = pickDropTarget({ x: drag.currX, y: drag.currY }, candidates, DROP_TOLERANCE);
+              const target = targetId
+                ? renderNodes.find((n) => n.id === targetId)
+                : undefined;
+              const backtrack = !!target && isBacktrack(source, target);
+              let d: string;
+              if (target && backtrack) {
+                const { sourceSide, targetSide } = deriveLoopSides(
+                  drag.sourceSide,
+                  drag.currY,
+                  target
+                );
+                d = buildEdgePath(source, target, { sourceSide, targetSide }).d;
+              } else if (target) {
+                d = buildEdgePath(source, target).d;
+              } else {
+                d = buildPreviewToCursor(
+                  source,
+                  drag.sourceSide,
+                  drag.currX,
+                  drag.currY
+                );
+              }
               return (
                 <path
                   d={d}
                   fill="none"
-                  stroke="#0f172a"
+                  stroke={backtrack ? "#d97706" : "#0f172a"}
                   strokeWidth={1.5}
                   strokeDasharray="4 4"
-                  markerEnd="url(#poet-arrow)"
+                  markerEnd={
+                    backtrack ? "url(#poet-arrow-rework)" : "url(#poet-arrow)"
+                  }
                   pointerEvents="none"
                 />
               );

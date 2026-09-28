@@ -7,7 +7,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.db.mixins import IdMixin, SoftDeleteMixin, TimestampMixin
-from app.enums import ClaimLinkKind, ProcessVersionStatus
+from app.enums import ClaimLinkKind, EdgeKind, ProcessVersionStatus
 
 
 class ProcessModel(IdMixin, TimestampMixin, SoftDeleteMixin, Base):
@@ -147,6 +147,16 @@ class ProcessEdge(IdMixin, TimestampMixin, Base):
     # segment; bend_y is the analog for vertical routing. NULL → auto-route.
     bend_x: Mapped[float | None] = mapped_column(Float, nullable=True)
     bend_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Pinned anchor faces for manually drawn backtrack/rework edges. Each is
+    # "top" or "bottom" (or NULL → geometric auto-routing, the default for every
+    # generated/forward edge). When both are set, routing exits the source face
+    # and enters the target face as an orthogonal loop.
+    source_side: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    target_side: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # "flow" (default) or "rework". Drives distinct rendering for manual loops.
+    edge_kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=EdgeKind.FLOW.value
+    )
 
 
 class NodeClaimLink(IdMixin, TimestampMixin, Base):
