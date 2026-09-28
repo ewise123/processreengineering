@@ -36,6 +36,7 @@ import { bundleNewNames } from "./suggestion-display";
 import { SuggestionList, type CardStatus } from "./suggestion-card";
 import { assistantItemFromResponse } from "./chat-tab-helpers";
 import { QuestionSet } from "./question-set";
+import { randomUUID } from "@/lib/uuid";
 
 export type ChatItem = ChatTurn & {
   contextNote?: string;
@@ -72,7 +73,7 @@ function readOrMintSessionId(versionId: UUID): string | null {
   if (typeof window === "undefined" || !window.sessionStorage) return null;
   let sid = window.sessionStorage.getItem(sidKey(versionId));
   if (!sid) {
-    sid = crypto.randomUUID();
+    sid = randomUUID();
     window.sessionStorage.setItem(sidKey(versionId), sid);
   }
   return sid;
@@ -81,7 +82,7 @@ function readOrMintSessionId(versionId: UUID): string | null {
 /** Rotate to a fresh chat-session id (new conversation), persisting it. */
 function mintSessionId(versionId: UUID): string | null {
   if (typeof window === "undefined" || !window.sessionStorage) return null;
-  const sid = crypto.randomUUID();
+  const sid = randomUUID();
   window.sessionStorage.setItem(sidKey(versionId), sid);
   return sid;
 }
