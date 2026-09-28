@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 
 import type { IssueSeverity, UUID } from "@/lib/types";
 
@@ -41,6 +41,9 @@ export const HANDLE_OFFSET = 12;
 /** A "+" sits further out than a plain dot, so it floats clear of the
  * selection ring instead of touching it. */
 export const PLUS_OFFSET = 21;
+/** How long a step keeps its handles after the pointer leaves it: enough to
+ * cross the gap to a handle, short enough not to linger. */
+export const HOVER_GRACE_MS = 300;
 
 export function NodeShape({
   node,
@@ -80,9 +83,26 @@ export function NodeShape({
   const isGateway = kind === "gateway";
   const isTask = !isEvent && !isGateway;
 
+  // Hover survives a short trip off the shape, so the pointer can cross the
+  // gap to a handle. A timer rather than an invisible margin: a margin sat
+  // over the arrows beside the step and swallowed clicks meant for them.
   const [hover, setHover] = useState(false);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const enter = () => {
+    if (leaveTimer.current) clearTimeout(leaveTimer.current);
+    leaveTimer.current = null;
+    setHover(true);
+  };
+  const leave = () => {
+    if (leaveTimer.current) clearTimeout(leaveTimer.current);
+    leaveTimer.current = setTimeout(() => setHover(false), HOVER_GRACE_MS);
+  };
+  useEffect(() => () => {
+    if (leaveTimer.current) clearTimeout(leaveTimer.current);
+  }, []);
+  // The name box covers the step while renaming, so its handles step aside.
   const handlesVisible =
-    !!onStartConnect && (hover || selected || showHandles);
+    !!onStartConnect && !hideLabel && (hover || selected || showHandles);
 
   // Border colour, by precedence: issue flag > AI-proposed > hover > resting.
   // Selection is drawn as a separate outer ring, so it never changes the
@@ -101,25 +121,10 @@ export function NodeShape({
       onMouseDown={(e) => onMouseDown(e, id)}
       onContextMenu={(e) => onContextMenu?.(e, id)}
       onDoubleClick={() => onDoubleClick?.(id)}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      onMouseEnter={enter}
+      onMouseLeave={leave}
       data-node-id={id}
     >
-      {handlesVisible && (
-        // Invisible margin under the shape that keeps the node "hovered" while
-        // the pointer crosses the gap to a handle. Drawn first so the shape
-        // stays on top and still takes its own drags; a press in the gap is
-        // swallowed so it neither drags the node nor starts a marquee.
-        <rect
-          x={-PLUS_OFFSET - 10}
-          y={-PLUS_OFFSET - 10}
-          width={w + (PLUS_OFFSET + 10) * 2}
-          height={h + (PLUS_OFFSET + 10) * 2}
-          fill="transparent"
-          style={{ cursor: "default" }}
-          onMouseDown={(e) => e.stopPropagation()}
-        />
-      )}
       {isEvent && (
         <>
           {selected && <SelectionRing kind="circle" w={w} h={h} />}
