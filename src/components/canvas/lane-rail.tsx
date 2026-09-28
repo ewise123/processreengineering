@@ -8,6 +8,22 @@ import { COLLAPSED_ARROW_BOTTOM, COLLAPSED_GAP } from "./lane-label";
 import type { CanvasLane, Viewport } from "./types";
 
 const HEADER_PX = 44;
+/** Kept clear left of pinned lane headers for their drag/options buttons. */
+export const RAIL_GUTTER = 32;
+
+const laneControlStyle = {
+  width: 26,
+  height: 26,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  borderRadius: 6,
+  background: "rgba(255,255,255,0.97)",
+  border: "1px solid #cbd5e1",
+  boxShadow: "0 1px 3px rgba(15,23,42,0.12)",
+  color: "#475569",
+  padding: 0,
+} as const;
 
 type DragState = {
   laneId: string;
@@ -129,10 +145,11 @@ export function LaneRail({
     };
   }, [resizeState, viewport, onResizeLane, onResizeLanePreview]);
 
-  // Headers stay pinned to the left edge when the map is panned right, so you
-  // never lose track of which lane you're in.
-  const railLeft = Math.max(0, viewport.tx);
-  const railStuck = viewport.tx < 0;
+  // Headers stay pinned near the left edge when the map is panned right, so
+  // you never lose track of which lane you're in. They stop RAIL_GUTTER short
+  // of the edge so the drag/options buttons always have room outside them.
+  const railLeft = Math.max(RAIL_GUTTER, viewport.tx);
+  const railStuck = viewport.tx < RAIL_GUTTER;
   const headerW = HEADER_PX * viewport.scale;
 
   return (
@@ -366,14 +383,19 @@ export function LaneRail({
             </div>
 
             {(isHover || isMenu) && !isEditing && !isDragging && (
+              // Outside the lane, to the left of its name, centred on the
+              // lane. The padding on the right bridges the gap to the strip
+              // so moving the pointer across doesn't drop the hover.
               <div
                 style={{
                   position: "absolute",
-                  top: 4,
-                  left: 2,
+                  right: "100%",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  paddingRight: 4,
                   display: "flex",
                   flexDirection: "column",
-                  gap: 2,
+                  gap: 4,
                 }}
               >
                 <button
@@ -389,22 +411,12 @@ export function LaneRail({
                       railTop: railTop(),
                     });
                   }}
-                  style={{
-                    width: 18,
-                    height: 18,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    borderRadius: 3,
-                    background: "rgba(255,255,255,0.95)",
-                    border: "1px solid #cbd5e1",
-                    cursor: "grab",
-                    color: "#475569",
-                  }}
+                  aria-label="Drag to reorder"
+                  style={{ ...laneControlStyle, cursor: "grab" }}
                 >
                   <svg
-                    width="10"
-                    height="10"
+                    width="15"
+                    height="15"
                     viewBox="0 0 24 24"
                     fill="currentColor"
                   >
@@ -423,22 +435,18 @@ export function LaneRail({
                     e.stopPropagation();
                     setMenuFor(isMenu ? null : lane.id);
                   }}
+                  aria-label="Lane options"
                   style={{
-                    width: 18,
-                    height: 18,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    borderRadius: 3,
-                    background: isMenu ? "#0f172a" : "rgba(255,255,255,0.95)",
-                    border: "1px solid #cbd5e1",
+                    ...laneControlStyle,
+                    background: isMenu ? "#0f172a" : laneControlStyle.background,
+                    borderColor: isMenu ? "#0f172a" : "#cbd5e1",
                     color: isMenu ? "#fff" : "#475569",
                     cursor: "pointer",
                   }}
                 >
                   <svg
-                    width="10"
-                    height="10"
+                    width="15"
+                    height="15"
                     viewBox="0 0 24 24"
                     fill="currentColor"
                   >
