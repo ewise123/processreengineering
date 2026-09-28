@@ -5,6 +5,8 @@ import {
   freshReason,
   isSpellingFix,
   pickAutoReason,
+  pushRecent,
+  reasonChips,
   SPELLING_REASON,
 } from "./auto-reason";
 
@@ -85,5 +87,27 @@ describe("pickAutoReason", () => {
       pickAutoReason({ ...base, working: "Approvals clean-up", targets: [{ id: "new", kind: "step" }], rename: { before: "Reveiw", after: "Review" } })
     ).toBe("Approvals clean-up");
     expect(pickAutoReason({ ...base, working: "Approvals clean-up", targets: [] })).toBe("Approvals clean-up");
+  });
+});
+
+describe("pushRecent", () => {
+  it("puts the newest first, lists each once, and keeps five", () => {
+    expect(pushRecent([], "A")).toEqual(["A"]);
+    expect(pushRecent(["B", "A"], "A")).toEqual(["A", "B"]);
+    expect(pushRecent(["5", "4", "3", "2", "1"], "6")).toEqual(["6", "5", "4", "3", "2"]);
+    expect(pushRecent(["A"], "  ")).toEqual(["A"]);
+    expect(pushRecent(["A"], " B ")).toEqual(["B", "A"]);
+  });
+});
+
+describe("reasonChips", () => {
+  it("offers recent reasons first, then presets not already there", () => {
+    expect(reasonChips([])).toEqual(["Fixing a mistake", "From interview", "Tidying the map"]);
+    expect(reasonChips(["Per Jane", "From interview"])).toEqual([
+      "Per Jane",
+      "From interview",
+      "Fixing a mistake",
+      "Tidying the map",
+    ]);
   });
 });

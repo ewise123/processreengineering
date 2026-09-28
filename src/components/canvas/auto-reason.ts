@@ -100,3 +100,20 @@ export function pickAutoReason({
   if (rename && isSpellingFix(rename.before, rename.after)) return SPELLING_REASON;
   return null;
 }
+
+/** How many of this session's reasons the box and the switcher offer. */
+export const RECENT_MAX = 5;
+
+/** `reason` moved to the front of the session's recent reasons, each listed
+ * once, keeping at most `max`. */
+export function pushRecent(list: readonly string[], reason: string, max = RECENT_MAX): string[] {
+  const r = reason.trim();
+  if (!r) return [...list];
+  return [r, ...list.filter((x) => x !== r)].slice(0, max);
+}
+
+/** The box's one-click reasons: recent ones first, then the presets not
+ * already among them. */
+export function reasonChips(recent: readonly string[]): string[] {
+  return [...recent, ...QUICK_REASONS.filter((q) => !recent.includes(q))];
+}
