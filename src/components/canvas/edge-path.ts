@@ -39,8 +39,9 @@ export interface EdgePath {
 export const SNAP_STRAIGHT_THRESHOLD = 8;
 
 /** How far past the node faces the default loop channel sits, before the user
- * drags it. Roughly one node-height of clearance. */
-const LOOP_OFFSET = 56;
+ * drags it. Close enough that a backtrack loop hugs its row, far enough to
+ * clear event labels under a shape and a step's "+" buttons. */
+export const LOOP_OFFSET = 32;
 
 /** A forced exit only makes an L-route when the target is at least this far
  * in front of the exit side; otherwise geometric routing takes over. */

@@ -64,17 +64,27 @@ import {
 } from "./shape-palette";
 import {
   creationReason,
+  EDGE_REASON_PLUS,
   EDGE_REASON_TAB,
   resolveDraftCommit,
   type DraftTrigger,
   type DraftVia,
 } from "./draft-step";
 import { NodeLabelEditor } from "./node-label-editor";
-import { LANE_HEADER_W, nextStepSlot, pointToLaneSlot, type LaneBox } from "./step-placement";
+import {
+  LANE_HEADER_W,
+  nextStepSlot,
+  occupiedSides,
+  pointToLaneSlot,
+  quickAddShape,
+  quickAddSlot,
+  type LaneBox,
+} from "./step-placement";
 import { computeSnap, guidesFor, type Box } from "./snap";
 import { alignItems, type AlignCommand } from "./align";
 import { routesToReset, type RouteReset } from "./routes";
 import { anchorToolbar } from "./toolbar-anchor";
+import { collapsedLaneHeight, measureLaneLabel } from "./lane-label";
 import { SelectionToolbar } from "./selection-toolbar";
 import { ShortcutsPanel } from "./shortcuts-panel";
 import { MinimapView } from "./minimap-view";
@@ -88,7 +98,7 @@ import {
 import {
   buildEdgePath,
   EdgeArrow,
-  HANDLE_OFFSET,
+  PLUS_OFFSET,
   NodeShape,
   sidePoint,
   type ConnectSide,
@@ -116,7 +126,6 @@ import { useUndoStack, type UndoAction } from "./use-undo-stack";
 const WORLD_WIDTH_MIN = 1700;
 const WORLD_RIGHT_PADDING = 240;
 const MIN_LANE_HEIGHT = 90;
-const COLLAPSED_LANE_HEIGHT = 28;
 
 const PASTE_OFFSET = 24;
 
@@ -138,6 +147,18 @@ type DraftStep = {
   source: Promise<UUID | null> | null;
   /** Where the source sits, in world units, for the preview connector. */
   sourceRect?: { x: number; y: number; w: number; h: number };
+  /** Connector direction: "after" (source → new, the default) or "before"
+   * (new → source, the "+" on a step's left side). */
+  link?: "after" | "before";
+  /** Room made for a "+" step: shifted steps and a taller lane. Applied when
+   * the draft opens, undone if it's discarded, and part of its undo entry. */
+  preMoves?: PreMoves;
+};
+
+type PreMoves = {
+  before: NodePosition[];
+  after: NodePosition[];
+  lane: { id: UUID; fromH: number; toH: number } | null;
 };
 
 type Editing =
@@ -173,6 +194,9 @@ type Drag =
       // Live cursor position in world coords for the temp line.
       currX: number;
       currY: number;
+      /** Started on a "+" handle: a release without moving adds a step
+       * there instead of connecting. */
+      plus?: { clientX: number; clientY: number };
     }
   | {
       type: "edgeBend";
@@ -345,6 +369,10 @@ function BpmnCanvas({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [drag, setDrag] = useState<Drag | null>(null);
   const [tool, setTool] = useState<CanvasTool>("select");
+  // True while Space is held over the canvas (temporary pan). The toolbar
+  // shows the hand for as long as it's down, then the real tool again.
+  const [spacePan, setSpacePan] = useState(false);
+  const shownTool: CanvasTool = spacePan ? "pan" : tool;
   const occludedRightRef = useRef(occludedRight);
   occludedRightRef.current = occludedRight;
   // Mouse/Trackpad scroll setting. Starts at the default and is read from
@@ -1298,6 +1326,7 @@ function BpmnCanvas({
         if (!pointerOverCanvasRef.current) return;
         e.preventDefault(); // stop the page from scrolling
         spaceHeld.current = true;
+        setSpacePan(true);
         return;
       }
 
@@ -1327,13 +1356,23 @@ function BpmnCanvas({
       e.preventDefault();
     };
     const upHandler = (e: KeyboardEvent) => {
-      if (e.code === "Space") spaceHeld.current = false;
+      if (e.code === "Space") {
+        spaceHeld.current = false;
+        setSpacePan(false);
+      }
+    };
+    // Switching windows mid-hold never delivers the keyup.
+    const onBlur = () => {
+      spaceHeld.current = false;
+      setSpacePan(false);
     };
     document.addEventListener("keydown", handler);
     document.addEventListener("keyup", upHandler);
+    window.addEventListener("blur", onBlur);
     return () => {
       document.removeEventListener("keydown", handler);
       document.removeEventListener("keyup", upHandler);
+      window.removeEventListener("blur", onBlur);
     };
   }, []);
 
@@ -1451,13 +1490,14 @@ function BpmnCanvas({
     return Math.max(WORLD_WIDTH_MIN, maxX + WORLD_RIGHT_PADDING);
   }, [nodes]);
 
-  // Lane geometry as shown on screen: collapsed lanes shrink to a thin strip.
+  // Lane geometry as shown on screen: collapsed lanes shrink to a strip just
+  // tall enough for their name (lane-label.ts).
   // The real `lanes` (true heights) are kept for persistence; only display
   // geometry changes, so expanding restores the stored height.
   const displayLanes = useMemo(() => {
     let y = 0;
     return lanes.map((l) => {
-      const h = collapsedLaneIds.has(l.id) ? COLLAPSED_LANE_HEIGHT : l.h;
+      const h = collapsedLaneIds.has(l.id) ? collapsedLaneHeight(measureLaneLabel(l.label)) : l.h;
       const out = { ...l, y, h };
       y += h;
       return out;
@@ -1520,6 +1560,18 @@ function BpmnCanvas({
     () => computeEdgeRoutes(edges, renderNodes),
     [edges, renderNodes]
   );
+  // Sides of each step with no connector: their handle becomes a "+".
+  const freeSidesById = useMemo(() => {
+    const used = occupiedSides(edges, edgeRoutes);
+    const all: ConnectSide[] = ["top", "right", "bottom", "left"];
+    return new Map(
+      renderNodes.map((n) => [n.id, new Set(all.filter((sd) => !used.get(n.id)?.has(sd)))])
+    );
+  }, [edges, edgeRoutes, renderNodes]);
+  const freeSidesRef = useRef(freeSidesById);
+  freeSidesRef.current = freeSidesById;
+  // Filled in next to quickAdd, further down; the drag handler reads it.
+  const quickAddRef = useRef<(sourceId: UUID, side: ConnectSide) => void>(() => {});
 
   const toWorld = useCallback(
     (sx: number, sy: number) => {
@@ -1695,7 +1747,10 @@ function BpmnCanvas({
       e.stopPropagation();
       selectOnly(sourceId);
       const { x, y } = toWorld(e.clientX, e.clientY);
-      setDrag({ type: "connect", sourceId, sourceSide: side, currX: x, currY: y });
+      const plus = freeSidesRef.current.get(sourceId)?.has(side)
+        ? { clientX: e.clientX, clientY: e.clientY }
+        : undefined;
+      setDrag({ type: "connect", sourceId, sourceSide: side, currX: x, currY: y, plus });
     },
     [toWorld, selectOnly]
   );
@@ -1815,12 +1870,11 @@ function BpmnCanvas({
               (n.laneId
                 ? currLanes.find((l) => l.id === n.laneId)
                 : currLanes[0]);
-            // Never re-lane into a collapsed (hidden) lane: maxRel would be 0,
-            // stranding the node in the 28px strip and clobbering its real
-            // relativeY. (Real lanes are >= MIN_LANE_HEIGHT (90); only a
-            // collapsed display-lane has h === COLLAPSED_LANE_HEIGHT.) Keep the
-            // node's current lane/relativeY; only x changes.
-            if (!targetLane || targetLane.h === COLLAPSED_LANE_HEIGHT) {
+            // Never re-lane into a collapsed (hidden) lane: its strip is only
+            // as tall as its name, which would strand the node there and
+            // clobber its real relativeY. Keep the node's current
+            // lane/relativeY; only x changes.
+            if (!targetLane || collapsedLaneIdsRef.current.has(targetLane.id)) {
               return { ...n, x: newX };
             }
             const maxRel = Math.max(0, targetLane.h - n.h);
@@ -1876,6 +1930,16 @@ function BpmnCanvas({
         return;
       }
       if (drag.type === "connect") {
+        if (drag.plus) {
+          const dx = e.clientX - drag.plus.clientX;
+          const dy = e.clientY - drag.plus.clientY;
+          if (dx * dx + dy * dy < 16) {
+            // A click on a "+", not a drag: add a connected step there.
+            setDrag(null);
+            quickAddRef.current(drag.sourceId, drag.sourceSide);
+            return;
+          }
+        }
         const { x, y } = screenToWorld(e.clientX, e.clientY);
         // Build resolved candidate rects (exclude the source) and pick the
         // nearest within tolerance, so a drop just outside a node still lands.
@@ -2581,6 +2645,17 @@ function BpmnCanvas({
     if (v !== viewportRef.current) setViewport(v);
   }, []);
 
+  // Room made for a "+" step (see PreMoves). Lane height goes through a ref:
+  // resizeLaneLocal is declared further down.
+  const resizeLaneLocalRef = useRef<(laneId: string, h: number) => void>(() => {});
+  const applyPreMoves = useCallback(
+    (pre: PreMoves, which: "before" | "after") => {
+      if (pre.lane) resizeLaneLocalRef.current(pre.lane.id, which === "after" ? pre.lane.toH : pre.lane.fromH);
+      if (pre[which].length) applyGroupPositionsLocal(pre[which]);
+    },
+    [applyGroupPositionsLocal]
+  );
+
   const openDraft = useCallback(
     (args: {
       laneId: UUID;
@@ -2591,6 +2666,8 @@ function BpmnCanvas({
       defaultName: string;
       source: Promise<UUID | null> | null;
       sourceRect?: { x: number; y: number; w: number; h: number };
+      link?: "after" | "before";
+      preMoves?: PreMoves;
     }) => {
       const size = sizeForNodeType(args.type);
       const draft: DraftStep = {
@@ -2646,13 +2723,19 @@ function BpmnCanvas({
           });
           setEdges((curr) => [...curr, { id: e.id, from, to, label: e.label ?? null }]);
         };
-        if (sourceId) await connect(liveId(sourceId), created.id, EDGE_REASON_TAB);
+        // "before" (the + on a step's left): the new step leads into it.
+        const link = (a: UUID, b: UUID, reason: string) =>
+          draft.link === "before" ? connect(b, a, reason) : connect(a, b, reason);
+        const edgeReason = draft.via === "plus" ? EDGE_REASON_PLUS : EDGE_REASON_TAB;
+        if (sourceId) await link(liveId(sourceId), created.id, edgeReason);
         selectOnly(created.id);
 
         let liveNodeId: UUID = created.id;
+        const pre = draft.preMoves;
         record({
           description: "Add step",
           do: async () => {
+            if (pre) applyPreMoves(pre, "after");
             const again = await api.createNode(projectId, modelId, versionId, {
               ...body,
               reason: "Redo of Add step",
@@ -2660,10 +2743,13 @@ function BpmnCanvas({
             liveIdsRef.current.set(liveNodeId, again.id);
             liveNodeId = again.id;
             setNodes((curr) => [...curr, { ...node, id: again.id }]);
-            if (sourceId) await connect(liveId(sourceId), again.id, "Redo of Add step");
+            if (sourceId) await link(liveId(sourceId), again.id, "Redo of Add step");
             selectOnly(again.id);
           },
-          undo: () => deleteNodeImpl(liveNodeId, { reason: "Undo of Add step" }),
+          undo: async () => {
+            await deleteNodeImpl(liveNodeId, { reason: "Undo of Add step" });
+            if (pre) applyPreMoves(pre, "before");
+          },
         });
         return created.id;
       };
@@ -2677,7 +2763,7 @@ function BpmnCanvas({
       creationQueueRef.current = p;
       return p;
     },
-    [projectId, modelId, versionId, record, deleteNodeImpl, selectOnly, liveId]
+    [projectId, modelId, versionId, record, deleteNodeImpl, selectOnly, liveId, applyPreMoves]
   );
 
   /** Open a draft for the step after `from`, in the same lane. */
@@ -2724,7 +2810,11 @@ function BpmnCanvas({
         trigger,
         defaultName: draft.defaultName,
       });
-      if (outcome.kind === "discard") return;
+      if (outcome.kind === "discard") {
+        // Put back anything moved to make room for it.
+        if (draft.preMoves) applyPreMoves(draft.preMoves, "before");
+        return;
+      }
       const pending = commitDraft(draft, outcome.name);
       if (trigger === "tab") {
         openNextDraft({
@@ -2737,7 +2827,7 @@ function BpmnCanvas({
         });
       }
     },
-    [commitDraft, openNextDraft]
+    [commitDraft, openNextDraft, applyPreMoves]
   );
 
   const startRename = useCallback(
@@ -2768,6 +2858,73 @@ function BpmnCanvas({
     },
     [updateNodeImpl, openNextDraft]
   );
+
+  // The "+" on a step's free side: add a connected step of the same shape
+  // there (a task from a Start/End event), with its name box open. Steps are
+  // shifted, or the lane grown, first when that's the only way to fit it.
+  const quickAdd = (sourceId: UUID, side: ConnectSide) => {
+    const n = nodesRef.current.find((x) => x.id === sourceId);
+    if (!n || !n.laneId) return;
+    const lanesTopDown = [...laneBoxes()].sort((a, b) => a.y - b.y);
+    const type = quickAddShape(n.type);
+    const size = sizeForNodeType(type);
+    const steps = nodesRef.current
+      .filter((x) => x.laneId)
+      .map((x) => ({ id: x.id, laneId: x.laneId as string, x: x.x, relativeY: x.relativeY, w: x.w, h: x.h }));
+    const plan = quickAddSlot({
+      side,
+      source: { id: n.id, laneId: n.laneId, x: n.x, relativeY: n.relativeY, w: n.w, h: n.h },
+      size,
+      lanes: lanesTopDown,
+      steps,
+    });
+    let preMoves: PreMoves | undefined;
+    if (plan.moves.length || plan.growLane) {
+      const byId = new Map(nodesRef.current.map((x) => [x.id, x]));
+      const before: NodePosition[] = [];
+      const after: NodePosition[] = [];
+      for (const m of plan.moves) {
+        const x = byId.get(m.id);
+        if (!x) continue;
+        before.push({ id: x.id, x: x.x, relativeY: x.relativeY, laneId: x.laneId });
+        after.push({ id: x.id, x: x.x + m.dx, relativeY: x.relativeY + m.dy, laneId: x.laneId });
+      }
+      const lane = plan.growLane
+        ? {
+            id: plan.growLane.laneId,
+            fromH: lanesRef.current.find((l) => l.id === plan.growLane!.laneId)?.h ?? plan.growLane.toH,
+            toH: plan.growLane.toH,
+          }
+        : null;
+      preMoves = { before, after, lane };
+      applyPreMoves(preMoves, "after");
+    }
+    // Where the source ends up, for the preview connector.
+    const srcMove = plan.moves.find((m) => m.id === n.id);
+    const srcLane = lanesTopDown.find((l) => l.id === n.laneId);
+    const sourceRect = srcLane
+      ? {
+          x: n.x + (srcMove?.dx ?? 0),
+          y: srcLane.y + n.relativeY + (srcMove?.dy ?? 0),
+          w: n.w,
+          h: n.h,
+        }
+      : undefined;
+    const shape = PALETTE_SHAPES.find((p) => p.backendType === type);
+    openDraft({
+      laneId: plan.laneId,
+      x: plan.x,
+      relativeY: plan.relativeY,
+      type,
+      via: "plus",
+      defaultName: shape?.defaultName ?? "New task",
+      source: Promise.resolve(n.id),
+      sourceRect,
+      link: plan.link,
+      preMoves,
+    });
+  };
+  quickAddRef.current = quickAdd;
 
   const nextStepFromSelection = useCallback((): boolean => {
     const ids = [...selectedIdsRef.current];
@@ -2956,7 +3113,7 @@ function BpmnCanvas({
     const bounds = boundsOf(boxes);
     if (!bounds) return null;
     // Leave the connect handles (and their hover margin) uncovered.
-    const pad = HANDLE_OFFSET + 8;
+    const pad = PLUS_OFFSET + 10;
     const world = { x: bounds.x - pad, y: bounds.y - pad, w: bounds.w + pad * 2, h: bounds.h + pad * 2 };
     const { tx, ty, scale } = viewport;
     const pos = anchorToolbar(
@@ -3026,7 +3183,7 @@ function BpmnCanvas({
     const selected = nodesRef.current.filter(
       (n) =>
         selectedIdsRef.current.has(n.id) &&
-        !(n.laneId && lanesById.get(n.laneId)?.h === COLLAPSED_LANE_HEIGHT)
+        !(n.laneId && collapsedLaneIdsRef.current.has(n.laneId))
     );
     // Nothing to move: leave the arrows to scroll the page.
     if (selected.length === 0) return false;
@@ -3167,6 +3324,8 @@ function BpmnCanvas({
     },
     [markLane]
   );
+
+  resizeLaneLocalRef.current = resizeLaneLocal;
 
   // The lane rail previews heights through `resizeLaneLocal` while dragging
   // and calls this once on release, so a whole drag is one undo step.
@@ -3333,6 +3492,7 @@ function BpmnCanvas({
         onPointerLeave={() => {
           pointerOverCanvasRef.current = false;
           spaceHeld.current = false; // don't strand pan mode if Space is released off-canvas
+          setSpacePan(false);
         }}
         style={{
           width: "100%",
@@ -3340,7 +3500,7 @@ function BpmnCanvas({
           cursor:
             drag?.type === "pan"
               ? "grabbing"
-              : tool === "pan"
+              : shownTool === "pan"
                 ? "grab"
                 : tool === "connect"
                   ? "crosshair"
@@ -3476,6 +3636,7 @@ function BpmnCanvas({
               onDoubleClick={startRename}
               onOpenSubprocess={onDrillIntoNode}
               hideLabel={editing?.kind === "rename" && editing.nodeId === node.id}
+              freeSides={freeSidesById.get(node.id)}
             />
           ))}
           {editing?.kind === "rename" &&
@@ -3510,7 +3671,12 @@ function BpmnCanvas({
                 <g key={`draft-${d.key}`}>
                   {d.sourceRect && (
                     <path
-                      d={roundedPath(buildEdgePath(d.sourceRect, rect).points)}
+                      d={roundedPath(
+                        (d.link === "before"
+                          ? buildEdgePath(rect, d.sourceRect)
+                          : buildEdgePath(d.sourceRect, rect)
+                        ).points
+                      )}
                       fill="none"
                       stroke={THEME.selection}
                       strokeWidth={THEME.edgeWidth}
@@ -3644,14 +3810,12 @@ function BpmnCanvas({
                 <path
                   d={d}
                   fill="none"
-                  stroke={backtrack ? THEME.rework : THEME.ink}
+                  stroke={THEME.ink}
                   strokeWidth={THEME.edgeWidth}
                   strokeDasharray="4 4"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  markerEnd={
-                    backtrack ? `url(#${MARKER.rework})` : "url(#poet-arrow-ink)"
-                  }
+                  markerEnd="url(#poet-arrow-ink)"
                   pointerEvents="none"
                 />
               );
@@ -3721,7 +3885,7 @@ function BpmnCanvas({
 
       {/* end SVG */}
       <FloatingToolbar
-        tool={tool}
+        tool={shownTool}
         onToolChange={setTool}
         viewport={viewport}
         onZoomIn={() => zoomByStep(ZOOM_STEP)}

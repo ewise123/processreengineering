@@ -6,7 +6,7 @@
  * leave nothing behind. Pure: no React, no DOM.
  */
 
-export type DraftVia = "dblclick" | "tab" | "palette-click" | "palette-drop";
+export type DraftVia = "dblclick" | "tab" | "plus" | "palette-click" | "palette-drop";
 export type DraftTrigger = "enter" | "tab" | "blur" | "escape";
 
 export type DraftOutcome = { kind: "create"; name: string } | { kind: "discard" };
@@ -39,6 +39,8 @@ export function creationReason(via: DraftVia): string {
       return "Added via double-click";
     case "tab":
       return "Added as next step (Tab)";
+    case "plus":
+      return "Added with the + on a step";
     case "palette-click":
     case "palette-drop":
       return "Added from the shape palette";
@@ -46,3 +48,4 @@ export function creationReason(via: DraftVia): string {
 }
 
 export const EDGE_REASON_TAB = "Connected as next step (Tab)";
+export const EDGE_REASON_PLUS = "Connected with the + on a step";

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { LOOP_OFFSET } from "./edge-path";
 import { buildEdgePath, buildPinnedEdgePath, isReworkEdge } from "./shapes";
 
 // Two nodes side by side on the same row. "to" sits to the LEFT of "from",
@@ -10,17 +11,18 @@ describe("buildPinnedEdgePath", () => {
   it("bottom→bottom loops below both nodes and enters the target's bottom face", () => {
     const r = buildPinnedEdgePath(later, earlier, "bottom", "bottom");
     // exit at source bottom-center, enter at target bottom-center
-    expect(r.d).toBe("M 460 160 L 460 216 L 60 216 L 60 160");
+    expect(r.d).toBe("M 460 160 L 460 192 L 60 192 L 60 160");
     expect(r.orientation).toBe("vertical");
-    // channel sits one LOOP_OFFSET (56) below the lower of the two bottoms (160)
-    expect(r.midY).toBe(216);
-    expect(r.midSegment).toEqual({ x1: 460, y1: 216, x2: 60, y2: 216 });
+    // channel sits one LOOP_OFFSET (32) below the lower of the two bottoms (160)
+    expect(LOOP_OFFSET).toBe(32);
+    expect(r.midY).toBe(192);
+    expect(r.midSegment).toEqual({ x1: 460, y1: 192, x2: 60, y2: 192 });
   });
 
   it("top→top loops above both nodes and enters the target's top face", () => {
     const r = buildPinnedEdgePath(later, earlier, "top", "top");
-    expect(r.d).toBe("M 460 100 L 460 44 L 60 44 L 60 100");
-    expect(r.midY).toBe(44);
+    expect(r.d).toBe("M 460 100 L 460 68 L 60 68 L 60 100");
+    expect(r.midY).toBe(68);
   });
 
   it("honors a user-dragged bend (bend_y) as the channel position", () => {
@@ -30,9 +32,9 @@ describe("buildPinnedEdgePath", () => {
   });
 
   it("mixed faces bias the channel to the source's exit direction", () => {
-    // source exits bottom (160) → channel 56 below = 216; target enters top (100)
+    // source exits bottom (160) → channel 32 below = 192; target enters top (100)
     const r = buildPinnedEdgePath(later, earlier, "bottom", "top");
-    expect(r.d).toBe("M 460 160 L 460 216 L 60 216 L 60 100");
+    expect(r.d).toBe("M 460 160 L 460 192 L 60 192 L 60 100");
   });
 });
 
