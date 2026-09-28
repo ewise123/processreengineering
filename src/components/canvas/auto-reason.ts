@@ -101,6 +101,10 @@ export function pickAutoReason({
   return null;
 }
 
+/** The reason a change is saved with when the user chose to explain it
+ * later (matches the server's PENDING_REASON). */
+export const PENDING_REASON = "Awaiting reason";
+
 /** How many of this session's reasons the box and the switcher offer. */
 export const RECENT_MAX = 5;
 
@@ -108,7 +112,8 @@ export const RECENT_MAX = 5;
  * once, keeping at most `max`. */
 export function pushRecent(list: readonly string[], reason: string, max = RECENT_MAX): string[] {
   const r = reason.trim();
-  if (!r) return [...list];
+  // "Explain later" isn't a reason to offer again.
+  if (!r || r === PENDING_REASON) return [...list];
   return [r, ...list.filter((x) => x !== r)].slice(0, max);
 }
 

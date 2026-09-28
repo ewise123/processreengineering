@@ -4,6 +4,8 @@ Phase 3 (Task 19) — model-wide log endpoint with filters + cursor pagination.
 GET /projects/{project_id}/nodes/{node_id}/history   -> list[ChangeEventRead]
 GET /projects/{project_id}/edges/{edge_id}/history   -> list[ChangeEventRead]
 GET /projects/{project_id}/models/{model_id}/log     -> ChangeLogPage
+GET /projects/{project_id}/models/{model_id}/log/pending  -> changes awaiting a reason
+POST /projects/{project_id}/models/{model_id}/log/explain -> give them one
 """
 import base64
 from datetime import datetime, timezone
@@ -19,7 +21,9 @@ from app.db.session import get_db
 from app.models.change_event import ChangeEvent
 from app.models.process import ProcessEdge, ProcessModel, ProcessNode, ProcessVersion
 from app.models.project import Project
-from app.schemas.change_event import ChangeEventRead, ChangeLogPage
+from app.enums import ChangeActorKind, ChangeKind, ChangeSource
+from app.schemas.change_event import ChangeEventRead, ChangeLogPage, ExplainRequest
+from app.services.change_log import PENDING_REASON, record_change
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["change_log"])
 
@@ -186,7 +190,107 @@ def get_model_log(
     else:
         next_cursor = None
 
-    return ChangeLogPage(
-        items=[ChangeEventRead.from_event(ev) for ev in rows],
-        next_cursor=next_cursor,
+    explained = _explanations(db, [ev.id for ev in rows])
+    items = []
+    for ev in rows:
+        item = ChangeEventRead.from_event(ev)
+        item.explained_reason = explained.get(ev.id)
+        items.append(item)
+    return ChangeLogPage(items=items, next_cursor=next_cursor)
+
+
+def _explanations(db: Session, event_ids: list[UUID]) -> dict[UUID, str]:
+    """The reason each of `event_ids` was later given, if any."""
+    if not event_ids:
+        return {}
+    rows = db.execute(
+        select(ChangeEvent.explains_id, ChangeEvent.reason).where(
+            ChangeEvent.explains_id.in_(event_ids)
+        )
+    ).all()
+    return {eid: reason for eid, reason in rows}
+
+
+def _pending_query(model_id: UUID):
+    explained = select(ChangeEvent.explains_id).where(ChangeEvent.explains_id.is_not(None))
+    return select(ChangeEvent).where(
+        ChangeEvent.model_id == model_id,
+        ChangeEvent.reason == PENDING_REASON,
+        ChangeEvent.kind != ChangeKind.EXPLAIN.value,
+        ChangeEvent.id.not_in(explained),
     )
+
+
+def _model_or_404(db: Session, project: Project, model_id: UUID) -> ProcessModel:
+    model = db.get(ProcessModel, model_id)
+    if model is None or model.project_id != project.id:
+        raise HTTPException(status_code=404, detail="Model not found")
+    return model
+
+
+@router.get("/models/{model_id}/log/pending", response_model=list[ChangeEventRead])
+def get_pending_changes(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ChangeEventRead]:
+    """Changes saved as "Awaiting reason" and not yet explained, oldest first."""
+    _model_or_404(db, project, model_id)
+    rows = db.scalars(
+        _pending_query(model_id).order_by(ChangeEvent.created_at, ChangeEvent.id)
+    ).all()
+    return [ChangeEventRead.from_event(ev) for ev in rows]
+
+
+@router.post("/models/{model_id}/log/explain", response_model=list[ChangeEventRead])
+def explain_changes(
+    project: Annotated[Project, Depends(get_project_or_404)],
+    model_id: UUID,
+    payload: ExplainRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ChangeEventRead]:
+    """Give changes that were saved as "Awaiting reason" their reason.
+
+    Appends one `explain` event per change, pointing at it; the original is
+    left as it was. All or nothing: if any id isn't a pending change in this
+    model, nothing is written.
+    """
+    _model_or_404(db, project, model_id)
+    reason = payload.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=422, detail="A reason is required.")
+    if reason == PENDING_REASON:
+        raise HTTPException(status_code=422, detail="Give the actual reason.")
+    ids = list(dict.fromkeys(payload.event_ids))
+    pending = {
+        ev.id: ev
+        for ev in db.scalars(_pending_query(model_id).where(ChangeEvent.id.in_(ids))).all()
+    }
+    missing = [str(i) for i in ids if i not in pending]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Not changes awaiting a reason in this map: {', '.join(missing)}",
+        )
+    created = []
+    for i in ids:
+        original = pending[i]
+        ev = record_change(
+            db,
+            target_type=original.target_type,
+            target_id=original.target_id,
+            model_id=original.model_id,
+            version_id=original.version_id,
+            kind=ChangeKind.EXPLAIN.value,
+            reason=reason,
+            # A copy of what was explained, so this row reads on its own.
+            before={"kind": original.kind, "before": original.before, "after": original.after},
+            source=ChangeSource.MANUAL.value,
+            actor_kind=ChangeActorKind.USER.value,
+        )
+        ev.explains_id = original.id
+        created.append(ev)
+    db.commit()
+    for ev in created:
+        db.refresh(ev)
+    return [ChangeEventRead.from_event(ev) for ev in created]

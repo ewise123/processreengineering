@@ -2,23 +2,32 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { PENDING_REASON } from "./auto-reason";
+
 /**
- * The reason switcher. Shown while a kept reason is in force: every change is logged with it and
- * the reason box stays closed. The menu switches to another of this
- * session's reasons (or a new one) between changes; Stop brings the box
- * back.
+ * The reason bar at the top of the canvas. It shows while a kept reason is in
+ * force (every change is logged with it, no box) or while changes are still
+ * waiting for a reason. The menu switches to another of this session's
+ * reasons, a new one, or "Explain later"; Stop brings the box back.
  */
 export function ReasonSwitcher({
   working,
   recent,
+  pendingCount,
   onSwitch,
   onStop,
+  onShowPending,
 }: {
-  working: string;
+  /** The kept reason, PENDING_REASON for "explain later", or null. */
+  working: string | null;
   /** This session's reasons, newest first. */
   recent: string[];
+  /** Changes saved as "Awaiting reason" and not yet explained. */
+  pendingCount: number;
   onSwitch: (reason: string) => void;
   onStop: () => void;
+  /** Open the list of changes waiting for a reason. */
+  onShowPending: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -49,72 +58,94 @@ export function ReasonSwitcher({
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
 
-  const options = recent.includes(working) ? recent : [working, ...recent];
+  if (!working && pendingCount === 0) return null;
+
+  const later = working === PENDING_REASON;
+  const options = !working || later || recent.includes(working) ? recent : [working, ...recent];
+  const waiting =
+    pendingCount > 0 ? (
+      <button
+        type="button"
+        onClick={onShowPending}
+        data-pending-count={pendingCount}
+        title="Give these changes their reasons"
+        className="shrink-0 rounded-full bg-amber-200/70 px-2 py-0.5 font-semibold text-amber-950 hover:bg-amber-200"
+      >
+        {pendingCount} waiting · Explain
+      </button>
+    ) : null;
 
   return (
     <div
       ref={rootRef}
       role="status"
-      data-working-reason
+      data-working-reason={working ?? undefined}
       style={{
         position: "absolute",
         top: 16,
         left: "50%",
         transform: "translateX(-50%)",
         zIndex: 30,
-        maxWidth: "min(460px, calc(100% - 32px))",
+        maxWidth: "min(520px, calc(100% - 32px))",
       }}
       // Typing a new reason must not reach the canvas's shortcuts.
       onKeyDown={(e) => e.stopPropagation()}
     >
       <div className="flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 py-1 pl-3 pr-1 text-xs text-amber-900 shadow-sm">
-        <span className="shrink-0 font-semibold">Reason for changes:</span>
-        <button
-          type="button"
-          aria-haspopup="menu"
-          aria-expanded={open}
-          onClick={() => (open ? close() : setOpen(true))}
-          title="Switch to another reason"
-          className="flex min-w-0 items-center gap-1 rounded-full px-1.5 py-0.5 hover:bg-amber-100"
-        >
-          <span className="min-w-0 truncate">“{working}”</span>
-          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className="shrink-0">
-            <path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          onClick={onStop}
-          className="shrink-0 rounded-full bg-white px-2.5 py-0.5 font-medium text-amber-900 ring-1 ring-amber-300 hover:bg-amber-100"
-        >
-          Stop
-        </button>
+        {working ? (
+          <>
+            <span className="shrink-0 font-semibold">{later ? "Explaining later" : "Reason for changes:"}</span>
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={open}
+              onClick={() => (open ? close() : setOpen(true))}
+              title="Switch to another reason"
+              className="flex min-w-0 items-center gap-1 rounded-full px-1.5 py-0.5 hover:bg-amber-100"
+            >
+              {!later && <span className="min-w-0 truncate">“{working}”</span>}
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden className="shrink-0">
+                <path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+            {waiting}
+            <button
+              type="button"
+              onClick={onStop}
+              className="shrink-0 rounded-full bg-white px-2.5 py-0.5 font-medium text-amber-900 ring-1 ring-amber-300 hover:bg-amber-100"
+            >
+              Stop
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="shrink-0 font-semibold">
+              {pendingCount === 1 ? "1 change needs a reason" : `${pendingCount} changes need a reason`}
+            </span>
+            {waiting}
+          </>
+        )}
       </div>
       {open && (
         <div
           role="menu"
           className="absolute left-1/2 top-full mt-1.5 w-72 -translate-x-1/2 rounded-lg border border-slate-200 bg-white p-1 text-xs text-slate-700 shadow-lg"
         >
-          <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            Reasons this session
-          </div>
+          {options.length > 0 && (
+            <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              Reasons this session
+            </div>
+          )}
           {options.map((r) => (
-            <button
-              key={r}
-              type="button"
-              role="menuitemradio"
-              aria-checked={r === working}
-              data-reason-option={r}
-              onClick={() => pick(r)}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-slate-100"
-            >
-              <span className="w-3 shrink-0 text-slate-900">{r === working ? "✓" : ""}</span>
-              <span className="min-w-0 truncate" title={r}>
-                {r}
-              </span>
-            </button>
+            <Option key={r} label={r} checked={r === working} onPick={() => pick(r)} />
           ))}
           <div className="my-1 border-t border-slate-100" />
+          <Option
+            label="Explain later"
+            hint="save changes now, give reasons afterwards"
+            checked={later}
+            onPick={() => pick(PENDING_REASON)}
+          />
           {adding ? (
             <form
               className="flex items-center gap-1 px-1 py-1"
@@ -156,5 +187,34 @@ export function ReasonSwitcher({
         </div>
       )}
     </div>
+  );
+}
+
+function Option({
+  label,
+  hint,
+  checked,
+  onPick,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onPick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={checked}
+      data-reason-option={label}
+      onClick={onPick}
+      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-slate-100"
+    >
+      <span className="w-3 shrink-0 text-slate-900">{checked ? "✓" : ""}</span>
+      <span className="min-w-0 truncate" title={label}>
+        {label}
+        {hint && <span className="ml-1 text-slate-400">— {hint}</span>}
+      </span>
+    </button>
   );
 }

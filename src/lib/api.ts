@@ -540,6 +540,15 @@ export const api = {
     request<ChangeEvent[]>(
       `/api/v2/projects/${projectId}/edges/${edgeId}/history`
     ),
+  /** Changes saved as "Awaiting reason" and not yet explained, oldest first. */
+  getPendingChanges: (projectId: UUID, modelId: UUID) =>
+    request<ChangeEvent[]>(`/api/v2/projects/${projectId}/models/${modelId}/log/pending`),
+  /** Give several awaiting changes one reason (all or nothing). */
+  explainChanges: (projectId: UUID, modelId: UUID, body: { event_ids: UUID[]; reason: string }) =>
+    request<ChangeEvent[]>(`/api/v2/projects/${projectId}/models/${modelId}/log/explain`, {
+      method: "POST",
+      json: body,
+    }),
   getChangeLog: (
     projectId: UUID,
     modelId: UUID,

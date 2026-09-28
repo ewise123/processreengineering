@@ -42,6 +42,14 @@ class ChangeEvent(IdMixin, TimestampMixin, Base):
     cited_claim_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     reasoning_trace: Mapped[list | dict | None] = mapped_column(JSONB, nullable=True)
     source: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Set on an `explain` event: the change whose reason it supplies. The
+    # original keeps its "Awaiting reason" text; the log shows both.
+    explains_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("change_events.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     suggestion_id: Mapped[UUID | None] = mapped_column(
         PgUUID(as_uuid=True),
         ForeignKey("process_suggestions.id", ondelete="SET NULL"),

@@ -1,8 +1,10 @@
+import json
 from uuid import UUID
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.db.mixins import uuid7
 from app.enums import ChangeActorKind, ChangeKind, ChangeSource, ChangeTargetType
 from app.models.change_event import ChangeEvent
 from app.models.process import ProcessVersion
@@ -13,6 +15,10 @@ NODE_SEMANTIC_FIELDS: dict[str, ChangeKind] = {
     "type": ChangeKind.RETYPE,
     "lane_id": ChangeKind.RELANE,
 }
+
+# The reason a change carries when the user chose to explain it later. An
+# `explain` event pointing at it supplies the real reason.
+PENDING_REASON = "Awaiting reason"
 
 _KIND_PRIORITY = [
     ChangeKind.DELETE,
@@ -94,8 +100,12 @@ def record_change(
 def backfill_origin_events(db: Session) -> int:
     """Insert one MIGRATION origin event per existing node/edge that has none.
     Reason is mined from the object's linked claims where present. Idempotent:
-    each record_change flushes its row, so the NOT EXISTS guards see prior inserts
-    within the same session. Returns rows inserted."""
+    each insert runs at once, so the NOT EXISTS guards see prior inserts
+    within the same session. Returns rows inserted.
+
+    Migration 0010 runs this, so it names only the columns 0010 created
+    (`_origin_insert`). Going through the ORM model would also name columns
+    added later (explains_id, 0014), which don't exist yet at 0010."""
     inserted = 0
     node_rows = db.execute(
         text(
@@ -112,18 +122,7 @@ def backfill_origin_events(db: Session) -> int:
     ).all()
     for node_id, version_id, model_id in node_rows:
         reason, cited = _origin_reason_for(db, node_id, "node")
-        record_change(
-            db,
-            target_type=ChangeTargetType.NODE.value,
-            target_id=node_id,
-            model_id=model_id,
-            version_id=version_id,
-            kind=ChangeKind.CREATE.value,
-            reason=reason,
-            actor_kind=ChangeActorKind.SYSTEM.value,
-            cited_claim_ids=cited,
-            source=ChangeSource.MIGRATION.value,
-        )
+        _origin_insert(db, ChangeTargetType.NODE.value, node_id, model_id, version_id, reason, cited)
         inserted += 1
 
     edge_rows = db.execute(
@@ -141,20 +140,37 @@ def backfill_origin_events(db: Session) -> int:
     ).all()
     for edge_id, version_id, model_id in edge_rows:
         reason, cited = _origin_reason_for(db, edge_id, "edge")
-        record_change(
-            db,
-            target_type=ChangeTargetType.EDGE.value,
-            target_id=edge_id,
-            model_id=model_id,
-            version_id=version_id,
-            kind=ChangeKind.CREATE.value,
-            reason=reason,
-            actor_kind=ChangeActorKind.SYSTEM.value,
-            cited_claim_ids=cited,
-            source=ChangeSource.MIGRATION.value,
-        )
+        _origin_insert(db, ChangeTargetType.EDGE.value, edge_id, model_id, version_id, reason, cited)
         inserted += 1
     return inserted
+
+
+def _origin_insert(db: Session, target_type: str, target_id, model_id, version_id, reason, cited) -> None:
+    """One origin event, naming only columns that exist from migration 0010 on."""
+    db.execute(
+        text(
+            """
+            INSERT INTO change_events
+                (id, target_type, target_id, model_id, version_id, actor_kind, kind,
+                 reason, cited_claim_ids, source)
+            VALUES
+                (:id, :target_type, :target_id, :model_id, :version_id, :actor_kind, :kind,
+                 :reason, CAST(:cited AS JSONB), :source)
+            """
+        ),
+        {
+            "id": uuid7(),
+            "target_type": target_type,
+            "target_id": target_id,
+            "model_id": model_id,
+            "version_id": version_id,
+            "actor_kind": ChangeActorKind.SYSTEM.value,
+            "kind": ChangeKind.CREATE.value,
+            "reason": reason,
+            "cited": json.dumps(_jsonable_claim_ids(cited)) if cited else None,
+            "source": ChangeSource.MIGRATION.value,
+        },
+    )
 
 
 def _origin_reason_for(db: Session, target_id: UUID, kind: str) -> tuple[str, list]:

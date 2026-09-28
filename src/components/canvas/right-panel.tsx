@@ -36,6 +36,7 @@ import { toast } from "sonner";
 
 import { api } from "@/lib/api";
 import type {
+  ChangeEvent,
   ChangeLogPage,
   ChatTurn,
   InputRow,
@@ -49,6 +50,7 @@ import type {
   ViewerTarget,
 } from "@/lib/types";
 import { ChangeEntry } from "./change-entry";
+import { QUICK_REASONS } from "./auto-reason";
 import { buildVersionRows, type TreeRow } from "./version-tree";
 import { diffChangeCount, isEmptyDiff } from "./version-diff";
 import { reconcileRow } from "./reconcile";
@@ -57,7 +59,16 @@ import { type SelectedObject } from "./chat-context";
 import { ChatTab } from "./chat-tab";
 import type { BundlePlan, BatchResult } from "./suggestion-apply";
 
-type TabId = "chat" | "versions" | "issues" | "review" | "sources" | "refresh" | "changelog";
+export type TabId = "chat" | "versions" | "issues" | "review" | "sources" | "refresh" | "changelog";
+
+/** Ask the panel to show a tab (and, for the Change Log, which view). A new
+ * `nonce` makes the same request again. */
+export interface PanelRequest {
+  tab: TabId;
+  logView?: LogView;
+  nonce: number;
+}
+type LogView = "all" | "pending";
 
 const TAB_LABELS: Record<TabId, string> = {
   chat: "Chat",
@@ -86,6 +97,7 @@ export function RightPanel({
   initialTab = "chat",
   onApplySuggestions,
   graph,
+  request,
 }: {
   projectId: UUID;
   modelId: UUID;
@@ -108,8 +120,27 @@ export function RightPanel({
   initialTab?: TabId;
   onApplySuggestions: (plan: BundlePlan) => Promise<BatchResult>;
   graph: ProcessGraph;
+  /** Show a tab from outside, e.g. the canvas's "3 waiting" button. */
+  request?: PanelRequest | null;
 }) {
   const [tab, setTab] = useState<TabId>(initialTab);
+  const [logView, setLogView] = useState<LogView>("all");
+  // Follow a new outside request (adjusting state during render, so there is
+  // no flash of the old tab).
+  const [seenRequest, setSeenRequest] = useState<number | null>(null);
+  if (request && request.nonce !== seenRequest) {
+    setSeenRequest(request.nonce);
+    setTab(request.tab);
+    if (request.logView) setLogView(request.logView);
+  }
+  const names = useMemo(
+    () =>
+      new Map<string, string>([
+        ...graph.lanes.map((l) => [l.id, l.name] as [string, string]),
+        ...nodes.map((n) => [n.id, n.name] as [string, string]),
+      ]),
+    [graph.lanes, nodes]
+  );
 
   const issuesQuery = useQuery({
     queryKey: ["issues", projectId, modelId, versionId],
@@ -279,6 +310,9 @@ export function RightPanel({
             modelId={modelId}
             selected={selected.length === 1 ? selected[0] : null}
             onFocusNode={onFocusNode}
+            view={logView}
+            onViewChange={setLogView}
+            names={names}
           />
         )}
       </div>
@@ -1042,12 +1076,23 @@ function ChangeLogTab({
   modelId,
   selected,
   onFocusNode,
+  view,
+  onViewChange,
+  names,
 }: {
   projectId: UUID;
   modelId: UUID;
   selected: { id: UUID; kind: "node" | "edge"; name?: string } | null;
   onFocusNode: (id: UUID) => void;
+  view: LogView;
+  onViewChange: (v: LogView) => void;
+  names: ReadonlyMap<string, string>;
 }) {
+  const pendingQuery = useQuery({
+    queryKey: ["pending-reasons", projectId, modelId],
+    queryFn: () => api.getPendingChanges(projectId, modelId),
+  });
+  const pending = pendingQuery.data ?? [];
   // When a node or edge is selected, we default to showing only changes for
   // that object; the user can toggle back to the model-wide view.
   const [filterToSelection, setFilterToSelection] = useState(true);
@@ -1069,8 +1114,39 @@ function ChangeLogTab({
 
   const allItems = query.data?.pages.flatMap((p) => p.items) ?? [];
 
+  const viewSwitch = (
+    <div className="flex shrink-0 gap-1 border-b border-slate-100 px-3 py-2" role="tablist">
+      {(["all", "pending"] as const).map((v) => (
+        <button
+          key={v}
+          type="button"
+          role="tab"
+          aria-selected={view === v}
+          onClick={() => onViewChange(v)}
+          data-log-view={v}
+          className={
+            "rounded-md px-2 py-1 text-[10.5px] font-medium " +
+            (view === v ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100")
+          }
+        >
+          {v === "all" ? "All changes" : `Awaiting reason (${pending.length})`}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (view === "pending") {
+    return (
+      <div className="flex h-full flex-col">
+        {viewSwitch}
+        <PendingReasons projectId={projectId} modelId={modelId} pending={pending} names={names} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col">
+      {viewSwitch}
       {/* Filter bar — only shown when something is selected */}
       {selected !== null && (
         <div className="shrink-0 border-b border-slate-100 px-3 py-2">
@@ -1123,6 +1199,7 @@ function ChangeLogTab({
               key={evt.id}
               event={evt}
               onFocus={evt.target_type === "node" ? onFocusNode : undefined}
+              names={names}
             />
           ))}
         </div>
@@ -1137,6 +1214,134 @@ function ChangeLogTab({
             {query.isFetchingNextPage ? "Loading…" : "Load more"}
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Changes saved as "Awaiting reason": tick the ones that share a reason,
+ * give it once, apply; repeat for the next group. Each gets its own
+ * "explain" entry in the log; the original is left as it was.
+ */
+function PendingReasons({
+  projectId,
+  modelId,
+  pending,
+  names,
+}: {
+  projectId: UUID;
+  modelId: UUID;
+  pending: ChangeEvent[];
+  names: ReadonlyMap<string, string>;
+}) {
+  const qc = useQueryClient();
+  const [ticked, setTicked] = useState<Set<UUID>>(() => new Set());
+  const [reason, setReason] = useState("");
+  // Ticks for changes no longer waiting (explained elsewhere) don't count.
+  const live = pending.filter((p) => ticked.has(p.id)).map((p) => p.id);
+
+  const apply = useMutation({
+    mutationFn: (text: string) => api.explainChanges(projectId, modelId, { event_ids: live, reason: text }),
+    onSuccess: (made) => {
+      toast.success(made.length === 1 ? "Reason added to 1 change." : `Reason added to ${made.length} changes.`);
+      setTicked(new Set());
+      setReason("");
+      void qc.invalidateQueries({ queryKey: ["pending-reasons", projectId, modelId] });
+      void qc.invalidateQueries({ queryKey: ["changelog", projectId, modelId] });
+    },
+    onError: (e: Error) => toast.error(`Couldn't add the reason: ${e.message}`),
+  });
+
+  const toggle = (id: UUID) =>
+    setTicked((curr) => {
+      const next = new Set(curr);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const submit = (text: string) => {
+    if (text.trim() && live.length > 0 && !apply.isPending) apply.mutate(text.trim());
+  };
+
+  if (pending.length === 0) {
+    return (
+      <div className="px-3 py-8 text-center text-[11px] text-slate-400">
+        Every change has a reason.
+      </div>
+    );
+  }
+
+  const allTicked = live.length === pending.length;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex-1 overflow-y-auto px-3 py-3">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[10.5px] text-slate-500">
+            Tick the changes that share a reason, then give it once.
+          </span>
+          <button
+            type="button"
+            onClick={() => setTicked(allTicked ? new Set() : new Set(pending.map((p) => p.id)))}
+            className="shrink-0 text-[10.5px] font-medium text-slate-600 underline-offset-2 hover:underline"
+          >
+            {allTicked ? "Untick all" : "Tick all"}
+          </button>
+        </div>
+        <div className="space-y-1.5">
+          {pending.map((evt) => (
+            <label key={evt.id} className="flex cursor-pointer items-start gap-2" data-pending-row={evt.id}>
+              <input
+                type="checkbox"
+                checked={ticked.has(evt.id)}
+                onChange={() => toggle(evt.id)}
+                className="mt-2 size-3.5 shrink-0 accent-slate-900"
+              />
+              <div className="min-w-0 flex-1">
+                <ChangeEntry event={evt} names={names} />
+              </div>
+            </label>
+          ))}
+        </div>
+      </div>
+      <div className="shrink-0 space-y-2 border-t border-slate-100 px-3 py-3">
+        <div className="flex flex-wrap gap-1">
+          {QUICK_REASONS.map((chip) => (
+            <button
+              key={chip}
+              type="button"
+              disabled={live.length === 0 || apply.isPending}
+              onClick={() => submit(chip)}
+              data-pending-chip
+              className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10.5px] text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+            >
+              {chip}
+            </button>
+          ))}
+        </div>
+        <form
+          className="flex gap-1.5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit(reason);
+          }}
+        >
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder={live.length ? `Reason for ${live.length} ticked` : "Tick changes first"}
+            aria-label="Reason for the ticked changes"
+            data-pending-reason
+            className="min-w-0 flex-1 rounded-md border border-slate-200 px-2 py-1.5 text-[11px] outline-none focus:border-slate-400"
+          />
+          <button
+            type="submit"
+            disabled={live.length === 0 || !reason.trim() || apply.isPending}
+            className="shrink-0 rounded-md bg-slate-900 px-2.5 py-1.5 text-[11px] font-medium text-white disabled:opacity-40"
+          >
+            Apply to {live.length || "ticked"}
+          </button>
+        </form>
       </div>
     </div>
   );

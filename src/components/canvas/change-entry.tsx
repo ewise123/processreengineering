@@ -8,6 +8,9 @@
 import { Bot, Cpu, User } from "lucide-react";
 import type { ChangeActorKind, ChangeEvent, UUID } from "@/lib/types";
 
+import { PENDING_REASON } from "./auto-reason";
+import { describeChange } from "./change-summary";
+
 const ACTOR_ICON: Record<ChangeActorKind, React.ReactNode> = {
   user: <User size={10} className="shrink-0 text-slate-500" />,
   ai: <Bot size={10} className="shrink-0 text-violet-500" />,
@@ -47,10 +50,14 @@ export function formatRelativeTime(isoString: string): string {
 export function ChangeEntry({
   event,
   onFocus,
+  names,
 }: {
   event: ChangeEvent;
   onFocus?: (id: UUID) => void;
+  /** Step and lane names by id; when given, a line says what changed. */
+  names?: ReadonlyMap<string, string>;
 }) {
+  const awaiting = event.reason === PENDING_REASON;
   const actorIcon = ACTOR_ICON[event.actor_kind] ?? ACTOR_ICON.system;
   const actorLabel = ACTOR_LABEL[event.actor_kind] ?? event.actor_kind;
   const relTime = formatRelativeTime(event.created_at);
@@ -94,9 +101,29 @@ export function ChangeEntry({
           {relTime}
         </span>
       </div>
+      {/* What changed */}
+      {names && (
+        <div className="mt-0.5 leading-snug text-slate-700" data-change-summary>
+          {describeChange(event, names)}
+        </div>
+      )}
       {/* Reason */}
       {event.reason && (
-        <div className="mt-0.5 leading-snug text-slate-500">{event.reason}</div>
+        <div
+          className={
+            "mt-0.5 leading-snug " + (awaiting && !event.explained_reason ? "italic text-amber-700" : "text-slate-500")
+          }
+        >
+          {awaiting && event.explained_reason ? (
+            <>
+              <span className="text-slate-400 line-through decoration-slate-300">{PENDING_REASON}</span>
+              {" → "}
+              <span data-explained-reason>{event.explained_reason}</span>
+            </>
+          ) : (
+            event.reason
+          )}
+        </div>
       )}
       {/* Cited claim chips */}
       {event.cited_claim_ids && event.cited_claim_ids.length > 0 && (

@@ -4,6 +4,7 @@ import {
   FRESH_MS,
   freshReason,
   isSpellingFix,
+  PENDING_REASON,
   pickAutoReason,
   pushRecent,
   reasonChips,
@@ -97,6 +98,7 @@ describe("pushRecent", () => {
     expect(pushRecent(["5", "4", "3", "2", "1"], "6")).toEqual(["6", "5", "4", "3", "2"]);
     expect(pushRecent(["A"], "  ")).toEqual(["A"]);
     expect(pushRecent(["A"], " B ")).toEqual(["B", "A"]);
+    expect(pushRecent(["A"], PENDING_REASON)).toEqual(["A"]);
   });
 });
 
