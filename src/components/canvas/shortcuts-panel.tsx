@@ -11,6 +11,7 @@ const GESTURES: { keys: string; label: string }[] = [
   { keys: "Double-click a lane", label: "Add a step there and name it" },
   { keys: "Click a + on a step", label: "Add a connected step on that side" },
   { keys: "Double-click a step", label: "Rename it" },
+  { keys: "Drag an end of a selected arrow", label: "Move it to another step" },
   { keys: "Shift+click", label: "Add to the selection" },
   { keys: "Drag on empty space", label: "Select everything in the box" },
   { keys: "Mod+drag a step", label: "Place it without snapping to guides" },

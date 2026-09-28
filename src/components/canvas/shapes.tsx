@@ -634,3 +634,70 @@ export function EdgeArrow({
     </g>
   );
 }
+
+/**
+ * The two grab points of a selected arrow. Drag one onto another step to move
+ * that end there. Drawn above the steps so they win over a step's own dots.
+ */
+export function EdgeEndHandles({
+  edgeId,
+  route,
+  onStart,
+}: {
+  edgeId: UUID;
+  route: EdgeRoute;
+  onStart: (e: MouseEvent, edgeId: UUID, end: "source" | "target") => void;
+}) {
+  const first = route.points[0];
+  const last = route.points[route.points.length - 1];
+  if (!first || !last) return null;
+  return (
+    <g>
+      <EdgeEndHandle x={first.x} y={first.y} end="source" onDown={(e) => onStart(e, edgeId, "source")} />
+      <EdgeEndHandle x={last.x} y={last.y} end="target" onDown={(e) => onStart(e, edgeId, "target")} />
+    </g>
+  );
+}
+
+function EdgeEndHandle({
+  x,
+  y,
+  end,
+  onDown,
+}: {
+  x: number;
+  y: number;
+  end: "source" | "target";
+  onDown: (e: MouseEvent) => void;
+}) {
+  const [hot, setHot] = useState(false);
+  return (
+    <g
+      role="button"
+      aria-label={end === "source" ? "Drag to move the arrow's start" : "Drag to move the arrow's end"}
+      data-edge-end={end}
+      style={{ cursor: "move" }}
+      onMouseDown={(e) => {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+        onDown(e);
+      }}
+      onClick={(e) => e.stopPropagation()}
+      onMouseEnter={() => setHot(true)}
+      onMouseLeave={() => setHot(false)}
+    >
+      <title>{end === "source" ? "Drag to move where this arrow starts" : "Drag to move where this arrow points"}</title>
+      {/* A wider invisible ring makes the small dot easy to catch. */}
+      <circle cx={x} cy={y} r={10} fill="transparent" />
+      <circle
+        cx={x}
+        cy={y}
+        r={hot ? 6.5 : 5.5}
+        fill={hot ? THEME.selection : "#fff"}
+        stroke={THEME.selection}
+        strokeWidth={2}
+        style={{ transition: "r 90ms ease-out, fill 90ms ease-out" }}
+      />
+    </g>
+  );
+}

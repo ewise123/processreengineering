@@ -683,3 +683,105 @@ def test_create_edge_keeps_its_color(db):
         db=db,
     )
     assert new_edge.color == "#0f766e"
+
+
+# ── Reconnect: move an edge's end to another step ────────────────────────
+
+def _third_node(db, version, n1, name="File"):
+    from app.models.process import ProcessNode
+    n3 = ProcessNode(version_id=version.id, lane_id=n1.lane_id, type="task",
+                     name=name, position={}, properties={})
+    db.add(n3); db.flush(); db.commit()
+    return n3
+
+
+def test_reconnect_target_keeps_the_edge_and_logs_reconnect(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    old_target = edge.target_node_id
+    pm_api.update_edge(project=project, edge_id=edge.id,
+                       payload=EdgeUpdate(label="yes", reason="label it"), db=db)
+    pm_api.update_edge(project=project, edge_id=edge.id,
+                       payload=EdgeUpdate(color="#1d4ed8"), db=db)
+    n3 = _third_node(db, version, n1)
+    updated = pm_api.update_edge(
+        project=project, edge_id=edge.id,
+        payload=EdgeUpdate(target_node_id=n3.id, reason="Reconnected: A → File (was A → Approve)"),
+        db=db,
+    )
+    assert updated.id == edge.id
+    assert updated.source_node_id == n1.id and updated.target_node_id == n3.id
+    assert updated.label == "yes" and updated.color == "#1d4ed8"
+    ev = [e for e in _events_for(db, edge.id) if e.kind == "reconnect"]
+    assert len(ev) == 1
+    assert ev[0].reason == "Reconnected: A → File (was A → Approve)"
+    assert ev[0].before == {"source_node_id": str(n1.id), "target_node_id": str(old_target)}
+    assert ev[0].after == {"source_node_id": str(n1.id), "target_node_id": str(n3.id)}
+
+
+def test_reconnect_source_and_kind(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    n3 = _third_node(db, version, n1)
+    updated = pm_api.update_edge(
+        project=project, edge_id=edge.id,
+        payload=EdgeUpdate(source_node_id=n3.id, edge_kind="rework", source_side="bottom",
+                           target_side="bottom", reason="move tail"),
+        db=db,
+    )
+    assert updated.source_node_id == n3.id
+    assert updated.edge_kind == "rework"
+    assert updated.source_side == "bottom"
+
+
+def test_reconnect_needs_a_reason(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    n3 = _third_node(db, version, n1)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.update_edge(project=project, edge_id=edge.id,
+                           payload=EdgeUpdate(target_node_id=n3.id), db=db)
+    assert exc.value.status_code == 422
+    db.refresh(edge)
+    assert edge.target_node_id != n3.id
+
+
+def test_reconnect_to_its_own_other_end_is_rejected(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.update_edge(project=project, edge_id=edge.id,
+                           payload=EdgeUpdate(target_node_id=n1.id, reason="loop"), db=db)
+    assert exc.value.status_code == 422
+
+
+def test_reconnect_onto_an_existing_pair_is_a_conflict(db):
+    from app.models.process import ProcessEdge
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    n3 = _third_node(db, version, n1)
+    db.add(ProcessEdge(version_id=version.id, source_node_id=n1.id, target_node_id=n3.id))
+    db.commit()
+    with pytest.raises(HTTPException) as exc:
+        pm_api.update_edge(project=project, edge_id=edge.id,
+                           payload=EdgeUpdate(target_node_id=n3.id, reason="dup"), db=db)
+    assert exc.value.status_code == 409
+
+
+def test_reconnect_to_a_node_in_another_version_is_rejected(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    with pytest.raises(HTTPException) as exc:
+        pm_api.update_edge(project=project, edge_id=edge.id,
+                           payload=EdgeUpdate(target_node_id=uuid4(), reason="x"), db=db)
+    assert exc.value.status_code == 422
+
+
+def test_same_ends_is_not_a_reconnect(db):
+    project, version, n1, claim = _seed_version_for_endpoint(db)
+    edge = _seed_edge(db, project, version, n1)
+    before = len(_events_for(db, edge.id))
+    # Same ends, no reason: nothing to justify, nothing logged.
+    pm_api.update_edge(project=project, edge_id=edge.id,
+                       payload=EdgeUpdate(target_node_id=edge.target_node_id), db=db)
+    assert len(_events_for(db, edge.id)) == before

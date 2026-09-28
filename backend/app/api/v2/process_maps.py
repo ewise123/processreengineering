@@ -1092,6 +1092,22 @@ def update_edge(
         raise HTTPException(status_code=404, detail="Edge not found")
     _check_edge_in_project(edge, project.id, db)
 
+    old_ends = {
+        "source_node_id": str(edge.source_node_id),
+        "target_node_id": str(edge.target_node_id),
+    }
+    new_source = payload.source_node_id or edge.source_node_id
+    new_target = payload.target_node_id or edge.target_node_id
+    ends_changed = (
+        new_source != edge.source_node_id or new_target != edge.target_node_id
+    )
+    if ends_changed:
+        _check_reconnect(db, edge, new_source, new_target, payload.reason)
+        edge.source_node_id = new_source
+        edge.target_node_id = new_target
+    if payload.edge_kind is not None:
+        edge.edge_kind = payload.edge_kind
+
     old_label = edge.label
     if "label" in payload.model_fields_set:
         edge.label = payload.label or None
@@ -1150,9 +1166,72 @@ def update_edge(
             source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
             actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
         )
+    if ends_changed:
+        record_change(
+            db,
+            target_type=ChangeTargetType.EDGE.value,
+            target_id=edge.id,
+            model_id=model_id_for_version(db, edge.version_id),
+            version_id=edge.version_id,
+            kind=ChangeKind.RECONNECT.value,
+            reason=payload.reason.strip(),
+            before=old_ends,
+            after={
+                "source_node_id": str(edge.source_node_id),
+                "target_node_id": str(edge.target_node_id),
+            },
+            source=ChangeSource.CHAT.value if payload.ai_applied else ChangeSource.MANUAL.value,
+            actor_kind=ChangeActorKind.AI.value if payload.ai_applied else ChangeActorKind.USER.value,
+        )
     db.commit()
     db.refresh(edge)
     return edge
+
+
+def _check_reconnect(
+    db: Session,
+    edge: ProcessEdge,
+    source_id: UUID,
+    target_id: UUID,
+    reason: str | None,
+) -> None:
+    """The same rules as `create_edge` for an edge whose ends move: two
+    different steps in the edge's version, not already joined by another
+    edge, plus a reason. Runs before any mutation, so it needs no rollback."""
+    if not (reason and reason.strip()):
+        raise HTTPException(
+            status_code=422, detail="A reason is required to reconnect an edge."
+        )
+    if source_id == target_id:
+        raise HTTPException(
+            status_code=422, detail="source_node_id and target_node_id must differ"
+        )
+    source = db.get(ProcessNode, source_id)
+    target = db.get(ProcessNode, target_id)
+    if (
+        source is None
+        or target is None
+        or source.version_id != edge.version_id
+        or target.version_id != edge.version_id
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="source and target must reference nodes in the same version",
+        )
+    clash = db.scalars(
+        select(ProcessEdge)
+        .where(
+            ProcessEdge.version_id == edge.version_id,
+            ProcessEdge.source_node_id == source_id,
+            ProcessEdge.target_node_id == target_id,
+            ProcessEdge.id != edge.id,
+        )
+        .limit(1)
+    ).first()
+    if clash is not None:
+        raise HTTPException(
+            status_code=409, detail="Edge already exists between these nodes"
+        )
 
 
 def _require_delete_reason(
