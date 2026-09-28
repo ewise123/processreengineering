@@ -102,11 +102,15 @@ export function buildCanvasState(graph: ProcessGraph): {
 
   // Prefer persisted positions from the server (`position.x` / `position.relative_y`);
   // fall back to Dagre + lane-center for nodes that haven't been moved yet.
+  const unplaced = new Map<string, number>();
   const nodes: CanvasNode[] = graph.nodes.map((n) => {
     const kind = nodeKindFromType(n.type);
     const size = NODE_SIZES[kind];
     const dPos = g.node(n.id);
-    const persisted = (n.position ?? {}) as { x?: number; relative_y?: number };
+    const persisted = (n.position ?? {}) as { x?: number; relative_y?: number; col?: number };
+    if (typeof persisted.x !== "number") {
+      unplaced.set(n.id, typeof persisted.col === "number" ? persisted.col : 0);
+    }
     const x =
       typeof persisted.x === "number"
         ? persisted.x
@@ -134,6 +138,8 @@ export function buildCanvasState(graph: ProcessGraph): {
     };
   });
 
+  spreadUnplaced(nodes, unplaced);
+
   const edges: CanvasEdge[] = graph.edges.map((e) => ({
     id: e.id,
     from: e.source_node_id,
@@ -148,4 +154,51 @@ export function buildCanvasState(graph: ProcessGraph): {
   }));
 
   return { nodes, edges, lanes };
+}
+
+/** Horizontal gap left between a spread node and the one before it. */
+const SPREAD_GAP = 60;
+
+/**
+ * Nodes with no saved position are placed by Dagre, then centred in their
+ * lane. Dagre doesn't know about lanes, so two unconnected nodes in the same
+ * lane (a blank map's default Start and End) get the same x and land on top
+ * of each other. Walk each lane's unplaced nodes in `col` order and push any
+ * that overlap a neighbour to the right. Nodes with a saved position never
+ * move. Mutates `nodes`.
+ */
+export function spreadUnplaced(
+  nodes: Pick<CanvasNode, "id" | "laneId" | "x" | "relativeY" | "w" | "h">[],
+  unplaced: Map<string, number>
+): void {
+  const overlaps = (
+    a: { x: number; relativeY: number; w: number; h: number },
+    b: { x: number; relativeY: number; w: number; h: number }
+  ) =>
+    a.x < b.x + b.w + SPREAD_GAP / 2 &&
+    b.x < a.x + a.w + SPREAD_GAP / 2 &&
+    a.relativeY < b.relativeY + b.h &&
+    b.relativeY < a.relativeY + a.h;
+
+  const byLane = new Map<string, typeof nodes>();
+  for (const n of nodes) {
+    const key = n.laneId ?? "";
+    if (!byLane.has(key)) byLane.set(key, []);
+    byLane.get(key)!.push(n);
+  }
+  for (const laneNodes of byLane.values()) {
+    const settled = laneNodes.filter((n) => !unplaced.has(n.id));
+    const pending = laneNodes
+      .filter((n) => unplaced.has(n.id))
+      .sort((a, b) => unplaced.get(a.id)! - unplaced.get(b.id)! || a.x - b.x);
+    for (const n of pending) {
+      let guard = 0;
+      let hit = settled.find((o) => overlaps(n, o));
+      while (hit && guard++ < 200) {
+        n.x = hit.x + hit.w + SPREAD_GAP;
+        hit = settled.find((o) => overlaps(n, o));
+      }
+      settled.push(n);
+    }
+  }
 }

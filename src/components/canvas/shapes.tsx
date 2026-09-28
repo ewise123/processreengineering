@@ -4,7 +4,10 @@ import { useState, type MouseEvent } from "react";
 
 import type { IssueSeverity, UUID } from "@/lib/types";
 
-import { isEdgeProposed } from "./ai-edit";
+import { MARKER, NODE_SHADOW_FILTER, THEME } from "./canvas-theme";
+import type { ConnectSide, EdgeOrientation } from "./edge-path";
+import type { EdgeRoute } from "./edge-routes";
+import { roundedPath } from "./rounded-path";
 import type { CanvasEdge, ResolvedNode } from "./types";
 
 const ISSUE_FILL: Record<IssueSeverity, string> = {
@@ -12,87 +15,17 @@ const ISSUE_FILL: Record<IssueSeverity, string> = {
   medium: "#d97706",
 };
 
-const AI_PROPOSED_STROKE = "#7c3aed";
-const AI_PROPOSED_DASH = "5 3";
-
-/** Manual backtrack/rework edges render amber + dashed so they read as
- * exception loops rather than forward sequence flow. */
-const REWORK_STROKE = "#d97706";
-const REWORK_DASH = "6 4";
-
-export type ConnectSide = "top" | "right" | "bottom" | "left";
-
-interface SimpleRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-/**
- * Pick orthogonal exit/entry sides based on the relative position of
- * source and target so the arrow always lands ON the target's perimeter
- * (perpendicular to its closest side), instead of disappearing into it.
- * Produces a 3-segment L-shape with one horizontal+one vertical bend.
- */
-export type EdgeOrientation = "horizontal" | "vertical";
-
-/** Below this gap on the perpendicular axis, the L-shape collapses to a
- * single straight segment. Picked to match a single grid-cell of slack. */
-const SNAP_STRAIGHT_THRESHOLD = 8;
-
-/** Vertical faces a manual backtrack edge can be pinned to. */
-export type VerticalSide = "top" | "bottom";
-
-/** How far past the node faces the default loop channel sits, before the user
- * drags it. Roughly one node-height of clearance. */
-const LOOP_OFFSET = 56;
-
-/**
- * Routing for a manually pinned backtrack/rework edge: leave the source's
- * top/bottom face, run along a horizontal channel, and enter the target's
- * top/bottom face — a clean orthogonal loop the user can reshape by dragging
- * the channel (persisted as bend_y). Unlike `buildEdgePath`'s geometric
- * branches, the faces here are fixed by the user, not derived from position.
- */
-export function buildPinnedEdgePath(
-  from: SimpleRect,
-  to: SimpleRect,
-  sourceSide: VerticalSide,
-  targetSide: VerticalSide,
-  bendY?: number | null
-): {
-  d: string;
-  midX: number;
-  midY: number;
-  orientation: EdgeOrientation;
-  midSegment: { x1: number; y1: number; x2: number; y2: number };
-} {
-  const sx = from.x + from.w / 2;
-  const tx = to.x + to.w / 2;
-  const sFaceY = sourceSide === "bottom" ? from.y + from.h : from.y;
-  const tFaceY = targetSide === "bottom" ? to.y + to.h : to.y;
-
-  let channelY: number;
-  if (typeof bendY === "number") {
-    channelY = bendY;
-  } else if (sourceSide === "bottom" && targetSide === "bottom") {
-    channelY = Math.max(sFaceY, tFaceY) + LOOP_OFFSET;
-  } else if (sourceSide === "top" && targetSide === "top") {
-    channelY = Math.min(sFaceY, tFaceY) - LOOP_OFFSET;
-  } else {
-    // Mixed faces: bias the channel to the direction the source exits.
-    channelY = sourceSide === "bottom" ? sFaceY + LOOP_OFFSET : sFaceY - LOOP_OFFSET;
-  }
-
-  return {
-    d: `M ${sx} ${sFaceY} L ${sx} ${channelY} L ${tx} ${channelY} L ${tx} ${tFaceY}`,
-    midX: (sx + tx) / 2,
-    midY: channelY,
-    orientation: "vertical",
-    midSegment: { x1: sx, y1: channelY, x2: tx, y2: channelY },
-  };
-}
+// Routing lives in ./edge-path (pure, tested); re-exported so existing
+// imports from "./shapes" keep working.
+export {
+  buildEdgePath,
+  buildPinnedEdgePath,
+  sidePoint,
+  SNAP_STRAIGHT_THRESHOLD,
+  type ConnectSide,
+  type EdgeOrientation,
+  type VerticalSide,
+} from "./edge-path";
 
 /** An edge renders as a backtrack loop when it is explicitly a rework edge OR
  * when both anchor faces are pinned (which routes through buildPinnedEdgePath).
@@ -103,139 +36,8 @@ export function isReworkEdge(
   return edge.kind === "rework" || (!!edge.sourceSide && !!edge.targetSide);
 }
 
-export function buildEdgePath(
-  from: SimpleRect,
-  to: SimpleRect,
-  overrides?: {
-    bendX?: number | null;
-    bendY?: number | null;
-    /** When both sides are pinned (top/bottom), routing follows the manual
-     * loop in `buildPinnedEdgePath` instead of geometric auto-routing. */
-    sourceSide?: VerticalSide | null;
-    targetSide?: VerticalSide | null;
-  }
-): {
-  d: string;
-  midX: number;
-  midY: number;
-  orientation: EdgeOrientation;
-  /** The two segment endpoints of the draggable middle segment, in the
-   * canvas coordinate system. */
-  midSegment: { x1: number; y1: number; x2: number; y2: number };
-} {
-  if (overrides?.sourceSide && overrides?.targetSide) {
-    return buildPinnedEdgePath(
-      from,
-      to,
-      overrides.sourceSide,
-      overrides.targetSide,
-      overrides.bendY
-    );
-  }
-  const fc = { x: from.x + from.w / 2, y: from.y + from.h / 2 };
-  const tc = { x: to.x + to.w / 2, y: to.y + to.h / 2 };
-  const dx = tc.x - fc.x;
-  const dy = tc.y - fc.y;
-  const horizontal = Math.abs(dx) >= Math.abs(dy);
-  if (horizontal) {
-    const naturalExitX = dx >= 0 ? from.x + from.w : from.x;
-    const naturalEntryX = dx >= 0 ? to.x : to.x + to.w;
-    const exitY = fc.y;
-    // Snap-to-straight: when source/target are aligned on the cross axis,
-    // the L-shape's two parallel segments collapse into one straight line.
-    if (Math.abs(exitY - tc.y) < SNAP_STRAIGHT_THRESHOLD) {
-      const y = (exitY + tc.y) / 2;
-      return {
-        d: `M ${naturalExitX} ${y} L ${naturalEntryX} ${y}`,
-        midX: (naturalExitX + naturalEntryX) / 2,
-        midY: y,
-        orientation: "horizontal",
-        midSegment: { x1: naturalExitX, y1: y, x2: naturalEntryX, y2: y },
-      };
-    }
-    const naturalMidX = (naturalExitX + naturalEntryX) / 2;
-    const bendX =
-      typeof overrides?.bendX === "number"
-        ? overrides.bendX
-        : naturalMidX;
-    // Source exit side flips to face whichever side of source the bend is on,
-    // so the path never re-enters source.
-    const exitX = bendX >= fc.x ? from.x + from.w : from.x;
-    // If the user dragged the bend so it's inside the target's horizontal
-    // span, snap entry to top or bottom (whichever the source is on the
-    // other side of). Arrow lands perpendicular to that face.
-    if (bendX > to.x && bendX < to.x + to.w) {
-      const enterFromTop = exitY <= tc.y;
-      const entryY = enterFromTop ? to.y : to.y + to.h;
-      return {
-        d: `M ${exitX} ${exitY} L ${bendX} ${exitY} L ${bendX} ${entryY}`,
-        midX: bendX,
-        midY: (exitY + entryY) / 2,
-        orientation: "horizontal",
-        midSegment: { x1: bendX, y1: exitY, x2: bendX, y2: entryY },
-      };
-    }
-    const entryX = bendX < to.x ? to.x : to.x + to.w;
-    const entryY = tc.y;
-    return {
-      d: `M ${exitX} ${exitY} L ${bendX} ${exitY} L ${bendX} ${entryY} L ${entryX} ${entryY}`,
-      midX: bendX,
-      midY: (exitY + entryY) / 2,
-      orientation: "horizontal",
-      midSegment: { x1: bendX, y1: exitY, x2: bendX, y2: entryY },
-    };
-  }
-  const naturalExitY = dy >= 0 ? from.y + from.h : from.y;
-  const naturalEntryY = dy >= 0 ? to.y : to.y + to.h;
-  const exitX = fc.x;
-  if (Math.abs(exitX - tc.x) < SNAP_STRAIGHT_THRESHOLD) {
-    const x = (exitX + tc.x) / 2;
-    return {
-      d: `M ${x} ${naturalExitY} L ${x} ${naturalEntryY}`,
-      midX: x,
-      midY: (naturalExitY + naturalEntryY) / 2,
-      orientation: "vertical",
-      midSegment: { x1: x, y1: naturalExitY, x2: x, y2: naturalEntryY },
-    };
-  }
-  const naturalMidY = (naturalExitY + naturalEntryY) / 2;
-  const bendY =
-    typeof overrides?.bendY === "number" ? overrides.bendY : naturalMidY;
-  const exitY = bendY >= fc.y ? from.y + from.h : from.y;
-  if (bendY > to.y && bendY < to.y + to.h) {
-    const enterFromLeft = exitX <= tc.x;
-    const entryX = enterFromLeft ? to.x : to.x + to.w;
-    return {
-      d: `M ${exitX} ${exitY} L ${exitX} ${bendY} L ${entryX} ${bendY}`,
-      midX: (exitX + entryX) / 2,
-      midY: bendY,
-      orientation: "vertical",
-      midSegment: { x1: exitX, y1: bendY, x2: entryX, y2: bendY },
-    };
-  }
-  const entryY = bendY < to.y ? to.y : to.y + to.h;
-  const entryX = tc.x;
-  return {
-    d: `M ${exitX} ${exitY} L ${exitX} ${bendY} L ${entryX} ${bendY} L ${entryX} ${entryY}`,
-    midX: (exitX + entryX) / 2,
-    midY: bendY,
-    orientation: "vertical",
-    midSegment: { x1: exitX, y1: bendY, x2: entryX, y2: bendY },
-  };
-}
-
-export function sidePoint(rect: SimpleRect, side: ConnectSide) {
-  switch (side) {
-    case "top":
-      return { x: rect.x + rect.w / 2, y: rect.y };
-    case "right":
-      return { x: rect.x + rect.w, y: rect.y + rect.h / 2 };
-    case "bottom":
-      return { x: rect.x + rect.w / 2, y: rect.y + rect.h };
-    case "left":
-      return { x: rect.x, y: rect.y + rect.h / 2 };
-  }
-}
+/** Gap between a node's side and its connect handle. */
+const HANDLE_OFFSET = 12;
 
 export function NodeShape({
   node,
@@ -265,20 +67,19 @@ export function NodeShape({
   const isGateway = kind === "gateway";
   const isTask = !isEvent && !isGateway;
 
-  const issueStroke = issueLevel ? ISSUE_FILL[issueLevel] : null;
-  const stroke = selected ? "#0f172a" : (issueStroke ?? "#475569");
-  const strokeWidth = selected ? 2.5 : issueLevel ? 2 : 1.2;
-  const fill = "#ffffff";
-
-  // AI-proposed styling: violet dashed outline, only when neither selected nor
-  // flagged with an issue (those states take precedence).
-  const proposed = node.aiProposed === true;
-  const baseStroke = proposed && !selected && !issueStroke ? AI_PROPOSED_STROKE : stroke;
-  const proposedDash = proposed && !selected && !issueStroke ? AI_PROPOSED_DASH : undefined;
-
   const [hover, setHover] = useState(false);
   const handlesVisible =
     !!onStartConnect && (hover || selected || showHandles);
+
+  // Border colour, by precedence: issue flag > AI-proposed > hover > resting.
+  // Selection is drawn as a separate outer ring, so it never changes the
+  // shape's own border or size.
+  const issueStroke = issueLevel ? ISSUE_FILL[issueLevel] : null;
+  const proposed = node.aiProposed === true && !issueStroke;
+  const border = issueStroke ?? (proposed ? THEME.proposed : hover ? "#94a3b8" : THEME.nodeBorder);
+  const borderWidth = issueStroke || proposed ? 1.5 : THEME.nodeBorderWidth;
+  const borderDash = proposed ? THEME.proposedDash : undefined;
+  const shadow = `url(#${NODE_SHADOW_FILTER})`;
 
   return (
     <g
@@ -291,116 +92,151 @@ export function NodeShape({
       onMouseLeave={() => setHover(false)}
       data-node-id={id}
     >
+      {handlesVisible && (
+        // Invisible margin under the shape that keeps the node "hovered" while
+        // the pointer crosses the gap to a handle. Drawn first so the shape
+        // stays on top and still takes its own drags; a press in the gap is
+        // swallowed so it neither drags the node nor starts a marquee.
+        <rect
+          x={-HANDLE_OFFSET - 7}
+          y={-HANDLE_OFFSET - 7}
+          width={w + (HANDLE_OFFSET + 7) * 2}
+          height={h + (HANDLE_OFFSET + 7) * 2}
+          fill="transparent"
+          style={{ cursor: "default" }}
+          onMouseDown={(e) => e.stopPropagation()}
+        />
+      )}
       {isEvent && (
         <>
+          {selected && <SelectionRing kind="circle" w={w} h={h} />}
           <circle
             cx={w / 2}
             cy={h / 2}
             r={w / 2}
-            fill={fill}
+            fill={kind === "start" ? THEME.startFill : kind === "end" ? THEME.endFill : THEME.nodeFill}
             stroke={
-              // Can't use baseStroke here: start/end have unique colours that
-              // baseStroke's fallback ("#475569") would silently erase.
-              proposed && !selected && !issueStroke
-                ? AI_PROPOSED_STROKE
+              // Events keep their start/end colours; only an issue or an AI
+              // proposal overrides them.
+              issueStroke ??
+              (proposed
+                ? THEME.proposed
                 : kind === "start"
-                  ? "#16a34a"
+                  ? THEME.startStroke
                   : kind === "end"
-                    ? "#991b1b"
-                    : "#475569"
+                    ? THEME.endStroke
+                    : THEME.intermediateStroke)
             }
-            strokeWidth={kind === "end" ? 3.5 : 2}
-            strokeDasharray={proposedDash}
+            strokeWidth={kind === "end" ? 3 : 2}
+            strokeDasharray={borderDash}
           />
-          {selected && (
-            <circle
-              cx={w / 2}
-              cy={h / 2}
-              r={w / 2 + 4}
-              fill="none"
-              stroke="#0f172a"
-              strokeDasharray="3 3"
-              strokeWidth={1.2}
-            />
+          {kind === "intermediate" && (
+            <circle cx={w / 2} cy={h / 2} r={w / 2 - 4} fill="none" stroke={THEME.intermediateStroke} strokeWidth={1.25} />
           )}
         </>
       )}
       {isGateway && (
         <>
+          {selected && <SelectionRing kind="diamond" w={w} h={h} />}
           <polygon
             points={`${w / 2},0 ${w},${h / 2} ${w / 2},${h} 0,${h / 2}`}
-            fill={fill}
-            stroke={baseStroke}
-            strokeWidth={strokeWidth}
-            strokeDasharray={proposedDash}
+            fill={THEME.nodeFill}
+            stroke={border}
+            strokeWidth={borderWidth + 0.25}
+            strokeDasharray={borderDash}
+            strokeLinejoin="round"
+            filter={shadow}
           />
-          <text
-            x={w / 2}
-            y={h / 2 + 4}
-            textAnchor="middle"
-            fontSize="14"
-            fill="#475569"
-            fontWeight="700"
-          >
-            ×
-          </text>
+          <GatewayGlyph type={node.type} cx={w / 2} cy={h / 2} />
         </>
       )}
       {isTask && (
         <>
+          {selected && <SelectionRing kind="rect" w={w} h={h} />}
           <rect
             width={w}
             height={h}
-            rx={8}
-            ry={8}
-            fill={fill}
-            stroke={baseStroke}
-            strokeWidth={strokeWidth}
-            strokeDasharray={proposedDash}
+            rx={THEME.nodeRadius}
+            ry={THEME.nodeRadius}
+            fill={THEME.nodeFill}
+            stroke={border}
+            strokeWidth={borderWidth}
+            strokeDasharray={borderDash}
+            filter={shadow}
           />
-          {proposed && (
-            <text x={w - 12} y={14} fontSize="11" fill={AI_PROPOSED_STROKE} aria-label="AI proposed">
+          {node.aiProposed && (
+            <text x={w - 13} y={15} fontSize="11" fill={THEME.proposed} aria-label="AI proposed">
               ✦
             </text>
           )}
           {node.childModelId && (
-            <g transform={`translate(${w / 2 - 7}, ${h - 14})`} aria-label="Has sub-process" style={{ pointerEvents: "none" }}>
-              <rect width={14} height={12} rx={2} fill="#fff" stroke="#475569" strokeWidth={1} />
-              <line x1={7} y1={3} x2={7} y2={9} stroke="#475569" strokeWidth={1.2} />
-              <line x1={4} y1={6} x2={10} y2={6} stroke="#475569" strokeWidth={1.2} />
+            <g transform={`translate(${w / 2 - 7}, ${h - 15})`} aria-label="Has sub-process" style={{ pointerEvents: "none" }}>
+              <rect width={14} height={12} rx={3} fill="#fff" stroke={THEME.subtleText} strokeWidth={1} />
+              <line x1={7} y1={3} x2={7} y2={9} stroke={THEME.subtleText} strokeWidth={1.25} strokeLinecap="round" />
+              <line x1={4} y1={6} x2={10} y2={6} stroke={THEME.subtleText} strokeWidth={1.25} strokeLinecap="round" />
             </g>
           )}
-          <foreignObject x={6} y={10} width={w - 12} height={h - 16}>
+          <foreignObject x={8} y={6} width={w - 16} height={h - (node.childModelId ? 20 : 12)}>
             <div
               style={{
-                fontSize: 11,
-                lineHeight: 1.25,
-                color: "#0f172a",
+                fontSize: THEME.nodeFontSize,
+                lineHeight: 1.3,
+                color: THEME.text,
                 fontWeight: 500,
                 textAlign: "center",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 height: "100%",
-                padding: "0 2px",
                 fontFamily: "inherit",
+                overflow: "hidden",
               }}
             >
-              {label}
+              <span
+                style={{
+                  display: "-webkit-box",
+                  WebkitLineClamp: 3,
+                  WebkitBoxOrient: "vertical",
+                  overflow: "hidden",
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {label}
+              </span>
             </div>
           </foreignObject>
         </>
       )}
-      {(isEvent || isGateway) && (
-        <foreignObject x={-40} y={h + 2} width={w + 80} height={40}>
+      {isEvent && (
+        <foreignObject x={-50} y={h + 4} width={w + 100} height={40}>
           <div
             style={{
-              fontSize: 10.5,
-              color: "#334155",
+              fontSize: THEME.eventFontSize,
+              color: THEME.mutedText,
               textAlign: "center",
-              lineHeight: 1.2,
+              lineHeight: 1.25,
               fontWeight: 500,
               fontFamily: "inherit",
+            }}
+          >
+            {label}
+          </div>
+        </foreignObject>
+      )}
+      {isGateway && (
+        // Beside the upper-right edge of the diamond, clear of the branches
+        // that leave from its corners.
+        <foreignObject x={w * 0.75 + 4} y={-26} width={160} height={30}>
+          <div
+            style={{
+              fontSize: THEME.eventFontSize,
+              color: THEME.mutedText,
+              lineHeight: 1.25,
+              fontWeight: 500,
+              fontFamily: "inherit",
+              display: "flex",
+              alignItems: "flex-end",
+              height: "100%",
             }}
           >
             {label}
@@ -450,13 +286,71 @@ export function NodeShape({
       )}
       {handlesVisible && (
         <>
-          <ConnectHandle cx={w / 2} cy={0} onMouseDown={(e) => onStartConnect!(e, id, "top")} />
-          <ConnectHandle cx={w} cy={h / 2} onMouseDown={(e) => onStartConnect!(e, id, "right")} />
-          <ConnectHandle cx={w / 2} cy={h} onMouseDown={(e) => onStartConnect!(e, id, "bottom")} />
-          <ConnectHandle cx={0} cy={h / 2} onMouseDown={(e) => onStartConnect!(e, id, "left")} />
+          {/* Sit just outside the shape, so they never cover the arrowheads
+            landing on its sides. Which handle you grab still sets the side. */}
+          <ConnectHandle cx={w / 2} cy={-HANDLE_OFFSET} onMouseDown={(e) => onStartConnect!(e, id, "top")} />
+          <ConnectHandle cx={w + HANDLE_OFFSET} cy={h / 2} onMouseDown={(e) => onStartConnect!(e, id, "right")} />
+          <ConnectHandle cx={w / 2} cy={h + HANDLE_OFFSET} onMouseDown={(e) => onStartConnect!(e, id, "bottom")} />
+          <ConnectHandle cx={-HANDLE_OFFSET} cy={h / 2} onMouseDown={(e) => onStartConnect!(e, id, "left")} />
         </>
       )}
     </g>
+  );
+}
+
+/** Outer ring + soft halo around a selected node. Drawn outside the shape so
+ * selecting never changes the shape's own border or size. */
+function SelectionRing({ kind, w, h }: { kind: "rect" | "circle" | "diamond"; w: number; h: number }) {
+  const gap = 3.5;
+  const ring = (strokeWidth: number, stroke: string) => {
+    const common = { fill: "none", stroke, strokeWidth, pointerEvents: "none" as const };
+    if (kind === "circle") return <circle cx={w / 2} cy={h / 2} r={w / 2 + gap} {...common} />;
+    if (kind === "diamond") {
+      const g = gap * 1.4;
+      return (
+        <polygon
+          points={`${w / 2},${-g} ${w + g},${h / 2} ${w / 2},${h + g} ${-g},${h / 2}`}
+          strokeLinejoin="round"
+          {...common}
+        />
+      );
+    }
+    return (
+      <rect
+        x={-gap}
+        y={-gap}
+        width={w + gap * 2}
+        height={h + gap * 2}
+        rx={THEME.nodeRadius + gap}
+        {...common}
+      />
+    );
+  };
+  return (
+    <>
+      {ring(7, THEME.selectionHalo)}
+      {ring(2, THEME.selection)}
+    </>
+  );
+}
+
+/** BPMN gateway marker: × exclusive, + parallel, ○ inclusive. */
+function GatewayGlyph({ type, cx, cy }: { type: string; cx: number; cy: number }) {
+  const s = 7;
+  const stroke = { stroke: THEME.subtleText, strokeWidth: 2.25, strokeLinecap: "round" as const, fill: "none" };
+  if (type === "gateway_parallel") {
+    return <path d={`M ${cx - s} ${cy} H ${cx + s} M ${cx} ${cy - s} V ${cy + s}`} {...stroke} pointerEvents="none" />;
+  }
+  if (type === "gateway_inclusive") {
+    return <circle cx={cx} cy={cy} r={s} {...stroke} pointerEvents="none" />;
+  }
+  const d = s * 0.8;
+  return (
+    <path
+      d={`M ${cx - d} ${cy - d} L ${cx + d} ${cy + d} M ${cx + d} ${cy - d} L ${cx - d} ${cy + d}`}
+      {...stroke}
+      pointerEvents="none"
+    />
   );
 }
 
@@ -473,9 +367,9 @@ function ConnectHandle({
     <circle
       cx={cx}
       cy={cy}
-      r={5}
-      fill="#0f172a"
-      stroke="#fff"
+      r={4.5}
+      fill="#fff"
+      stroke={THEME.selection}
       strokeWidth={1.5}
       style={{ cursor: "crosshair" }}
       onMouseDown={(e) => {
@@ -486,9 +380,16 @@ function ConnectHandle({
   );
 }
 
+/** Rough width of 11px/600 label text, for sizing the pill without a DOM
+ * measurement on every render. */
+function pillWidth(text: string, min = 28): number {
+  return Math.max(min, Math.round(text.length * 6.3 + 16));
+}
+
 export function EdgeArrow({
   edge,
-  nodes,
+  route,
+  proposed,
   selected,
   onClick,
   onDoubleClick,
@@ -496,7 +397,11 @@ export function EdgeArrow({
   onStartBendDrag,
 }: {
   edge: CanvasEdge;
-  nodes: ResolvedNode[];
+  /** Precomputed by `computeEdgeRoutes`, which places every connector with
+   * its neighbours in view (shared sides, gateway corners). */
+  route: EdgeRoute;
+  /** True when either end is an AI-proposed step. */
+  proposed: boolean;
   selected: boolean;
   onClick: (id: string) => void;
   onDoubleClick?: (id: string) => void;
@@ -508,19 +413,29 @@ export function EdgeArrow({
     orientation: EdgeOrientation
   ) => void;
 }) {
-  const from = nodes.find((n) => n.id === edge.from);
-  const to = nodes.find((n) => n.id === edge.to);
-  if (!from || !to) return null;
-
-  const edgeProposed = isEdgeProposed(from, to);
+  const [hover, setHover] = useState(false);
   const isRework = isReworkEdge(edge);
+  const { orientation, midSegment, labelAt } = route;
+  const d = roundedPath(route.points);
 
-  const { d, midX, midY, orientation, midSegment } = buildEdgePath(from, to, {
-    bendX: edge.bendX,
-    bendY: edge.bendY,
-    sourceSide: edge.sourceSide,
-    targetSide: edge.targetSide,
-  });
+  const stroke = selected
+    ? THEME.selection
+    : isRework
+      ? THEME.rework
+      : proposed
+        ? THEME.proposed
+        : THEME.edge;
+  const marker = selected
+    ? MARKER.selected
+    : isRework
+      ? MARKER.rework
+      : proposed
+        ? MARKER.proposed
+        : MARKER.default;
+  const dash = isRework ? THEME.reworkDash : !selected && proposed ? THEME.proposedDash : undefined;
+
+  const labelW = edge.label ? pillWidth(edge.label) : 0;
+  const conditionText = edge.condition ? `[${edge.condition}]` : null;
 
   return (
     <g
@@ -534,31 +449,31 @@ export function EdgeArrow({
         onDoubleClick(edge.id);
       }}
       onContextMenu={(e) => onContextMenu?.(e, edge.id)}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       style={{ cursor: "pointer" }}
+      data-edge-id={edge.id}
     >
+      {(hover || selected) && (
+        <path
+          d={d}
+          fill="none"
+          stroke={selected ? THEME.selectionHalo : THEME.edgeHover}
+          strokeWidth={7}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          pointerEvents="none"
+        />
+      )}
       <path
         d={d}
         fill="none"
-        stroke={
-          selected
-            ? "#0f172a"
-            : isRework
-              ? REWORK_STROKE
-              : edgeProposed
-                ? AI_PROPOSED_STROKE
-                : "#94a3b8"
-        }
-        strokeWidth={selected ? 2.5 : 1.5}
-        strokeDasharray={
-          isRework
-            ? REWORK_DASH
-            : selected
-              ? undefined
-              : edgeProposed
-                ? AI_PROPOSED_DASH
-                : undefined
-        }
-        markerEnd={isRework ? "url(#poet-arrow-rework)" : "url(#poet-arrow)"}
+        stroke={stroke}
+        strokeWidth={selected ? THEME.edgeSelectedWidth : THEME.edgeWidth}
+        strokeDasharray={dash}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        markerEnd={`url(#${marker})`}
       />
       {/* Hit-area for click */}
       <path d={d} fill="none" stroke="transparent" strokeWidth={12} />
@@ -582,58 +497,53 @@ export function EdgeArrow({
         />
       )}
       {edge.label && (
-        <g>
+        <g pointerEvents="none">
           <rect
-            x={midX - 14}
-            y={midY - 8}
-            width={28}
-            height={14}
-            rx={3}
+            x={labelAt.x - labelW / 2}
+            y={labelAt.y - 9}
+            width={labelW}
+            height={18}
+            rx={9}
             fill="#fff"
-            stroke="#e2e8f0"
+            stroke={selected ? THEME.selection : THEME.labelBorder}
           />
           <text
-            x={midX}
-            y={midY + 2}
+            x={labelAt.x}
+            y={labelAt.y + 3.8}
             textAnchor="middle"
-            fontSize="10"
-            fill="#64748b"
-            fontWeight="500"
+            fontSize="11"
+            fill={THEME.labelText}
+            fontWeight="600"
           >
             {edge.label}
           </text>
         </g>
       )}
-      {edge.condition &&
+      {conditionText &&
         (() => {
-          // Gateway-branch guard, e.g. "amount < $10,000" — rendered bracketed
-          // and in an amber italic so it reads as a condition, not a plain edge
-          // label. Stacked below the label when both are present (offset by one
-          // line); otherwise it takes the label's usual position. The box is
-          // sized to the text (unlike the fixed-width label box above) since
-          // condition text runs much longer than typical edge labels.
-          const conditionText = `[${edge.condition}]`;
-          const boxWidth = Math.max(28, conditionText.length * 5.5 + 10);
-          const textY = edge.label ? midY + 18 : midY + 2;
-          const boxY = textY - 10;
+          // Gateway-branch guard, e.g. "amount < $10,000" — bracketed amber
+          // italic so it reads as a condition, not a plain edge label. Stacked
+          // below the label when both are present.
+          const boxW = Math.max(28, Math.round(conditionText.length * 5.8 + 16));
+          const cy = edge.label ? labelAt.y + 21 : labelAt.y;
           return (
-            <g>
+            <g pointerEvents="none">
               <rect
-                x={midX - boxWidth / 2}
-                y={boxY}
-                width={boxWidth}
-                height={14}
-                rx={3}
-                fill="#fffbeb"
-                stroke="#fde68a"
+                x={labelAt.x - boxW / 2}
+                y={cy - 9}
+                width={boxW}
+                height={18}
+                rx={9}
+                fill={THEME.conditionFill}
+                stroke={THEME.conditionBorder}
               />
               <text
-                x={midX}
-                y={textY}
+                x={labelAt.x}
+                y={cy + 3.5}
                 textAnchor="middle"
-                fontSize="10"
+                fontSize="10.5"
                 fontStyle="italic"
-                fill="#b45309"
+                fill={THEME.conditionText}
                 fontWeight="500"
               >
                 {conditionText}
