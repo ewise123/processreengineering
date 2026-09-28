@@ -9,6 +9,7 @@ import { SHORTCUTS, type Shortcut } from "./keymap";
 /** Things the mouse does that no key table can show. */
 const GESTURES: { keys: string; label: string }[] = [
   { keys: "Double-click a lane", label: "Add a step there and name it" },
+  { keys: "Click a + on a step", label: "Add a connected step on that side" },
   { keys: "Double-click a step", label: "Rename it" },
   { keys: "Shift+click", label: "Add to the selection" },
   { keys: "Drag on empty space", label: "Select everything in the box" },

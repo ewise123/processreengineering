@@ -38,6 +38,9 @@ export function isReworkEdge(
 
 /** Gap between a node's side and its connect handle. */
 export const HANDLE_OFFSET = 12;
+/** A "+" sits further out than a plain dot, so it floats clear of the
+ * selection ring instead of touching it. */
+export const PLUS_OFFSET = 21;
 
 export function NodeShape({
   node,
@@ -51,6 +54,7 @@ export function NodeShape({
   onDoubleClick,
   onOpenSubprocess,
   hideLabel,
+  freeSides,
 }: {
   node: ResolvedNode;
   selected: boolean;
@@ -67,6 +71,9 @@ export function NodeShape({
   onOpenSubprocess?: (childModelId: UUID) => void;
   /** Hide the name while the on-canvas name box covers it. */
   hideLabel?: boolean;
+  /** Sides with no connector yet: their handle shows a "+" that adds a
+   * connected step when clicked (dragging it still draws a connector). */
+  freeSides?: ReadonlySet<ConnectSide>;
 }) {
   const { kind, x, y, w, h, label, id } = node;
   const isEvent = kind === "start" || kind === "end" || kind === "intermediate";
@@ -104,10 +111,10 @@ export function NodeShape({
         // stays on top and still takes its own drags; a press in the gap is
         // swallowed so it neither drags the node nor starts a marquee.
         <rect
-          x={-HANDLE_OFFSET - 7}
-          y={-HANDLE_OFFSET - 7}
-          width={w + (HANDLE_OFFSET + 7) * 2}
-          height={h + (HANDLE_OFFSET + 7) * 2}
+          x={-PLUS_OFFSET - 10}
+          y={-PLUS_OFFSET - 10}
+          width={w + (PLUS_OFFSET + 10) * 2}
+          height={h + (PLUS_OFFSET + 10) * 2}
           fill="transparent"
           style={{ cursor: "default" }}
           onMouseDown={(e) => e.stopPropagation()}
@@ -306,10 +313,22 @@ export function NodeShape({
         <>
           {/* Sit just outside the shape, so they never cover the arrowheads
             landing on its sides. Which handle you grab still sets the side. */}
-          <ConnectHandle cx={w / 2} cy={-HANDLE_OFFSET} onMouseDown={(e) => onStartConnect!(e, id, "top")} />
-          <ConnectHandle cx={w + HANDLE_OFFSET} cy={h / 2} onMouseDown={(e) => onStartConnect!(e, id, "right")} />
-          <ConnectHandle cx={w / 2} cy={h + HANDLE_OFFSET} onMouseDown={(e) => onStartConnect!(e, id, "bottom")} />
-          <ConnectHandle cx={-HANDLE_OFFSET} cy={h / 2} onMouseDown={(e) => onStartConnect!(e, id, "left")} />
+          {(["top", "right", "bottom", "left"] as const).map((side) => {
+            const plus = !!freeSides?.has(side);
+            const o = plus ? PLUS_OFFSET : HANDLE_OFFSET;
+            const [cx, cy] =
+              side === "top" ? [w / 2, -o] : side === "right" ? [w + o, h / 2] : side === "bottom" ? [w / 2, h + o] : [-o, h / 2];
+            return (
+              <ConnectHandle
+                key={side}
+                cx={cx}
+                cy={cy}
+                side={side}
+                plus={plus}
+                onMouseDown={(e) => onStartConnect!(e, id, side)}
+              />
+            );
+          })}
         </>
       )}
     </g>
@@ -372,29 +391,80 @@ function GatewayGlyph({ type, cx, cy }: { type: string; cx: number; cy: number }
   );
 }
 
+const SIDE_WORD: Record<ConnectSide, string> = {
+  top: "above",
+  right: "to the right",
+  bottom: "below",
+  left: "before it",
+};
+
+/**
+ * A connect handle. Drag it to draw a connector. On a side with no
+ * connector yet it's a "+": a click (no drag) adds a connected step there —
+ * the canvas tells the two apart on mouseup.
+ */
 function ConnectHandle({
   cx,
   cy,
+  side,
+  plus,
   onMouseDown,
 }: {
   cx: number;
   cy: number;
+  side: ConnectSide;
+  plus: boolean;
   onMouseDown: (e: MouseEvent) => void;
 }) {
+  const [hot, setHot] = useState(false);
+  const down = (e: MouseEvent) => {
+    e.stopPropagation();
+    onMouseDown(e);
+  };
+  if (!plus) {
+    return (
+      <circle
+        cx={cx}
+        cy={cy}
+        r={4.5}
+        fill="#fff"
+        stroke={THEME.selection}
+        strokeWidth={1.5}
+        style={{ cursor: "crosshair" }}
+        onMouseDown={down}
+      />
+    );
+  }
+  const r = hot ? 8.5 : 7;
+  const arm = hot ? 4 : 3.2;
   return (
-    <circle
-      cx={cx}
-      cy={cy}
-      r={4.5}
-      fill="#fff"
-      stroke={THEME.selection}
-      strokeWidth={1.5}
-      style={{ cursor: "crosshair" }}
-      onMouseDown={(e) => {
-        e.stopPropagation();
-        onMouseDown(e);
-      }}
-    />
+    <g
+      role="button"
+      aria-label={`Add a step ${SIDE_WORD[side]}`}
+      data-plus-side={side}
+      style={{ cursor: "pointer" }}
+      onMouseDown={down}
+      onMouseEnter={() => setHot(true)}
+      onMouseLeave={() => setHot(false)}
+    >
+      <title>Click to add a connected step · drag to connect</title>
+      <circle
+        cx={cx}
+        cy={cy}
+        r={r}
+        fill={hot ? THEME.selection : "#fff"}
+        stroke={THEME.selection}
+        strokeWidth={1.5}
+        style={{ transition: "r 90ms ease-out, fill 90ms ease-out" }}
+      />
+      <path
+        d={`M ${cx - arm} ${cy} H ${cx + arm} M ${cx} ${cy - arm} V ${cy + arm}`}
+        stroke={hot ? "#fff" : THEME.selection}
+        strokeWidth={1.75}
+        strokeLinecap="round"
+        pointerEvents="none"
+      />
+    </g>
   );
 }
 

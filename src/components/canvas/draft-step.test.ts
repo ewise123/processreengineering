@@ -35,6 +35,7 @@ describe("creationReason", () => {
   it("says how the step was made", () => {
     expect(creationReason("dblclick")).toBe("Added via double-click");
     expect(creationReason("tab")).toBe("Added as next step (Tab)");
+    expect(creationReason("plus")).toBe("Added with the + on a step");
     expect(creationReason("palette-click")).toBe("Added from the shape palette");
     expect(creationReason("palette-drop")).toBe("Added from the shape palette");
   });
