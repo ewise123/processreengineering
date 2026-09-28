@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 import type { Viewport } from "./types";
 import type { WheelMode } from "./viewport-math";
+import { keysFor, useIsMac } from "./key-labels";
 
 export type CanvasTool = "select" | "pan" | "connect";
 
@@ -15,6 +16,7 @@ export function FloatingToolbar({
   onZoomIn,
   onZoomOut,
   onFit,
+  onShowShortcuts,
   wheelMode,
   onWheelModeChange,
   showIssues,
@@ -33,6 +35,8 @@ export function FloatingToolbar({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
+  /** Opens the keyboard-shortcuts panel. */
+  onShowShortcuts?: () => void;
   /** What a plain scroll wheel does: pan (trackpad) or zoom (mouse). */
   wheelMode: WheelMode;
   onWheelModeChange: (next: WheelMode) => void;
@@ -46,6 +50,7 @@ export function FloatingToolbar({
   canUndo?: boolean;
   canRedo?: boolean;
 }) {
+  const mac = useIsMac();
   const zoomPct = Math.round(viewport.scale * 100);
   return (
     <div
@@ -98,12 +103,12 @@ export function FloatingToolbar({
       </Group>
 
       <Group rightDivider>
-        <ToolButton onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)">
+        <ToolButton onClick={onUndo} disabled={!canUndo} title={`Undo (${keysFor("undo", mac)})`}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
             <path d="M9 14l-4-4 4-4M5 10h9a5 5 0 015 5v1" />
           </svg>
         </ToolButton>
-        <ToolButton onClick={onRedo} disabled={!canRedo} title="Redo (⌘⇧Z)">
+        <ToolButton onClick={onRedo} disabled={!canRedo} title={`Redo (${keysFor("redo", mac)})`}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
             <path d="M15 14l4-4-4-4M19 10h-9a5 5 0 00-5 5v1" />
           </svg>
@@ -111,7 +116,7 @@ export function FloatingToolbar({
       </Group>
 
       <Group rightDivider>
-        <PlainButton onClick={onZoomOut} title="Zoom out (⌘−)">
+        <PlainButton onClick={onZoomOut} title={`Zoom out (${keysFor("zoom-out", mac)})`}>
           −
         </PlainButton>
         <div
@@ -126,12 +131,12 @@ export function FloatingToolbar({
         >
           {zoomPct}%
         </div>
-        <PlainButton onClick={onZoomIn} title="Zoom in (⌘=)">
+        <PlainButton onClick={onZoomIn} title={`Zoom in (${keysFor("zoom-in", mac)})`}>
           +
         </PlainButton>
         <PlainButton
           onClick={onFit}
-          title="Fit the map on screen (Shift+1)"
+          title={`Fit the map on screen (${keysFor("fit", mac)})`}
           style={{ fontSize: 11, padding: "0 8px" }}
         >
           Fit
@@ -158,6 +163,16 @@ export function FloatingToolbar({
           )}
           {wheelMode === "mouse" ? "Mouse" : "Trackpad"}
         </PlainButton>
+        {onShowShortcuts && (
+          <PlainButton
+            onClick={onShowShortcuts}
+            title="Keyboard shortcuts (?)"
+            ariaLabel="Keyboard shortcuts"
+            style={{ fontSize: 12, fontWeight: 600, padding: "0 9px" }}
+          >
+            ?
+          </PlainButton>
+        )}
       </Group>
 
       <Group>

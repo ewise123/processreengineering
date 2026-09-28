@@ -67,6 +67,8 @@ import { alignItems, type AlignCommand } from "./align";
 import { routesToReset, type RouteReset } from "./routes";
 import { anchorToolbar } from "./toolbar-anchor";
 import { SelectionToolbar } from "./selection-toolbar";
+import { ShortcutsPanel } from "./shortcuts-panel";
+import { MinimapView } from "./minimap-view";
 import {
   arrowDirection,
   clampNudge,
@@ -97,7 +99,7 @@ import type {
   Viewport,
 } from "./types";
 import { ReasonPromptDialog } from "./reason-prompt-dialog";
-import { useClipboard } from "./use-clipboard";
+import { useClipboard, type ClipboardSnapshot } from "./use-clipboard";
 import { useGraphPersistence, type SaveStatus } from "./use-persistence";
 import { useReasonPrompt } from "./use-reason-prompt";
 import { useUndoStack, type UndoAction } from "./use-undo-stack";
@@ -2172,13 +2174,15 @@ function BpmnCanvas({
     [applyGroupPositionsLocal, record, promptReason]
   );
 
-  const copySelectionImpl = useCallback(() => {
+  // The selected steps and the connectors between them, as a snapshot that
+  // paste and duplicate can recreate. Null when no step is selected.
+  const snapshotSelection = useCallback((): ClipboardSnapshot | null => {
     const ids = new Set(
       [...selectedIdsRef.current].filter((id) =>
         nodesRef.current.some((n) => n.id === id)
       )
     );
-    if (ids.size === 0) return;
+    if (ids.size === 0) return null;
     const nodes = nodesRef.current
       .filter((n) => ids.has(n.id))
       .map((n) => ({
@@ -2195,8 +2199,13 @@ function BpmnCanvas({
     const edges = edgesRef.current
       .filter((e) => ids.has(e.from) && ids.has(e.to))
       .map((e) => ({ fromOldId: e.from, toOldId: e.to, label: e.label }));
-    clipboard.copy({ nodes, edges });
-  }, [clipboard]);
+    return { nodes, edges };
+  }, []);
+
+  const copySelectionImpl = useCallback(() => {
+    const snap = snapshotSelection();
+    if (snap) clipboard.copy(snap);
+  }, [clipboard, snapshotSelection]);
 
   // Placed here (not with the other hooks above) so copySelectionImpl and
   // moveSelectionToLaneImpl are already defined and can be real dependencies.
@@ -2239,8 +2248,15 @@ function BpmnCanvas({
     ]
   );
 
-  const pasteClipboardImpl = useCallback(async () => {
-    const snap = clipboard.get();
+  // Recreate a snapshot's steps (offset down and right) and the connectors
+  // between them, select the copies, and record one undo entry. Shared by
+  // paste (from the clipboard) and duplicate (from the selection, leaving
+  // the clipboard alone); `reason` is what the change log records.
+  const materializeSnapshot = useCallback(async (
+    snap: ClipboardSnapshot | null,
+    reason: string,
+    verb: string
+  ) => {
     if (!snap || snap.nodes.length === 0) return;
     const fallbackLane = lanesRef.current[0];
     // Resolve target specs ONCE (offset positions, resolved/persistable lanes).
@@ -2283,7 +2299,7 @@ function BpmnCanvas({
           lane_id: ns.laneId,
           x: ns.x,
           relative_y: ns.relativeY,
-          reason: "Pasted from selection",
+          reason,
         });
         idMap.set(ns.oldId, created.id);
         createdNodes.push({
@@ -2307,6 +2323,7 @@ function BpmnCanvas({
           source_node_id: from,
           target_node_id: to,
           label: es.label ?? undefined,
+          reason,
         });
         createdEdgeIds.push(created.id);
         setEdges((curr) => [
@@ -2324,11 +2341,11 @@ function BpmnCanvas({
       const edgeIds = currentEdgeIds;
       for (const id of edgeIds)
         await api
-          .deleteEdge(projectId, id, { reason: "Undo of Paste" })
+          .deleteEdge(projectId, id, { reason: `Undo of ${verb}` })
           .catch(() => {});
       for (const id of nodeIds)
         await api
-          .deleteNode(projectId, id, { reason: "Undo of Paste" })
+          .deleteNode(projectId, id, { reason: `Undo of ${verb}` })
           .catch(() => {});
       setEdges((curr) => curr.filter((e) => !edgeIds.includes(e.id)));
       setNodes((curr) => curr.filter((n) => !nodeIds.includes(n.id)));
@@ -2338,15 +2355,28 @@ function BpmnCanvas({
     try {
       await materialize();
       record({
-        description: `Paste ${currentNodeIds.length} item${currentNodeIds.length > 1 ? "s" : ""}`,
+        description: `${verb} ${currentNodeIds.length} item${currentNodeIds.length > 1 ? "s" : ""}`,
         do: materialize,
         undo: remove,
       });
     } catch (err) {
-      console.error("Failed to paste", err);
-      toast.error("Couldn't paste — please try again.");
+      console.error(`Failed to ${verb.toLowerCase()}`, err);
+      toast.error(`Couldn't ${verb.toLowerCase()} — please try again.`);
     }
-  }, [clipboard, projectId, modelId, versionId, record]);
+  }, [projectId, modelId, versionId, record]);
+
+  const pasteClipboardImpl = useCallback(
+    () => materializeSnapshot(clipboard.get(), "Pasted from selection", "Paste"),
+    [clipboard, materializeSnapshot]
+  );
+
+  // Cmd/Ctrl+D. Declines (so the browser keeps the key) with nothing selected.
+  const duplicateSelection = (): boolean => {
+    const snap = snapshotSelection();
+    if (!snap) return false;
+    void materializeSnapshot(snap, "Duplicated", "Duplicate");
+    return true;
+  };
 
   const openNodeMenu = useCallback(
     (e: MouseEvent, nodeId: UUID) => {
@@ -2877,6 +2907,9 @@ function BpmnCanvas({
     );
   })();
 
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const closeShortcuts = useCallback(() => setShowShortcuts(false), []);
+
   // Arrow-key nudging. Each press moves the steps and saves their position
   // at once. Presses in quick succession on the same selection are one
   // burst: the first records an undo entry and the rest extend it, so one
@@ -2952,6 +2985,8 @@ function BpmnCanvas({
     undo: () => void undo(),
     redo: () => void redo(),
     nudge: nudgeSelection,
+    duplicate: duplicateSelection,
+    shortcuts: () => setShowShortcuts(true),
     copy: copySelectionImpl,
     paste: () => void pasteClipboardImpl(),
     "select-all": () => setSelectedIds(new Set(renderNodesRef.current.map((n) => n.id))),
@@ -3576,6 +3611,17 @@ function BpmnCanvas({
 
       {selectionToolbar}
 
+      <MinimapView
+        lanes={displayLanes.map((l) => ({ id: l.id, y: l.y, h: l.h, color: l.color }))}
+        nodes={renderNodes}
+        viewport={viewport}
+        visible={{ w: Math.max(200, canvasSize.w - occludedRight), h: canvasSize.h }}
+        right={occludedRight + 16}
+        onViewport={setViewport}
+      />
+
+      {showShortcuts && <ShortcutsPanel onClose={closeShortcuts} />}
+
       {/* end SVG */}
       <FloatingToolbar
         tool={tool}
@@ -3584,6 +3630,7 @@ function BpmnCanvas({
         onZoomIn={() => zoomByStep(ZOOM_STEP)}
         onZoomOut={() => zoomByStep(1 / ZOOM_STEP)}
         onFit={fitContent}
+        onShowShortcuts={() => setShowShortcuts(true)}
         wheelMode={wheelMode}
         onWheelModeChange={changeWheelMode}
         showIssues={showIssues}

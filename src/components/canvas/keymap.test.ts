@@ -76,6 +76,15 @@ describe("resolveShortcut — nudging", () => {
   });
 });
 
+describe("resolveShortcut — polish keys", () => {
+  it("Mod+D duplicates; ? opens the shortcuts list", () => {
+    expect(resolveShortcut(press("d", { metaKey: true }))).toBe("duplicate");
+    expect(resolveShortcut(press("D", { ctrlKey: true, shiftKey: true }))).toBe("duplicate");
+    expect(resolveShortcut(press("?", { shiftKey: true, code: "Slash" }))).toBe("shortcuts");
+    expect(resolveShortcut(press("d"))).toBeNull();
+  });
+});
+
 describe("resolveShortcut — leaves other keys alone", () => {
   it("ignores Alt/Option combinations (text input on a Mac)", () => {
     expect(resolveShortcut(press("z", { metaKey: true, altKey: true }))).toBeNull();
