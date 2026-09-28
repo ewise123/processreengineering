@@ -49,7 +49,7 @@ export interface Shortcut {
 export const SHORTCUTS: Shortcut[] = [
   { action: "fit", keys: "Shift+1", label: "Fit the map on screen", group: "Navigate" },
   { action: "zoom-selection", keys: "Shift+2", label: "Zoom to selection", group: "Navigate" },
-  { action: "zoom-in", keys: "Mod+=", label: "Zoom in", group: "Navigate" },
+  { action: "zoom-in", keys: "Mod++", label: "Zoom in", group: "Navigate" },
   { action: "zoom-out", keys: "Mod+−", label: "Zoom out", group: "Navigate" },
   { action: "zoom-reset", keys: "Mod+0", label: "Zoom to 100%", group: "Navigate" },
   { action: "tool-select", keys: "V", label: "Select tool", group: "Tools" },

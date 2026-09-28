@@ -249,6 +249,7 @@ export interface EdgeCreate {
   source_side?: "top" | "bottom" | null;
   target_side?: "top" | "bottom" | null;
   edge_kind?: "flow" | "rework";
+  color?: string | null;
   reason?: string;
   ai_applied?: boolean;
 }
@@ -268,6 +269,8 @@ export interface EdgeUpdate {
   source_side?: "top" | "bottom" | null;
   target_side?: "top" | "bottom" | null;
   condition_text?: string | null;
+  /** "#rrggbb", or null for the default colour. */
+  color?: string | null;
   reason?: string;
   ai_applied?: boolean;
 }
@@ -319,6 +322,7 @@ export interface ProcessEdge {
   source_side?: "top" | "bottom" | null;
   target_side?: "top" | "bottom" | null;
   edge_kind?: "flow" | "rework";
+  color?: string | null;
 }
 
 export interface ProcessGraph {

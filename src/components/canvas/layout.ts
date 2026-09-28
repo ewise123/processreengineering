@@ -151,6 +151,7 @@ export function buildCanvasState(graph: ProcessGraph): {
     targetSide: e.target_side ?? null,
     kind: e.edge_kind === "rework" ? "rework" : "flow",
     condition: e.condition_text ?? null,
+    color: e.color ?? null,
   }));
 
   return { nodes, edges, lanes };

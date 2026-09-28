@@ -93,6 +93,8 @@ class NodeCreate(BaseModel):
 
 _SIDE_PATTERN = r"^(top|bottom)$"
 _EDGE_KIND_PATTERN = r"^(flow|rework)$"
+# Connector colour: "#rrggbb". NULL means the canvas default (black).
+_HEX_COLOR_PATTERN = r"^#[0-9a-fA-F]{6}$"
 
 
 class EdgeCreate(BaseModel):
@@ -109,6 +111,7 @@ class EdgeCreate(BaseModel):
     source_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
     target_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
     edge_kind: str = Field(default="flow", pattern=_EDGE_KIND_PATTERN)
+    color: str | None = Field(default=None, pattern=_HEX_COLOR_PATTERN)
     reason: str | None = None
     ai_applied: bool = False
 
@@ -124,6 +127,8 @@ class EdgeUpdate(BaseModel):
     bend_y: float | None = None
     source_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
     target_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
+    # Explicit null clears the colour back to the default.
+    color: str | None = Field(default=None, pattern=_HEX_COLOR_PATTERN)
     reason: str | None = Field(default=None, max_length=2000)
     ai_applied: bool = False
 
@@ -254,6 +259,7 @@ class ProcessEdgeRead(BaseModel):
     source_side: str | None = None
     target_side: str | None = None
     edge_kind: str = "flow"
+    color: str | None = None
 
 
 class AiProposedStepResult(BaseModel):

@@ -153,6 +153,9 @@ class ProcessEdge(IdMixin, TimestampMixin, Base):
     # and enters the target face as an orthogonal loop.
     source_side: Mapped[str | None] = mapped_column(String(10), nullable=True)
     target_side: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Display colour, "#rrggbb", or NULL for the canvas default. Cosmetic:
+    # changing it needs no reason and writes no change_event (like lane colour).
+    color: Mapped[str | None] = mapped_column(String(9), nullable=True)
     # "flow" (default) or "rework". Drives distinct rendering for manual loops.
     edge_kind: Mapped[str] = mapped_column(
         String(20), nullable=False, default=EdgeKind.FLOW.value

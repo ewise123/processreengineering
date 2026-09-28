@@ -116,8 +116,16 @@ export function FloatingToolbar({
       </Group>
 
       <Group rightDivider>
-        <PlainButton onClick={onZoomOut} title={`Zoom out (${keysFor("zoom-out", mac)})`}>
-          −
+        <PlainButton
+          onClick={onZoomOut}
+          title={`Zoom out (${keysFor("zoom-out", mac)})`}
+          ariaLabel="Zoom out"
+        >
+          {/* Drawn, not typed: a text "−"/"+" sits on the font baseline and
+              rides below the middle of the button. */}
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round">
+            <path d="M2.5 6h7" />
+          </svg>
         </PlainButton>
         <div
           style={{
@@ -131,8 +139,14 @@ export function FloatingToolbar({
         >
           {zoomPct}%
         </div>
-        <PlainButton onClick={onZoomIn} title={`Zoom in (${keysFor("zoom-in", mac)})`}>
-          +
+        <PlainButton
+          onClick={onZoomIn}
+          title={`Zoom in (${keysFor("zoom-in", mac)})`}
+          ariaLabel="Zoom in"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round">
+            <path d="M2.5 6h7M6 2.5v7" />
+          </svg>
         </PlainButton>
         <PlainButton
           onClick={onFit}

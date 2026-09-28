@@ -1053,6 +1053,7 @@ def create_edge(
         source_side=payload.source_side,
         target_side=payload.target_side,
         edge_kind=payload.edge_kind,
+        color=payload.color,
     )
     db.add(edge)
     db.flush()
@@ -1105,6 +1106,9 @@ def update_edge(
         edge.source_side = payload.source_side
     if "target_side" in payload.model_fields_set:
         edge.target_side = payload.target_side
+    # Colour is cosmetic, like a lane's: no reason, no change_event.
+    if "color" in payload.model_fields_set:
+        edge.color = payload.color
 
     label_changed = "label" in payload.model_fields_set and (payload.label or None) != old_label
     if label_changed:

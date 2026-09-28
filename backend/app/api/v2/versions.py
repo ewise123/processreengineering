@@ -197,6 +197,12 @@ def copy_version(
             condition_claim_id=edge.condition_claim_id,
             bend_x=edge.bend_x,
             bend_y=edge.bend_y,
+            # Carried over so a rework loop stays a loop (and keeps its
+            # pinned sides) in the new version, and colours survive.
+            source_side=edge.source_side,
+            target_side=edge.target_side,
+            edge_kind=edge.edge_kind,
+            color=edge.color,
         )
         db.add(new_edge)
         db.flush()
