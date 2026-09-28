@@ -63,6 +63,10 @@ import {
 import { NodeLabelEditor } from "./node-label-editor";
 import { LANE_HEADER_W, nextStepSlot, pointToLaneSlot, type LaneBox } from "./step-placement";
 import { computeSnap, guidesFor, type Box } from "./snap";
+import { alignItems, type AlignCommand } from "./align";
+import { routesToReset, type RouteReset } from "./routes";
+import { anchorToolbar } from "./toolbar-anchor";
+import { SelectionToolbar } from "./selection-toolbar";
 import {
   arrowDirection,
   clampNudge,
@@ -73,6 +77,7 @@ import {
 import {
   buildEdgePath,
   EdgeArrow,
+  HANDLE_OFFSET,
   NodeShape,
   sidePoint,
   type ConnectSide,
@@ -2725,6 +2730,153 @@ function BpmnCanvas({
     openDraft({ ...slot, type: "task", via: "dblclick", defaultName: "New task", source: null });
   };
 
+  // ── Selection toolbar ────────────────────────────────────────────────
+  // Floats over a selection of two or more things. Its commands keep every
+  // step in its lane, so they're cosmetic: one undo entry, no reason.
+
+  // The canvas's pixel size, for keeping the toolbar on screen.
+  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const ro = new ResizeObserver(() => {
+      const r = svg.getBoundingClientRect();
+      setCanvasSize({ w: r.width, h: r.height });
+    });
+    ro.observe(svg);
+    return () => ro.disconnect();
+  }, []);
+  const [toolbarSize, setToolbarSize] = useState({ w: 520, h: 36 });
+  const onToolbarSize = useCallback(
+    (size: { w: number; h: number }) =>
+      setToolbarSize((curr) => (curr.w === size.w && curr.h === size.h ? curr : size)),
+    []
+  );
+
+  const selectedRenderNodes = useMemo(
+    () => renderNodes.filter((n) => selectedIds.has(n.id)),
+    [renderNodes, selectedIds]
+  );
+  const bendsToReset = useMemo(() => routesToReset(edges, selectedIds), [edges, selectedIds]);
+
+  const alignSelection = (cmd: AlignCommand) => {
+    const lanesById = new Map(displayLanesRef.current.map((l) => [l.id, l]));
+    const picked = renderNodesRef.current.filter((n) => selectedIdsRef.current.has(n.id));
+    const moves = alignItems(
+      picked.map((n) => {
+        const lane = n.laneId ? lanesById.get(n.laneId) : undefined;
+        return {
+          id: n.id,
+          x: n.x,
+          y: n.y,
+          w: n.w,
+          h: n.h,
+          laneY: lane ? lane.y : null,
+          laneH: lane ? lane.h : null,
+        };
+      }),
+      cmd
+    );
+    if (moves.length === 0) return;
+    const byId = new Map(nodesRef.current.map((n) => [n.id, n]));
+    const before: NodePosition[] = moves.map((m) => {
+      const n = byId.get(m.id)!;
+      return { id: n.id, x: n.x, relativeY: n.relativeY, laneId: n.laneId };
+    });
+    const after: NodePosition[] = moves.map((m) => ({
+      id: m.id,
+      x: m.x,
+      relativeY: m.relativeY,
+      laneId: byId.get(m.id)!.laneId,
+    }));
+    applyGroupPositionsLocal(after);
+    record({
+      description: cmd.startsWith("distribute") ? "Space steps evenly" : "Align steps",
+      do: () => applyGroupPositionsLocal(after),
+      undo: () => applyGroupPositionsLocal(before),
+    });
+  };
+
+  // Set connectors' bends (null clears one) and save them; used by Reset
+  // routes and its undo/redo.
+  const applyBendsLocal = useCallback(
+    (bends: RouteReset[]) => {
+      const byId = new Map(bends.map((b) => [b.id, b]));
+      setEdges((curr) =>
+        curr.map((e) => {
+          const b = byId.get(e.id);
+          return b ? { ...e, bendX: b.bendX, bendY: b.bendY } : e;
+        })
+      );
+      return Promise.all(
+        bends.map((b) =>
+          api.updateEdge(projectId, b.id, { bend_x: b.bendX, bend_y: b.bendY })
+        )
+      ).then(
+        () => undefined,
+        (err) => {
+          console.error("Failed to save connector routes", err);
+          toast.error("Couldn't save the connector routes.");
+        }
+      );
+    },
+    [projectId]
+  );
+
+  const resetRoutes = () => {
+    const before = routesToReset(edgesRef.current, selectedIdsRef.current);
+    if (before.length === 0) return;
+    const after = before.map((b) => ({ id: b.id, bendX: null, bendY: null }));
+    void applyBendsLocal(after);
+    record({
+      description: "Reset routes",
+      do: () => applyBendsLocal(after),
+      undo: () => applyBendsLocal(before),
+    });
+  };
+
+  const selectionToolbar = (() => {
+    if (selectedIds.size < 2 || drag || editing || contextMenu || canvasSize.w === 0) return null;
+    // The selection's on-screen box: its steps, or a selected connector's
+    // end steps when only connectors are selected.
+    let boxes: Box[] = selectedRenderNodes;
+    if (boxes.length === 0) {
+      const ends = new Set(
+        edges.filter((e) => selectedIds.has(e.id)).flatMap((e) => [e.from, e.to])
+      );
+      boxes = renderNodes.filter((n) => ends.has(n.id));
+    }
+    const bounds = boundsOf(boxes);
+    if (!bounds) return null;
+    // Leave the connect handles (and their hover margin) uncovered.
+    const pad = HANDLE_OFFSET + 8;
+    const world = { x: bounds.x - pad, y: bounds.y - pad, w: bounds.w + pad * 2, h: bounds.h + pad * 2 };
+    const { tx, ty, scale } = viewport;
+    const pos = anchorToolbar(
+      { x: world.x * scale + tx, y: world.y * scale + ty, w: world.w * scale, h: world.h * scale },
+      toolbarSize,
+      { width: canvasSize.w, height: canvasSize.h, occludedRight, top: 56 }
+    );
+    const laneIds = new Set(selectedRenderNodes.map((n) => n.laneId));
+    return (
+      <SelectionToolbar
+        left={pos.left}
+        top={pos.top}
+        count={selectedIds.size}
+        nodeCount={selectedRenderNodes.length}
+        spansLanes={laneIds.size > 1}
+        resetCount={bendsToReset.length}
+        lanes={lanes.map((l) => ({ id: l.id, name: l.label }))}
+        onSize={onToolbarSize}
+        onAlign={alignSelection}
+        onResetRoutes={resetRoutes}
+        onMoveToLane={(laneId) => void moveSelectionToLaneImpl(laneId as UUID)}
+        onCopy={copySelectionImpl}
+        onDelete={() => void deleteSelectionImpl()}
+      />
+    );
+  })();
+
   // Arrow-key nudging. Each press moves the steps and saves their position
   // at once. Presses in quick succession on the same selection are one
   // burst: the first records an undo entry and the rest extend it, so one
@@ -3421,6 +3573,8 @@ function BpmnCanvas({
       />
 
       <ShapePalette onAddShape={addShapeAtCenter} />
+
+      {selectionToolbar}
 
       {/* end SVG */}
       <FloatingToolbar
