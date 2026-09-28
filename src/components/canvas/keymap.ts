@@ -25,7 +25,9 @@ export type ShortcutAction =
   | "zoom-selection"
   | "next-step"
   | "rename"
-  | "nudge";
+  | "nudge"
+  | "duplicate"
+  | "shortcuts";
 
 export interface KeyInput {
   key: string;
@@ -41,7 +43,7 @@ export interface Shortcut {
   /** How the keys read in the shortcuts panel. "Mod" is Ctrl or ⌘. */
   keys: string;
   label: string;
-  group: "Navigate" | "Tools" | "Edit";
+  group: "Navigate" | "Tools" | "Edit" | "Help";
 }
 
 export const SHORTCUTS: Shortcut[] = [
@@ -61,8 +63,10 @@ export const SHORTCUTS: Shortcut[] = [
   { action: "redo", keys: "Mod+Shift+Z", label: "Redo", group: "Edit" },
   { action: "copy", keys: "Mod+C", label: "Copy", group: "Edit" },
   { action: "paste", keys: "Mod+V", label: "Paste", group: "Edit" },
+  { action: "duplicate", keys: "Mod+D", label: "Duplicate (leaves the clipboard alone)", group: "Edit" },
   { action: "select-all", keys: "Mod+A", label: "Select all steps", group: "Edit" },
   { action: "delete", keys: "Delete", label: "Delete selection", group: "Edit" },
+  { action: "shortcuts", keys: "?", label: "Show this list", group: "Help" },
 ];
 
 /** Map a key press to a canvas action, or null when it isn't a shortcut. */
@@ -79,6 +83,7 @@ export function resolveShortcut(ev: KeyInput): ShortcutAction | null {
     if (k === "c") return "copy";
     if (k === "v") return "paste";
     if (k === "a") return "select-all";
+    if (k === "d") return "duplicate";
     if (k === "=" || k === "+" || ev.code === "NumpadAdd") return "zoom-in";
     if (k === "-" || k === "_" || ev.code === "NumpadSubtract") return "zoom-out";
     if (k === "0" || ev.code === "Digit0" || ev.code === "Numpad0") return "zoom-reset";
@@ -90,6 +95,8 @@ export function resolveShortcut(ev: KeyInput): ShortcutAction | null {
   if (ev.shiftKey && ev.code === "Digit1") return "fit";
   if (ev.shiftKey && ev.code === "Digit2") return "zoom-selection";
 
+  // "?" is Shift+/ on US layouts but sits elsewhere on others; match the glyph.
+  if (k === "?") return "shortcuts";
   if (k === "v") return "tool-select";
   if (k === "h") return "tool-pan";
   if (k === "c") return "tool-connect";

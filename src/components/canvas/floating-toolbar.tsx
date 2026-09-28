@@ -15,6 +15,7 @@ export function FloatingToolbar({
   onZoomIn,
   onZoomOut,
   onFit,
+  onShowShortcuts,
   wheelMode,
   onWheelModeChange,
   showIssues,
@@ -33,6 +34,8 @@ export function FloatingToolbar({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
+  /** Opens the keyboard-shortcuts panel. */
+  onShowShortcuts?: () => void;
   /** What a plain scroll wheel does: pan (trackpad) or zoom (mouse). */
   wheelMode: WheelMode;
   onWheelModeChange: (next: WheelMode) => void;
@@ -158,6 +161,16 @@ export function FloatingToolbar({
           )}
           {wheelMode === "mouse" ? "Mouse" : "Trackpad"}
         </PlainButton>
+        {onShowShortcuts && (
+          <PlainButton
+            onClick={onShowShortcuts}
+            title="Keyboard shortcuts (?)"
+            ariaLabel="Keyboard shortcuts"
+            style={{ fontSize: 12, fontWeight: 600, padding: "0 9px" }}
+          >
+            ?
+          </PlainButton>
+        )}
       </Group>
 
       <Group>
