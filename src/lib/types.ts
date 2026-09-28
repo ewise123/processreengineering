@@ -269,6 +269,10 @@ export interface EdgeUpdate {
   source_side?: "top" | "bottom" | null;
   target_side?: "top" | "bottom" | null;
   condition_text?: string | null;
+  /** Reconnect: move an end to another step (needs a reason). */
+  source_node_id?: UUID;
+  target_node_id?: UUID;
+  edge_kind?: "flow" | "rework";
   /** "#rrggbb", or null for the default colour. */
   color?: string | null;
   reason?: string;

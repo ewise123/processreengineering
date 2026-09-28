@@ -127,6 +127,12 @@ class EdgeUpdate(BaseModel):
     bend_y: float | None = None
     source_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
     target_side: str | None = Field(default=None, pattern=_SIDE_PATTERN)
+    # Reconnect: move either end to another step in the same version. A
+    # changed end needs a reason and is logged as a `reconnect`.
+    source_node_id: UUID | None = None
+    target_node_id: UUID | None = None
+    # Re-derived by the canvas when an end moves (a backward pair loops).
+    edge_kind: str | None = Field(default=None, pattern=_EDGE_KIND_PATTERN)
     # Explicit null clears the colour back to the default.
     color: str | None = Field(default=None, pattern=_HEX_COLOR_PATTERN)
     reason: str | None = Field(default=None, max_length=2000)

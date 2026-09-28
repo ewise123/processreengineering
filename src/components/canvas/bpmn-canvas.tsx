@@ -98,6 +98,7 @@ import {
 import {
   buildEdgePath,
   EdgeArrow,
+  EdgeEndHandles,
   PLUS_OFFSET,
   NodeShape,
   sidePoint,
@@ -109,6 +110,14 @@ import { pickDropTarget, type Rect } from "./drop-target";
 /** World units a connect drop may land outside a node and still target it. */
 const DROP_TOLERANCE = 20;
 import { isBacktrack, deriveLoopSides } from "./backtrack";
+import {
+  edgeEnds,
+  planReconnect,
+  reconnectReason,
+  RECONNECT_MISS_MESSAGE,
+  type EdgeEnd,
+  type EdgeEnds,
+} from "./reconnect";
 import type {
   CanvasEdge,
   CanvasLane,
@@ -199,6 +208,16 @@ type Drag =
       plus?: { clientX: number; clientY: number };
     }
   | {
+      /** Dragging one end of a placed arrow onto another step. */
+      type: "edgeEnd";
+      edgeId: UUID;
+      end: EdgeEnd;
+      /** The side the end that stays put leaves or enters by. */
+      fixedSide: ConnectSide;
+      currX: number;
+      currY: number;
+    }
+  | {
       type: "edgeBend";
       edgeId: UUID;
       orientation: EdgeOrientation;
@@ -222,18 +241,43 @@ function buildPreviewToCursor(
   source: { x: number; y: number; w: number; h: number },
   sourceSide: ConnectSide,
   cx: number,
-  cy: number
+  cy: number,
+  /** Run from the cursor into the anchor instead (a moved arrow tail). */
+  reverse = false
 ): string {
   const start = sidePoint(source, sourceSide);
   const isHorizontal = sourceSide === "left" || sourceSide === "right";
-  if (isHorizontal) {
-    const midX = (start.x + cx) / 2;
-    return `M ${start.x} ${start.y} L ${midX} ${start.y} L ${midX} ${cy} L ${cx} ${cy}`;
-  }
-  const midY = (start.y + cy) / 2;
-  return `M ${start.x} ${start.y} L ${start.x} ${midY} L ${cx} ${midY} L ${cx} ${cy}`;
+  const mid = isHorizontal ? (start.x + cx) / 2 : (start.y + cy) / 2;
+  const pts = isHorizontal
+    ? [start, { x: mid, y: start.y }, { x: mid, y: cy }, { x: cx, y: cy }]
+    : [start, { x: start.x, y: mid }, { x: cx, y: mid }, { x: cx, y: cy }];
+  if (reverse) pts.reverse();
+  return pts.map((p, i) => `${i ? "L" : "M"} ${p.x} ${p.y}`).join(" ");
 }
 
+
+/** What releasing an arrow's `end` at world (x, y) would do, using the same
+ * drop picker and tolerance as drawing a connection. */
+function planEdgeDrop(
+  edge: CanvasEdge,
+  end: EdgeEnd,
+  fixedSide: ConnectSide,
+  x: number,
+  y: number,
+  nodes: ResolvedNode[],
+  edges: CanvasEdge[]
+) {
+  const candidates: Rect[] = nodes.map((n) => ({ id: n.id, x: n.x, y: n.y, width: n.w, height: n.h }));
+  return planReconnect({
+    edge,
+    end,
+    dropId: pickDropTarget({ x, y }, candidates, DROP_TOLERANCE),
+    dropY: y,
+    boxes: new Map(nodes.map((n) => [n.id, n])),
+    edges,
+    fixedSide,
+  });
+}
 
 function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
   if (lanes.length === 0) return undefined;
@@ -1560,6 +1604,14 @@ function BpmnCanvas({
     () => computeEdgeRoutes(edges, renderNodes),
     [edges, renderNodes]
   );
+  const edgeRoutesRef = useRef(edgeRoutes);
+  edgeRoutesRef.current = edgeRoutes;
+  // Exactly one arrow selected: it shows grab handles at both ends.
+  const singleSelectedEdgeId = useMemo(() => {
+    if (selectedIds.size !== 1) return null;
+    const [id] = selectedIds;
+    return edges.some((e) => e.id === id) ? id : null;
+  }, [selectedIds, edges]);
   // Sides of each step with no connector: their handle becomes a "+".
   const freeSidesById = useMemo(() => {
     const used = occupiedSides(edges, edgeRoutes);
@@ -1742,6 +1794,98 @@ function BpmnCanvas({
     [projectId]
   );
 
+  /** Move an arrow's ends (and everything a move re-derives) and save it. */
+  const applyReconnectLocal = useCallback(
+    async (id: UUID, ends: EdgeEnds, reason: string) => {
+      setEdges((curr) =>
+        curr.map((e) =>
+          e.id === id
+            ? {
+                ...e,
+                from: ends.from,
+                to: ends.to,
+                kind: ends.kind,
+                sourceSide: ends.sourceSide,
+                targetSide: ends.targetSide,
+                bendX: ends.bendX,
+                bendY: ends.bendY,
+              }
+            : e
+        )
+      );
+      await api.updateEdge(projectId, id, {
+        source_node_id: ends.from,
+        target_node_id: ends.to,
+        edge_kind: ends.kind,
+        source_side: ends.sourceSide,
+        target_side: ends.targetSide,
+        bend_x: ends.bendX,
+        bend_y: ends.bendY,
+        reason,
+      });
+    },
+    [projectId]
+  );
+
+  /** Reconnect an arrow: no reason prompt, the log gets an automatic one. */
+  const reconnectEdge = useCallback(
+    async (id: UUID, next: EdgeEnds) => {
+      const edge = edgesRef.current.find((e) => e.id === id);
+      if (!edge) return;
+      const before = edgeEnds(edge);
+      const names = new Map(nodesRef.current.map((n) => [n.id, n.label]));
+      try {
+        await applyReconnectLocal(id, next, reconnectReason(names, before, next));
+      } catch (err) {
+        console.error("Failed to reconnect edge", err);
+        // Put the arrow back where the server still has it.
+        setEdges((curr) =>
+          curr.map((e) =>
+            e.id === id
+              ? {
+                  ...e,
+                  from: before.from,
+                  to: before.to,
+                  kind: before.kind,
+                  sourceSide: before.sourceSide,
+                  targetSide: before.targetSide,
+                  bendX: before.bendX,
+                  bendY: before.bendY,
+                }
+              : e
+          )
+        );
+        toast.error("Couldn't move that arrow — please try again.");
+        return;
+      }
+      const description = "Reconnect arrow";
+      record({
+        description,
+        do: () => applyReconnectLocal(id, next, `Redo of ${description}`),
+        undo: () => applyReconnectLocal(id, before, `Undo of ${description}`),
+      });
+    },
+    [applyReconnectLocal, record]
+  );
+
+  const onStartEdgeEnd = useCallback(
+    (e: MouseEvent, edgeId: UUID, end: EdgeEnd) => {
+      e.stopPropagation();
+      const route = edgeRoutesRef.current.get(edgeId);
+      if (!route) return;
+      const { x, y } = toWorld(e.clientX, e.clientY);
+      setDrag({
+        type: "edgeEnd",
+        edgeId,
+        end,
+        fixedSide: end === "target" ? route.sourceSide : route.targetSide,
+        currX: x,
+        currY: y,
+      });
+    },
+    [toWorld]
+  );
+
   const onStartConnect = useCallback(
     (e: MouseEvent, sourceId: UUID, side: ConnectSide) => {
       e.stopPropagation();
@@ -1810,7 +1954,7 @@ function BpmnCanvas({
         setDrag({ ...drag, currX: x, currY: y });
         return;
       }
-      if (drag.type === "connect") {
+      if (drag.type === "connect" || drag.type === "edgeEnd") {
         const { x, y } = screenToWorld(e.clientX, e.clientY);
         setDrag({ ...drag, currX: x, currY: y });
         return;
@@ -1895,6 +2039,28 @@ function BpmnCanvas({
     };
 
     const onUp = (e: globalThis.MouseEvent) => {
+      if (drag.type === "edgeEnd") {
+        setDrag(null);
+        const edge = edgesRef.current.find((ed) => ed.id === drag.edgeId);
+        if (!edge) return;
+        const { x, y } = screenToWorld(e.clientX, e.clientY);
+        const plan = planEdgeDrop(
+          edge,
+          drag.end,
+          drag.fixedSide,
+          x,
+          y,
+          renderNodesRef.current,
+          edgesRef.current
+        );
+        if (plan.ok) {
+          void reconnectEdge(edge.id, plan.next);
+        } else {
+          const message = RECONNECT_MISS_MESSAGE[plan.why];
+          if (message) toast.info(message);
+        }
+        return;
+      }
       if (drag.type === "edgeBend") {
         const final = edgesRef.current.find((ed) => ed.id === drag.edgeId);
         if (final) {
@@ -2111,7 +2277,7 @@ function BpmnCanvas({
   // tracks markNode, which is already a dependency, so the effect re-subscribes
   // exactly when it would change.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal, promptReason, clearSelection, setSelection, selectOnly]);
+  }, [drag, markNode, record, createEdgeImpl, projectId, applyEdgeBendLocal, promptReason, clearSelection, setSelection, selectOnly, reconnectEdge]);
 
   // Internal helpers that compute the new lane array, set state, mark dirty.
   const onCanvasDragOver = (e: ReactDragEvent<SVGSVGElement>) => {
@@ -3605,9 +3771,10 @@ function BpmnCanvas({
             if (!route) return null;
             const f = renderNodeById.get(edge.from);
             const t = renderNodeById.get(edge.to);
+            const moving = drag?.type === "edgeEnd" && drag.edgeId === edge.id;
             return (
+              <g key={edge.id} opacity={moving ? 0.25 : undefined}>
               <EdgeArrow
-                key={edge.id}
                 edge={edge}
                 route={route}
                 proposed={!!f && !!t && isEdgeProposed(f, t)}
@@ -3620,6 +3787,7 @@ function BpmnCanvas({
                 onContextMenu={openEdgeMenu}
                 onStartBendDrag={onStartBendDrag}
               />
+              </g>
             );
           })}
           {renderNodes.map((node) => (
@@ -3639,6 +3807,52 @@ function BpmnCanvas({
               freeSides={freeSidesById.get(node.id)}
             />
           ))}
+          {singleSelectedEdgeId && !drag && edgeRoutes.get(singleSelectedEdgeId) && (
+            <EdgeEndHandles
+              edgeId={singleSelectedEdgeId}
+              route={edgeRoutes.get(singleSelectedEdgeId)!}
+              onStart={onStartEdgeEnd}
+            />
+          )}
+          {drag?.type === "edgeEnd" &&
+            (() => {
+              const edge = edges.find((ed) => ed.id === drag.edgeId);
+              const fixed = edge && renderNodeById.get(drag.end === "target" ? edge.from : edge.to);
+              if (!edge || !fixed) return null;
+              // The same planner as the drop, so the preview matches the result.
+              const plan = planEdgeDrop(edge, drag.end, drag.fixedSide, drag.currX, drag.currY, renderNodes, edges);
+              let d: string;
+              if (plan.ok) {
+                const a = renderNodeById.get(plan.next.from);
+                const b = renderNodeById.get(plan.next.to);
+                if (!a || !b) return null;
+                d = roundedPath(
+                  buildEdgePath(
+                    a,
+                    b,
+                    plan.next.kind === "rework"
+                      ? { sourceSide: plan.next.sourceSide, targetSide: plan.next.targetSide }
+                      : undefined
+                  ).points
+                );
+              } else {
+                d = buildPreviewToCursor(fixed, drag.fixedSide, drag.currX, drag.currY, drag.end === "source");
+              }
+              return (
+                <path
+                  d={d}
+                  fill="none"
+                  stroke={THEME.ink}
+                  strokeWidth={THEME.edgeWidth}
+                  strokeDasharray="4 4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  markerEnd="url(#poet-arrow-ink)"
+                  pointerEvents="none"
+                  data-reconnect-preview={plan.ok ? "snapped" : "free"}
+                />
+              );
+            })()}
           {editing?.kind === "rename" &&
             (() => {
               const n = renderNodeById.get(editing.nodeId);
