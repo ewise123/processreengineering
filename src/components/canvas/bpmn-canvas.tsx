@@ -61,7 +61,15 @@ import {
   type DraftVia,
 } from "./draft-step";
 import { NodeLabelEditor } from "./node-label-editor";
-import { nextStepSlot, pointToLaneSlot, type LaneBox } from "./step-placement";
+import { LANE_HEADER_W, nextStepSlot, pointToLaneSlot, type LaneBox } from "./step-placement";
+import { computeSnap, guidesFor, type Box } from "./snap";
+import {
+  arrowDirection,
+  clampNudge,
+  NUDGE_BURST_MS,
+  NUDGE_LARGE,
+  NUDGE_SMALL,
+} from "./nudge";
 import {
   buildEdgePath,
   EdgeArrow,
@@ -87,7 +95,7 @@ import { ReasonPromptDialog } from "./reason-prompt-dialog";
 import { useClipboard } from "./use-clipboard";
 import { useGraphPersistence, type SaveStatus } from "./use-persistence";
 import { useReasonPrompt } from "./use-reason-prompt";
-import { useUndoStack } from "./use-undo-stack";
+import { useUndoStack, type UndoAction } from "./use-undo-stack";
 
 const WORLD_WIDTH_MIN = 1700;
 const WORLD_RIGHT_PADDING = 240;
@@ -122,6 +130,10 @@ type Editing =
   | null;
 
 const ZOOM_STEP = 1.2;
+/** How close (screen pixels) a dragged step must come to a line to snap. */
+const SNAP_PX = 6;
+
+type NodePosition = { id: UUID; x: number; relativeY: number; laneId: UUID | null };
 
 type Drag =
   | {
@@ -348,7 +360,7 @@ function BpmnCanvas({
   const issueCount = Object.keys(issuesMap).length;
   const reviewMap = reviewByNode ?? {};
 
-  const { record, undo, redo, canUndo, canRedo } = useUndoStack();
+  const { record, undo, redo, isLatest, canUndo, canRedo } = useUndoStack();
   const clipboard = useClipboard();
   const reasonPrompt = useReasonPrompt();
   const { promptReason } = reasonPrompt;
@@ -1250,7 +1262,9 @@ function BpmnCanvas({
   // Actions are read through `shortcutActionsRef` (filled in once every
   // callback exists, further down) so this listener is registered once and
   // never goes stale.
-  const shortcutActionsRef = useRef<Partial<Record<ShortcutAction, () => void | boolean>>>({});
+  const shortcutActionsRef = useRef<
+    Partial<Record<ShortcutAction, (e: KeyboardEvent) => void | boolean>>
+  >({});
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -1278,8 +1292,8 @@ function BpmnCanvas({
         setContextMenu(null);
         return;
       }
-      if (action === "next-step" || action === "rename") {
-        // Tab/Enter only belong to the canvas when focus is on it (or on
+      if (action === "next-step" || action === "rename" || action === "nudge") {
+        // Tab/Enter/arrows only belong to the canvas when focus is on it (or on
         // nothing). Anywhere else — a panel button, a link — they keep their
         // normal meaning.
         const active = document.activeElement;
@@ -1291,7 +1305,7 @@ function BpmnCanvas({
       if (!run) return;
       // An action can decline (e.g. Tab with nothing selected); then the key
       // keeps its browser meaning.
-      if (run() === false) return;
+      if (run(e) === false) return;
       // Claim the key so the browser doesn't also act on it (page zoom on
       // Mod+=, select-all text on Mod+A, back-navigation on Backspace).
       e.preventDefault();
@@ -1323,6 +1337,11 @@ function BpmnCanvas({
   selectedIdsRef.current = selectedIds;
   const contextMenuRef = useRef(contextMenu);
   contextMenuRef.current = contextMenu;
+  // Alignment snapping while a step is dragged: the steps it can line up
+  // with (fixed at drag start) and whether snapping is on right now (off
+  // while Ctrl/Cmd is held).
+  const snapOthersRef = useRef<Box[]>([]);
+  const [snapping, setSnapping] = useState(false);
 
   const { status, error, markNode, markLane, flush } = useGraphPersistence({
     projectId,
@@ -1453,6 +1472,16 @@ function BpmnCanvas({
   const renderNodesRef = useRef(renderNodes);
   renderNodesRef.current = renderNodes;
 
+  // Guides for what the dragged steps line up with, read from where they
+  // actually are (after the lane clamp), so a guide never claims an
+  // alignment that didn't happen.
+  const snapGuides = useMemo(() => {
+    if (drag?.type !== "node" || !snapping) return [];
+    const ids = new Set(drag.members.map((m) => m.id));
+    const moving = boundsOf(renderNodes.filter((n) => ids.has(n.id)));
+    return moving ? guidesFor(moving, snapOthersRef.current) : [];
+  }, [drag, snapping, renderNodes]);
+
   const renderNodeById = useMemo(
     () => new Map(renderNodes.map((n) => [n.id, n])),
     [renderNodes]
@@ -1581,6 +1610,12 @@ function BpmnCanvas({
         };
       })
       .filter((m): m is NonNullable<typeof m> => m !== null);
+    // Snap targets are fixed when the drag starts: every visible step that
+    // isn't moving.
+    const moving = new Set(members.map((m) => m.id));
+    snapOthersRef.current = renderNodesRef.current
+      .filter((n) => !moving.has(n.id))
+      .map((n) => ({ x: n.x, y: n.y, w: n.w, h: n.h }));
     setDrag({ type: "node", id, offX: x - resolved.x, offY: y - resolved.y, members });
   };
 
@@ -1718,8 +1753,28 @@ function BpmnCanvas({
         const { x, y } = screenToWorld(e.clientX, e.clientY);
         const grabbed = drag.members.find((m) => m.id === drag.id);
         if (!grabbed) return;
-        const deltaX = x - drag.offX - grabbed.origX;
-        const deltaY = y - drag.offY - grabbed.origAbsY;
+        let deltaX = x - drag.offX - grabbed.origX;
+        let deltaY = y - drag.offY - grabbed.origAbsY;
+        // Line the moving box up with nearby steps. Holding Ctrl/Cmd places
+        // freely; it's read on every move so it can change mid-drag.
+        const free = e.ctrlKey || e.metaKey;
+        setSnapping(!free);
+        if (!free && snapOthersRef.current.length > 0) {
+          const boxes = drag.members.flatMap((m) => {
+            const n = nodesRef.current.find((nn) => nn.id === m.id);
+            return n ? [{ x: m.origX + deltaX, y: m.origAbsY + deltaY, w: n.w, h: n.h }] : [];
+          });
+          const moving = boundsOf(boxes);
+          if (moving) {
+            const snap = computeSnap(
+              moving,
+              snapOthersRef.current,
+              SNAP_PX / viewportRef.current.scale
+            );
+            deltaX += snap.dx;
+            deltaY += snap.dy;
+          }
+        }
         const currLanes = displayLanesRef.current;
         setNodes((curr) =>
           curr.map((n) => {
@@ -1841,6 +1896,7 @@ function BpmnCanvas({
         return;
       }
       if (drag.type === "node") {
+        setSnapping(false);
         const finals = drag.members
           .map((m) => nodesRef.current.find((n) => n.id === m.id))
           .filter((n): n is NonNullable<typeof n> => !!n);
@@ -2669,11 +2725,81 @@ function BpmnCanvas({
     openDraft({ ...slot, type: "task", via: "dblclick", defaultName: "New task", source: null });
   };
 
+  // Arrow-key nudging. Each press moves the steps and saves their position
+  // at once. Presses in quick succession on the same selection are one
+  // burst: the first records an undo entry and the rest extend it, so one
+  // Ctrl+Z puts the steps back where the burst began. A burst ends when the
+  // keys go quiet, the selection changes, or anything else lands on the undo
+  // stack first.
+  const nudgeBurstRef = useRef<{
+    key: string;
+    at: number;
+    entry: { before: NodePosition[]; after: NodePosition[] };
+    action: UndoAction;
+  } | null>(null);
+
+  const nudgeSelection = (e: KeyboardEvent): boolean => {
+    const dir = arrowDirection(e.key);
+    if (!dir) return false;
+    const lanesById = new Map(displayLanesRef.current.map((l) => [l.id, l]));
+    const selected = nodesRef.current.filter(
+      (n) =>
+        selectedIdsRef.current.has(n.id) &&
+        !(n.laneId && lanesById.get(n.laneId)?.h === COLLAPSED_LANE_HEIGHT)
+    );
+    // Nothing to move: leave the arrows to scroll the page.
+    if (selected.length === 0) return false;
+    const key = selected.map((n) => n.id).sort().join(",");
+    const now = Date.now();
+    const prev = nudgeBurstRef.current;
+    const burst =
+      prev && prev.key === key && now - prev.at < NUDGE_BURST_MS && isLatest(prev.action)
+        ? prev
+        : null;
+    const current: NodePosition[] =
+      burst?.entry.after ??
+      selected.map((n) => ({ id: n.id, x: n.x, relativeY: n.relativeY, laneId: n.laneId }));
+    const heights = new Map(selected.map((n) => [n.id, n.h]));
+    const step = e.shiftKey ? NUDGE_LARGE : NUDGE_SMALL;
+    const { dx, dy } = clampNudge(
+      current.map((p) => ({
+        id: p.id,
+        x: p.x,
+        relativeY: p.relativeY,
+        h: heights.get(p.id) ?? 0,
+        laneH: p.laneId ? lanesById.get(p.laneId)?.h ?? null : null,
+      })),
+      dir.dx * step,
+      dir.dy * step,
+      LANE_HEADER_W
+    );
+    // At a lane edge: nothing moves, but the key is still ours — the page
+    // shouldn't scroll instead.
+    if (dx === 0 && dy === 0) return true;
+    const after = current.map((p) => ({ ...p, x: p.x + dx, relativeY: p.relativeY + dy }));
+    applyGroupPositionsLocal(after);
+    if (burst) {
+      burst.entry.after = after;
+      burst.at = now;
+      return true;
+    }
+    const entry = { before: current, after };
+    const action: UndoAction = {
+      description: after.length > 1 ? `Nudge ${after.length} steps` : "Nudge step",
+      do: () => applyGroupPositionsLocal(entry.after),
+      undo: () => applyGroupPositionsLocal(entry.before),
+    };
+    record(action);
+    nudgeBurstRef.current = { key, at: now, entry, action };
+    return true;
+  };
+
   // Everything the keyboard can trigger, refreshed each render so the
   // once-registered key listener always calls current callbacks.
   shortcutActionsRef.current = {
     undo: () => void undo(),
     redo: () => void redo(),
+    nudge: nudgeSelection,
     copy: copySelectionImpl,
     paste: () => void pasteClipboardImpl(),
     "select-all": () => setSelectedIds(new Set(renderNodesRef.current.map((n) => n.id))),
@@ -3246,6 +3372,20 @@ function BpmnCanvas({
                 />
               );
             })()}
+          {snapGuides.map((g, i) => (
+            <line
+              key={`guide-${i}`}
+              className="snap-guide"
+              x1={g.axis === "x" ? g.at : g.from - 12}
+              x2={g.axis === "x" ? g.at : g.to + 12}
+              y1={g.axis === "y" ? g.at : g.from - 12}
+              y2={g.axis === "y" ? g.at : g.to + 12}
+              stroke={THEME.guide}
+              strokeWidth={1}
+              vectorEffect="non-scaling-stroke"
+              pointerEvents="none"
+            />
+          ))}
           {drag?.type === "marquee" &&
             (() => {
               const r = normalizeMarquee(drag.startX, drag.startY, drag.currX, drag.currY);
