@@ -200,6 +200,17 @@ type Drag =
     }
   | { type: "pan"; startX: number; startY: number; tx0: number; ty0: number }
   | {
+      /** Right button held: a drag pans, a release without moving opens the
+       * menu for what was under the pointer at the press. */
+      type: "rightPan";
+      startX: number;
+      startY: number;
+      tx0: number;
+      ty0: number;
+      moved: boolean;
+      menu: RightMenuTarget;
+    }
+  | {
       type: "connect";
       sourceId: UUID;
       sourceSide: ConnectSide;
@@ -289,6 +300,12 @@ function laneAtY(y: number, lanes: CanvasLane[]): CanvasLane | undefined {
   if (y >= last.y + last.h) return last;
   return lanes.find((l) => y >= l.y && y < l.y + l.h);
 }
+
+/** What a right-click opens a menu for; null on a lane strip (no menu). */
+type RightMenuTarget = { kind: "node"; id: UUID } | { kind: "edge"; id: UUID } | { kind: "canvas" } | null;
+
+/** Screen pixels the pointer may wander before a press becomes a drag. */
+const CLICK_SLOP_SQ = 16;
 
 export type CanvasSelection =
   | { kind: "none" }
@@ -422,7 +439,8 @@ function BpmnCanvas({
   // True while Space is held over the canvas (temporary pan). The toolbar
   // shows the hand for as long as it's down, then the real tool again.
   const [spacePan, setSpacePan] = useState(false);
-  const shownTool: CanvasTool = spacePan ? "pan" : tool;
+  const rightPanning = drag?.type === "rightPan" && drag.moved;
+  const shownTool: CanvasTool = spacePan || rightPanning ? "pan" : tool;
   const occludedRightRef = useRef(occludedRight);
   occludedRightRef.current = occludedRight;
   // Mouse/Trackpad scroll setting. Starts at the default and is read from
@@ -1448,8 +1466,12 @@ function BpmnCanvas({
 
       if (e.code === "Space") {
         // Only hijack Space for pan when the pointer is over the canvas;
-        // elsewhere leave it for scrolling and button/menu activation.
-        if (!pointerOverCanvasRef.current) return;
+        // elsewhere leave it for scrolling and button/menu activation. Until
+        // the pointer has moved at all since the page loaded, its position is
+        // unknown (browsers report it only on the first move), so then Space
+        // pans as long as focus isn't on a control.
+        const focusFree = !document.activeElement || document.activeElement === document.body;
+        if (!pointerOverCanvasRef.current && (pointerSeenRef.current || !focusFree)) return;
         e.preventDefault(); // stop the page from scrolling
         spaceHeld.current = true;
         setSpacePan(true);
@@ -1482,11 +1504,17 @@ function BpmnCanvas({
       e.preventDefault();
     };
     const upHandler = (e: KeyboardEvent) => {
-      if (e.code === "Space") {
+      if (e.code === "Space" && spaceHeld.current) {
+        // A focused button activates on Space's release; this Space was a pan.
+        e.preventDefault();
         spaceHeld.current = false;
         setSpacePan(false);
       }
     };
+    const onPointerSeen = () => {
+      pointerSeenRef.current = true;
+    };
+    window.addEventListener("pointermove", onPointerSeen, { once: true });
     // Switching windows mid-hold never delivers the keyup.
     const onBlur = () => {
       spaceHeld.current = false;
@@ -1499,6 +1527,7 @@ function BpmnCanvas({
       document.removeEventListener("keydown", handler);
       document.removeEventListener("keyup", upHandler);
       window.removeEventListener("blur", onBlur);
+      window.removeEventListener("pointermove", onPointerSeen);
     };
   }, []);
 
@@ -1508,6 +1537,8 @@ function BpmnCanvas({
   // True while the pointer is over the canvas. Space-to-pan only engages then,
   // so we don't swallow Space (scroll / button activation) page-wide.
   const pointerOverCanvasRef = useRef(false);
+  // Whether the pointer has moved at all since load (see the Space handler).
+  const pointerSeenRef = useRef(false);
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const lanesRef = useRef(lanes);
@@ -1978,6 +2009,44 @@ function BpmnCanvas({
     [toWorld, selectOnly]
   );
 
+  // A right press is in progress, or just ended: the browser's menu event that
+  // follows it (on press on a Mac, on release on Windows) is swallowed.
+  const rightGestureRef = useRef({ active: false, endedAt: 0 });
+  const startRightPan = (e: MouseEvent, menu: RightMenuTarget) => {
+    rightGestureRef.current = { active: true, endedAt: 0 };
+    setContextMenu(null);
+    setDrag({
+      type: "rightPan",
+      startX: e.clientX,
+      startY: e.clientY,
+      tx0: viewportRef.current.tx,
+      ty0: viewportRef.current.ty,
+      moved: false,
+      menu,
+    });
+  };
+  // Right button anywhere on the map: decide pan-or-menu on release. Caught
+  // before steps, arrows and handles see it, so a right-drag never moves or
+  // connects anything.
+  const onSvgMouseDownCapture = (e: MouseEvent<SVGSVGElement>) => {
+    if (e.button !== 2) return;
+    e.stopPropagation();
+    const el = e.target as Element;
+    const nodeId = el.closest("[data-node-id]")?.getAttribute("data-node-id");
+    const edgeId = el.closest("[data-edge-id]")?.getAttribute("data-edge-id");
+    startRightPan(
+      e,
+      nodeId ? { kind: "node", id: nodeId } : edgeId ? { kind: "edge", id: edgeId } : { kind: "canvas" }
+    );
+  };
+  const onContextMenuCapture = (e: MouseEvent) => {
+    const g = rightGestureRef.current;
+    if (g.active || Date.now() - g.endedAt < 400) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
   const onSvgMouseDown = (e: MouseEvent<SVGSVGElement>) => {
     if (e.button === 1 || spaceHeld.current) {
       e.preventDefault();
@@ -2036,6 +2105,15 @@ function BpmnCanvas({
       if (drag.type === "connect" || drag.type === "edgeEnd") {
         const { x, y } = screenToWorld(e.clientX, e.clientY);
         setDrag({ ...drag, currX: x, currY: y });
+        return;
+      }
+      if (drag.type === "rightPan") {
+        const dx = e.clientX - drag.startX;
+        const dy = e.clientY - drag.startY;
+        if (!drag.moved && dx * dx + dy * dy < CLICK_SLOP_SQ) return;
+        if (!drag.moved) setDrag({ ...drag, moved: true });
+        const v = viewportRef.current;
+        setViewport({ ...v, tx: drag.tx0 + dx, ty: drag.ty0 + dy });
         return;
       }
       if (drag.type === "edgeBend") {
@@ -2118,6 +2196,14 @@ function BpmnCanvas({
     };
 
     const onUp = (e: globalThis.MouseEvent) => {
+      if (drag.type === "rightPan") {
+        // Only the right button ends it (a stray left click mid-drag doesn't).
+        if (e.button !== 2) return;
+        setDrag(null);
+        rightGestureRef.current = { active: false, endedAt: Date.now() };
+        if (!drag.moved) showMenuForRef.current(drag.menu, drag.startX, drag.startY);
+        return;
+      }
       if (drag.type === "edgeEnd") {
         setDrag(null);
         const edge = edgesRef.current.find((ed) => ed.id === drag.edgeId);
@@ -2713,10 +2799,8 @@ function BpmnCanvas({
     return true;
   };
 
-  const openNodeMenu = useCallback(
-    (e: MouseEvent, nodeId: UUID) => {
-      e.preventDefault();
-      e.stopPropagation();
+  const showNodeMenu = useCallback(
+    (x: number, y: number, nodeId: UUID) => {
       const wasSelected = selectedIdsRef.current.has(nodeId);
       if (!wasSelected) selectOnly(nodeId);
       // When the node wasn't already selected we just collapsed to it (size 1);
@@ -2724,8 +2808,8 @@ function BpmnCanvas({
       const count = wasSelected ? selectedIdsRef.current.size : 1;
       const suffix = count > 1 ? ` ${count}` : "";
       setContextMenu({
-        x: e.clientX,
-        y: e.clientY,
+        x,
+        y,
         items: [
           ...(count <= 1 && onOpenProperties
             ? [{ label: "Properties", onSelect: () => onOpenProperties() }]
@@ -2792,15 +2876,13 @@ function BpmnCanvas({
     [applyEdgeColorsLocal, record]
   );
 
-  const openEdgeMenu = useCallback(
-    (e: MouseEvent, edgeId: UUID) => {
-      e.preventDefault();
-      e.stopPropagation();
+  const showEdgeMenu = useCallback(
+    (x: number, y: number, edgeId: UUID) => {
       selectOnly(edgeId);
       const current = edgesRef.current.find((ed) => ed.id === edgeId)?.color ?? null;
       setContextMenu({
-        x: e.clientX,
-        y: e.clientY,
+        x,
+        y,
         items: [
           {
             label: "Colour",
@@ -2819,12 +2901,11 @@ function BpmnCanvas({
     [selectOnly, requestDeleteEdge, setConnectorColor]
   );
 
-  const openCanvasMenu = useCallback(
-    (e: MouseEvent<SVGSVGElement>) => {
-      e.preventDefault();
+  const showCanvasMenu = useCallback(
+    (x: number, y: number) => {
       setContextMenu({
-        x: e.clientX,
-        y: e.clientY,
+        x,
+        y,
         items: [
           {
             label: "Paste",
@@ -2842,6 +2923,40 @@ function BpmnCanvas({
     },
     [clipboard, pasteClipboardImpl, fitContent]
   );
+
+  // The browser's own menu event, which still opens ours directly when no
+  // right-button press is behind it (Ctrl+click on a Mac, the Menu key).
+  // After a right press the menu opens on release instead (see rightPan).
+  const openNodeMenu = useCallback(
+    (e: MouseEvent, nodeId: UUID) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showNodeMenu(e.clientX, e.clientY, nodeId);
+    },
+    [showNodeMenu]
+  );
+  const openEdgeMenu = useCallback(
+    (e: MouseEvent, edgeId: UUID) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showEdgeMenu(e.clientX, e.clientY, edgeId);
+    },
+    [showEdgeMenu]
+  );
+  const openCanvasMenu = useCallback(
+    (e: MouseEvent<SVGSVGElement>) => {
+      e.preventDefault();
+      showCanvasMenu(e.clientX, e.clientY);
+    },
+    [showCanvasMenu]
+  );
+  const showMenuForRef = useRef<(t: RightMenuTarget, x: number, y: number) => void>(() => {});
+  showMenuForRef.current = (t, x, y) => {
+    if (!t) return;
+    if (t.kind === "node") showNodeMenu(x, y, t.id);
+    else if (t.kind === "edge") showEdgeMenu(x, y, t.id);
+    else showCanvasMenu(x, y);
+  };
 
   // ── Fast creation and naming on the canvas (#97) ──────────────────────
   // Double-click empty lane space, Tab from a step, or a palette click opens a
@@ -3742,15 +3857,22 @@ function BpmnCanvas({
   );
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+    <div
+      style={{ position: "relative", width: "100%", height: "100%" }}
+      onContextMenuCapture={onContextMenuCapture}
+    >
       <svg
         ref={svgRef}
+        onMouseDownCapture={onSvgMouseDownCapture}
         onMouseDown={onSvgMouseDown}
         onDoubleClick={onSvgDoubleClick}
         onContextMenu={openCanvasMenu}
         onDragOver={onCanvasDragOver}
         onDrop={onCanvasDrop}
         onPointerEnter={() => { pointerOverCanvasRef.current = true; }}
+        // Also on move: an enter can be missed when the canvas appears under a
+        // pointer that is already there (e.g. after the map finishes loading).
+        onPointerMove={() => { pointerOverCanvasRef.current = true; }}
         onPointerLeave={() => {
           pointerOverCanvasRef.current = false;
           spaceHeld.current = false; // don't strand pan mode if Space is released off-canvas
@@ -3760,7 +3882,7 @@ function BpmnCanvas({
           width: "100%",
           height: "100%",
           cursor:
-            drag?.type === "pan"
+            drag?.type === "pan" || (drag?.type === "rightPan" && drag.moved)
               ? "grabbing"
               : shownTool === "pan"
                 ? "grab"
@@ -4176,6 +4298,7 @@ function BpmnCanvas({
         onSetColor={setLaneColor}
         collapsedLaneIds={collapsedLaneIds}
         onToggleCollapse={toggleLaneCollapse}
+        onRightPanStart={(e) => startRightPan(e, null)}
       />
 
       <ShapePalette onAddShape={addShapeAtCenter} />
