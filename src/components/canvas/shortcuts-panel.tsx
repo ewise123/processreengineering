@@ -15,7 +15,8 @@ const GESTURES: { keys: string; label: string }[] = [
   { keys: "Shift+click", label: "Add to the selection" },
   { keys: "Drag on empty space", label: "Select everything in the box" },
   { keys: "Mod+drag a step", label: "Place it without snapping to guides" },
-  { keys: "Space+drag or middle-drag", label: "Pan" },
+  { keys: "Right-drag, Space+drag or middle-drag", label: "Pan" },
+  { keys: "Right-click (without dragging)", label: "Open the menu for what is under the pointer" },
   { keys: "Wheel", label: "Pan (Trackpad setting) or zoom (Mouse setting)" },
 ];
 

@@ -50,6 +50,7 @@ export function LaneRail({
   onSetColor,
   collapsedLaneIds,
   onToggleCollapse,
+  onRightPanStart,
 }: {
   lanes: CanvasLane[];
   viewport: Viewport;
@@ -64,6 +65,8 @@ export function LaneRail({
   onSetColor: (laneId: string, color: string) => void;
   collapsedLaneIds: Set<string>;
   onToggleCollapse: (laneId: string) => void;
+  /** A right press on a lane strip: dragging pans the map, like on the map. */
+  onRightPanStart?: (e: React.MouseEvent) => void;
 }) {
   const railRef = useRef<HTMLDivElement>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
@@ -160,6 +163,11 @@ export function LaneRail({
         inset: 0,
         pointerEvents: "none",
         zIndex: 12,
+      }}
+      onMouseDownCapture={(e) => {
+        if (e.button !== 2 || !onRightPanStart) return;
+        e.stopPropagation();
+        onRightPanStart(e);
       }}
     >
       {/* Row insert hover buttons (gap above each lane + one after the last) */}
