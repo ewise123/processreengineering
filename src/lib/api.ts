@@ -66,7 +66,11 @@ import type {
 } from "@/lib/types";
 import { formatErrorDetail } from "@/lib/error-detail";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Empty means same-origin: requests go to whatever host served the page and
+// Next proxies them to the backend (see the rewrite in next.config.ts). Setting
+// NEXT_PUBLIC_API_URL overrides that and points the browser straight at a
+// backend, which is only useful when it is somewhere this server cannot reach.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 async function request<T>(
   path: string,
